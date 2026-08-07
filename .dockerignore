@@ -1,0 +1,15 @@
+.git/
+.tools/
+bin/
+docs/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
