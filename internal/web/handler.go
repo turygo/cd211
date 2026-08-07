@@ -1,0 +1,660 @@
+// Package web implements the server-rendered CD211 operator interface.
+package web
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"embed"
+	"errors"
+	"html/template"
+	"mime"
+	"net/http"
+	"net/url"
+	"path"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/turygo/cd211/internal/domain"
+	"github.com/turygo/cd211/internal/session"
+	"github.com/turygo/cd211/internal/store"
+)
+
+const (
+	formLimit          int64 = 64 << 10
+	cloudStatusTimeout       = 500 * time.Millisecond
+)
+
+//go:embed templates/*.html static/app.css static/app.js
+var assets embed.FS
+
+// Repository is the durable surface required by the operator interface.
+type Repository interface {
+	ListDownloads(context.Context, *string) ([]domain.Download, error)
+	GetDownload(context.Context, string) (domain.Download, error)
+	ListDownloadFiles(context.Context, string) ([]domain.DownloadFile, error)
+	ListCategories(context.Context) ([]domain.Category, error)
+	UpsertCategory(context.Context, domain.Category) (domain.Category, error)
+	Start(context.Context, string, time.Time) error
+	Retry(context.Context, string, domain.State, time.Time) error
+	Cancel(context.Context, string, time.Time) error
+	RequestDelete(context.Context, []string, bool, time.Time) error
+}
+
+// Clock provides deterministic display ages and mutation timestamps.
+type Clock interface {
+	Now() time.Time
+}
+
+// Waker schedules workflow processing after a durable action commits.
+type Waker interface {
+	Wake()
+}
+
+// CloudStatus reports whether the CloudDrive2 dependency is reachable.
+type CloudStatus interface {
+	Check(context.Context) error
+}
+
+// Filesystem prepares canonical staging roots beneath the configured local root.
+type Filesystem interface {
+	ResolveSaveRoot(string) (string, bool, error)
+	PrepareSaveRoot(string) (string, error)
+}
+
+// Config contains the fixed operator identity and path boundaries.
+type Config struct {
+	Username  string
+	Password  string
+	CloudRoot string
+	LocalRoot string
+}
+
+type handler struct {
+	config      Config
+	repo        Repository
+	sessions    *session.Store
+	clock       Clock
+	waker       Waker
+	cloudStatus CloudStatus
+	filesystem  Filesystem
+	templates   *template.Template
+}
+
+type authContextKey struct{}
+
+type authenticatedSession struct {
+	sid     string
+	session session.Session
+}
+
+// New constructs the server-rendered operator interface.
+func New(config Config, repo Repository, sessions *session.Store, clock Clock, waker Waker, cloudStatus CloudStatus, filesystem Filesystem) (http.Handler, error) {
+	if isNil(repo) || sessions == nil || isNil(clock) || isNil(waker) || isNil(cloudStatus) || isNil(filesystem) {
+		return nil, errors.New("web dependency is nil")
+	}
+	if config.Username == "" || config.Password == "" {
+		return nil, errors.New("web credentials are required")
+	}
+	if !path.IsAbs(config.CloudRoot) || path.Clean(config.CloudRoot) != config.CloudRoot {
+		return nil, errors.New("cloud root must be an absolute clean POSIX path")
+	}
+	if !filepath.IsAbs(config.LocalRoot) || filepath.Clean(config.LocalRoot) != config.LocalRoot {
+		return nil, errors.New("local root must be an absolute clean host path")
+	}
+	templates, err := template.ParseFS(assets, "templates/*.html")
+	if err != nil {
+		return nil, errors.New("parse web templates")
+	}
+
+	h := &handler{
+		config:      config,
+		repo:        repo,
+		sessions:    sessions,
+		clock:       clock,
+		waker:       waker,
+		cloudStatus: cloudStatus,
+		filesystem:  filesystem,
+		templates:   templates,
+	}
+	mux := http.NewServeMux()
+	mux.Handle("GET /login", http.HandlerFunc(h.loginPage))
+	mux.Handle("POST /login", http.HandlerFunc(h.login))
+	mux.Handle("GET /static/app.css", http.HandlerFunc(h.staticCSS))
+	mux.Handle("GET /static/app.js", http.HandlerFunc(h.staticJS))
+	mux.Handle("GET /", h.auth(h.downloads, false))
+	mux.Handle("GET /downloads/{hash}", h.auth(h.detail, false))
+	mux.Handle("GET /categories", h.auth(h.categories, false))
+	mux.Handle("POST /logout", h.auth(h.logout, true))
+	mux.Handle("POST /categories/save", h.auth(h.saveCategory, true))
+	mux.Handle("POST /downloads/{hash}/start", h.auth(h.start, true))
+	mux.Handle("POST /downloads/{hash}/retry", h.auth(h.retry, true))
+	mux.Handle("POST /downloads/{hash}/cancel", h.auth(h.cancel, true))
+	mux.Handle("POST /downloads/{hash}/remove", h.auth(h.remove, true))
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, found := routeMethod(r.URL.Path, r.Method)
+		if !found {
+			h.htmlHeaders(w)
+			plain(w, http.StatusNotFound, "Not Found\n")
+			return
+		}
+		if r.Method != method {
+			h.htmlHeaders(w)
+			plain(w, http.StatusMethodNotAllowed, "Method Not Allowed\n")
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/static/") {
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+		} else {
+			h.htmlHeaders(w)
+		}
+		mux.ServeHTTP(w, r)
+	}), nil
+}
+
+func routeMethod(requestPath, requestMethod string) (string, bool) {
+	switch requestPath {
+	case "/login":
+		if requestMethod == http.MethodPost {
+			return http.MethodPost, true
+		}
+		return http.MethodGet, true
+	case "/", "/categories", "/static/app.css", "/static/app.js":
+		return http.MethodGet, true
+	case "/logout", "/categories/save":
+		return http.MethodPost, true
+	}
+	parts := strings.Split(strings.TrimPrefix(requestPath, "/"), "/")
+	if len(parts) == 2 && parts[0] == "downloads" && parts[1] != "" {
+		return http.MethodGet, true
+	}
+	if len(parts) == 3 && parts[0] == "downloads" && parts[1] != "" {
+		switch parts[2] {
+		case "start", "retry", "cancel", "remove":
+			return http.MethodPost, true
+		}
+	}
+	return "", false
+}
+
+func isNil(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
+}
+
+func browserOriginAllowed(r *http.Request) bool {
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "cross-site") {
+		return false
+	}
+	origins := r.Header.Values("Origin")
+	if len(origins) == 0 {
+		return true
+	}
+	if len(origins) != 1 {
+		return false
+	}
+	origin, err := url.Parse(strings.TrimSpace(origins[0]))
+	if err != nil || origin.Scheme == "" || origin.Host == "" || origin.User != nil || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" {
+		return false
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return strings.EqualFold(origin.Scheme, scheme) && strings.EqualFold(origin.Host, r.Host)
+}
+
+func (h *handler) auth(next http.HandlerFunc, csrf bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cookie, err := r.Cookie("SID")
+		if err != nil || cookie.Value == "" {
+			h.redirectLogin(w, r)
+			return
+		}
+		current, ok := h.sessions.Get(cookie.Value)
+		if !ok {
+			h.redirectLogin(w, r)
+			return
+		}
+		if csrf {
+			if !browserOriginAllowed(r) {
+				plain(w, http.StatusForbidden, "Forbidden\n")
+				return
+			}
+			form, parsed := parseURLEncodedForm(w, r)
+			if !parsed {
+				return
+			}
+			token, exact := exactlyOne(form["csrf_token"])
+			if !exact {
+				plain(w, http.StatusForbidden, "Forbidden\n")
+				return
+			}
+			tokenDigest := sha256.Sum256([]byte(token))
+			expectedDigest := sha256.Sum256([]byte(current.CSRFToken))
+			if subtle.ConstantTimeCompare(tokenDigest[:], expectedDigest[:]) != 1 {
+				plain(w, http.StatusForbidden, "Forbidden\n")
+				return
+			}
+		}
+		ctx := context.WithValue(r.Context(), authContextKey{}, authenticatedSession{sid: cookie.Value, session: current})
+		next(w, r.WithContext(ctx))
+	})
+}
+
+func (h *handler) redirectLogin(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+func (h *handler) htmlHeaders(w http.ResponseWriter) {
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+}
+
+func (h *handler) staticCSS(w http.ResponseWriter, _ *http.Request) {
+	h.static(w, "static/app.css", "text/css; charset=utf-8")
+}
+
+func (h *handler) staticJS(w http.ResponseWriter, _ *http.Request) {
+	h.static(w, "static/app.js", "text/javascript; charset=utf-8")
+}
+
+func (h *handler) static(w http.ResponseWriter, name, contentType string) {
+	content, err := assets.ReadFile(name)
+	if err != nil {
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "public,max-age=3600")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(content)
+}
+
+func (h *handler) loginPage(w http.ResponseWriter, _ *http.Request) {
+	h.render(w, http.StatusOK, "login", LoginView{Title: "Sign in"})
+}
+
+func (h *handler) login(w http.ResponseWriter, r *http.Request) {
+	form, ok := parseURLEncodedForm(w, r)
+	if !ok {
+		return
+	}
+	username, usernameOK := exactlyOne(form["username"])
+	password, passwordOK := exactlyOne(form["password"])
+	usernameDigest := sha256.Sum256([]byte(username))
+	expectedUsernameDigest := sha256.Sum256([]byte(h.config.Username))
+	passwordDigest := sha256.Sum256([]byte(password))
+	expectedPasswordDigest := sha256.Sum256([]byte(h.config.Password))
+	usernameMatch := subtle.ConstantTimeCompare(usernameDigest[:], expectedUsernameDigest[:])
+	passwordMatch := subtle.ConstantTimeCompare(passwordDigest[:], expectedPasswordDigest[:])
+	credentialsValid := usernameOK && passwordOK && usernameMatch == 1 && passwordMatch == 1
+	switch h.sessions.AuthorizeLogin(r.RemoteAddr, credentialsValid) {
+	case session.LoginBanned:
+		plain(w, http.StatusForbidden, "Forbidden\n")
+		return
+	case session.LoginInvalid:
+		h.render(w, http.StatusUnauthorized, "login", LoginView{Title: "Sign in", Error: "The username or password did not match."})
+		return
+	}
+	sid, _, err := h.sessions.Create()
+	if err != nil {
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+		return
+	}
+	http.SetCookie(w, sidCookie(sid, false, r.TLS != nil))
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (h *handler) logout(w http.ResponseWriter, r *http.Request) {
+	current, ok := r.Context().Value(authContextKey{}).(authenticatedSession)
+	if !ok {
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+		return
+	}
+	h.sessions.Revoke(current.sid)
+	http.SetCookie(w, sidCookie("", true, r.TLS != nil))
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+func sidCookie(value string, expired, secure bool) *http.Cookie {
+	cookie := &http.Cookie{Name: "SID", Value: value, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: secure}
+	if expired {
+		cookie.MaxAge = -1
+		cookie.Expires = time.Unix(1, 0).UTC()
+	}
+	return cookie
+}
+
+func (h *handler) downloads(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	viewValues, hasView := query["view"]
+	if hasView && len(viewValues) != 1 {
+		plain(w, http.StatusBadRequest, "Bad Request\n")
+		return
+	}
+	view := "active"
+	if hasView {
+		view = viewValues[0]
+	}
+	if !validDownloadView(view) {
+		plain(w, http.StatusBadRequest, "Bad Request\n")
+		return
+	}
+	categoryValues, hasCategory := query["category"]
+	if hasCategory && len(categoryValues) != 1 {
+		plain(w, http.StatusBadRequest, "Bad Request\n")
+		return
+	}
+	var category *string
+	selectedCategory := ""
+	if hasCategory && categoryValues[0] != "" {
+		selectedCategory = categoryValues[0]
+		category = &selectedCategory
+	}
+	downloads, err := h.repo.ListDownloads(r.Context(), category)
+	if err != nil {
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+		return
+	}
+	categories, err := h.repo.ListCategories(r.Context())
+	if err != nil {
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+		return
+	}
+	cloudContext, cancel := context.WithTimeout(r.Context(), cloudStatusTimeout)
+	cloudOnline := h.cloudStatus.Check(cloudContext) == nil
+	cancel()
+	page, err := buildDownloadsView(downloads, categories, view, selectedCategory, h.authSession(r).CSRFToken, h.clock.Now().UTC(), cloudOnline)
+	if err != nil {
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+		return
+	}
+	h.render(w, http.StatusOK, "downloads", page)
+}
+
+func (h *handler) detail(w http.ResponseWriter, r *http.Request) {
+	hash, ok := canonicalHash(r.PathValue("hash"))
+	if !ok {
+		plain(w, http.StatusBadRequest, "Bad Request\n")
+		return
+	}
+	download, err := h.repo.GetDownload(r.Context(), hash)
+	if err != nil {
+		repositoryError(w, err)
+		return
+	}
+	cleanupFailure := cleanupFailed(download)
+	if !download.State.Visible() && !cleanupFailure {
+		plain(w, http.StatusNotFound, "Not Found\n")
+		return
+	}
+	files, err := h.repo.ListDownloadFiles(r.Context(), hash)
+	if err != nil {
+		repositoryError(w, err)
+		return
+	}
+	page, err := buildDetailView(download, files, h.authSession(r).CSRFToken)
+	if err != nil {
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+		return
+	}
+	h.render(w, http.StatusOK, "detail", page)
+}
+
+func (h *handler) categories(w http.ResponseWriter, r *http.Request) {
+	categories, err := h.repo.ListCategories(r.Context())
+	if err != nil {
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+		return
+	}
+	h.render(w, http.StatusOK, "categories", buildCategoriesView(categories, h.authSession(r).CSRFToken))
+}
+
+func (h *handler) saveCategory(w http.ResponseWriter, r *http.Request) {
+	name, ok := exactPostValue(r, "name")
+	if !ok {
+		plain(w, http.StatusBadRequest, "Bad Request\n")
+		return
+	}
+	name, ok = canonicalCategory(name)
+	if !ok {
+		plain(w, http.StatusBadRequest, "Bad Request\n")
+		return
+	}
+	cloudPath, cloudOK := exactPostValue(r, "cloud_path")
+	savePath, saveOK := exactPostValue(r, "save_path")
+	enabledValue, enabledOK := exactPostValue(r, "enabled")
+	enabled, validEnabled := parseEnabled(enabledValue)
+	if !cloudOK || !saveOK || !enabledOK || !validEnabled || !strictCloudDescendant(h.config.CloudRoot, cloudPath) {
+		plain(w, http.StatusBadRequest, "Bad Request\n")
+		return
+	}
+	resolvedSavePath, _, err := h.filesystem.ResolveSaveRoot(savePath)
+	if err != nil {
+		plain(w, http.StatusBadRequest, "Bad Request\n")
+		return
+	}
+	categories, err := h.repo.ListCategories(r.Context())
+	if err != nil {
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+		return
+	}
+	now := h.clock.Now().UTC()
+	createdAt := now
+	for _, category := range categories {
+		if category.Name == name {
+			createdAt = category.CreatedAt
+			break
+		}
+	}
+	category := domain.Category{
+		Name: name, CloudPath: cloudPath, SavePath: resolvedSavePath, Enabled: false, CreatedAt: createdAt, UpdatedAt: now,
+	}
+	if _, err = h.repo.UpsertCategory(r.Context(), category); err != nil {
+		repositoryError(w, err)
+		return
+	}
+	preparedSavePath, err := h.filesystem.PrepareSaveRoot(resolvedSavePath)
+	if err != nil || preparedSavePath != resolvedSavePath {
+		plain(w, http.StatusBadRequest, "Bad Request\n")
+		return
+	}
+	category.Enabled = enabled
+	if _, err = h.repo.UpsertCategory(r.Context(), category); err != nil {
+		repositoryError(w, err)
+		return
+	}
+	http.Redirect(w, r, "/categories", http.StatusSeeOther)
+}
+
+func (h *handler) start(w http.ResponseWriter, r *http.Request) {
+	h.mutateDownload(w, r, func(download domain.Download, now time.Time) error {
+		if download.State != domain.StateStopped {
+			return store.ErrInvalidTransition
+		}
+		return h.repo.Start(r.Context(), download.Hash, now)
+	}, false)
+}
+
+func (h *handler) retry(w http.ResponseWriter, r *http.Request) {
+	h.mutateDownload(w, r, func(download domain.Download, now time.Time) error {
+		if !canRetry(download) {
+			return store.ErrInvalidTransition
+		}
+		return h.repo.Retry(r.Context(), download.Hash, retryTarget(download), now)
+	}, false)
+}
+
+func (h *handler) cancel(w http.ResponseWriter, r *http.Request) {
+	h.mutateDownload(w, r, func(download domain.Download, now time.Time) error {
+		if !canCancel(download.State) {
+			return store.ErrInvalidTransition
+		}
+		return h.repo.Cancel(r.Context(), download.Hash, now)
+	}, false)
+}
+
+func (h *handler) remove(w http.ResponseWriter, r *http.Request) {
+	deleteFilesValue, ok := exactPostValue(r, "delete_files")
+	if !ok || (deleteFilesValue != "true" && deleteFilesValue != "false") {
+		plain(w, http.StatusBadRequest, "Bad Request\n")
+		return
+	}
+	deleteFiles := deleteFilesValue == "true"
+	h.mutateDownload(w, r, func(download domain.Download, now time.Time) error {
+		return h.repo.RequestDelete(r.Context(), []string{download.Hash}, deleteFiles, now)
+	}, true)
+}
+
+func (h *handler) mutateDownload(w http.ResponseWriter, r *http.Request, mutation func(domain.Download, time.Time) error, remove bool) {
+	hash, ok := canonicalHash(r.PathValue("hash"))
+	if !ok {
+		plain(w, http.StatusBadRequest, "Bad Request\n")
+		return
+	}
+	download, err := h.repo.GetDownload(r.Context(), hash)
+	if err != nil {
+		repositoryError(w, err)
+		return
+	}
+	cleanupFailure := cleanupFailed(download)
+	if !download.State.Visible() && !cleanupFailure {
+		plain(w, http.StatusNotFound, "Not Found\n")
+		return
+	}
+	if err := mutation(download, h.clock.Now().UTC()); err != nil {
+		repositoryError(w, err)
+		return
+	}
+	h.waker.Wake()
+	if remove {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/downloads/"+download.Hash, http.StatusSeeOther)
+}
+
+func (h *handler) authSession(r *http.Request) session.Session {
+	current, _ := r.Context().Value(authContextKey{}).(authenticatedSession)
+	return current.session
+}
+
+func (h *handler) render(w http.ResponseWriter, status int, name string, data any) {
+	var output bytes.Buffer
+	if err := h.templates.ExecuteTemplate(&output, name, data); err != nil {
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_, _ = output.WriteTo(w)
+}
+
+func parseURLEncodedForm(w http.ResponseWriter, r *http.Request) (map[string][]string, bool) {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/x-www-form-urlencoded" {
+		plain(w, http.StatusBadRequest, "Bad Request\n")
+		return nil, false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, formLimit)
+	if err := r.ParseForm(); err != nil {
+		plain(w, http.StatusBadRequest, "Bad Request\n")
+		return nil, false
+	}
+	return r.PostForm, true
+}
+
+func exactlyOne(values []string) (string, bool) {
+	if len(values) != 1 {
+		return "", false
+	}
+	return values[0], true
+}
+
+func exactPostValue(r *http.Request, name string) (string, bool) {
+	return exactlyOne(r.PostForm[name])
+}
+
+func canonicalHash(raw string) (string, bool) {
+	hash := strings.ToLower(strings.TrimSpace(raw))
+	if len(hash) != 40 {
+		return "", false
+	}
+	for _, character := range hash {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return "", false
+		}
+	}
+	return hash, true
+}
+
+func canonicalCategory(raw string) (string, bool) {
+	if !utf8.ValidString(raw) {
+		return "", false
+	}
+	name := strings.ToLower(strings.TrimSpace(raw))
+	if name == "" || name == "." || name == ".." || path.IsAbs(name) || strings.ContainsAny(name, "/\\") {
+		return "", false
+	}
+	for _, character := range name {
+		if unicode.IsControl(character) {
+			return "", false
+		}
+	}
+	return name, true
+}
+
+func parseEnabled(raw string) (bool, bool) {
+	switch raw {
+	case "true", "1":
+		return true, true
+	case "false", "0":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+func strictCloudDescendant(root, candidate string) bool {
+	if !path.IsAbs(candidate) || path.Clean(candidate) != candidate || candidate == root {
+		return false
+	}
+	prefix := root
+	if prefix != "/" {
+		prefix += "/"
+	}
+	return strings.HasPrefix(candidate, prefix)
+}
+
+func repositoryError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		plain(w, http.StatusNotFound, "Not Found\n")
+	case errors.Is(err, store.ErrInvalidTransition), errors.Is(err, store.ErrDestinationConflict):
+		plain(w, http.StatusConflict, "Conflict\n")
+	default:
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+	}
+}
+
+func plain(w http.ResponseWriter, status int, body string) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(body))
+}

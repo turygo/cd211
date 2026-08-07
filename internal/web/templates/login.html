@@ -1,0 +1,31 @@
+{{define "login"}}<!doctype html>
+<html lang="en">
+{{template "head" .}}
+<body class="login-page">
+  <main class="login-shell">
+    <section class="login-route" aria-labelledby="login-route-title">
+      <p class="eyebrow">Protected operator route</p>
+      <h1 id="login-route-title">115 → NAS → local</h1>
+      <p>Inspect each handoff before imported content enters local staging.</p>
+      <ol aria-label="Transfer stages">
+        <li><span>115 OFFLINE</span><strong>Source evidence</strong></li>
+        <li><span>NAS COPY</span><strong>Copy evidence</strong></li>
+        <li><span>LOCAL VERIFY</span><strong>Import lock</strong></li>
+      </ol>
+    </section>
+    <section class="login-panel" aria-labelledby="login-title">
+      <p class="brand-code">CD211</p>
+      <h2 id="login-title">Open transfer manifest</h2>
+      <p class="muted">Use the fixed operator credentials for this appliance.</p>
+      {{if .Error}}<div class="notice notice-error" role="alert">{{.Error}}</div>{{end}}
+      <form action="/login" method="post" class="stack-form">
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" autocomplete="username" required autofocus>
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+        <button class="button button-primary" type="submit">Open manifest</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>{{end}}

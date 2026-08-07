@@ -1,0 +1,59 @@
+{{define "categories"}}<!doctype html>
+<html lang="en">
+{{template "head" .}}
+<body>
+  {{template "masthead" .}}
+  <div class="app-frame">
+    {{template "route-legend" .}}
+    <main class="manifest-main" id="main-content">
+      <header class="page-heading">
+        <div>
+          <p class="eyebrow">Destination registry</p>
+          <h1>Category paths</h1>
+          <p>Category changes affect future submissions only. Existing transfers keep their frozen paths.</p>
+        </div>
+      </header>
+
+      <section class="manifest-section registry-section" aria-labelledby="registry-title">
+        <header><p class="eyebrow">Registered routes</p><h2 id="registry-title">Cloud and local path pairs</h2></header>
+        {{if .Rows}}
+        <div class="table-wrap"><table class="registry-table">
+          <thead><tr><th scope="col">Category</th><th scope="col">Cloud path</th><th scope="col">Local save path</th><th scope="col">Availability</th><th scope="col">Action</th></tr></thead>
+          <tbody>
+          {{range $index, $row := .Rows}}
+            <tr>
+              <th scope="row">
+                <form id="category-{{$index}}" action="/categories/save" method="post">
+                  <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+                  <input type="hidden" name="name" value="{{$row.Name}}">
+                </form>
+                <span class="category-name">{{$row.Name}}</span>
+                <span class="registry-time">Updated {{$row.UpdatedAt}}</span>
+              </th>
+              <td><label class="visually-hidden" for="cloud-{{$index}}">Cloud path for {{$row.Name}}</label><input form="category-{{$index}}" id="cloud-{{$index}}" name="cloud_path" type="text" value="{{$row.CloudPath}}" required></td>
+              <td><label class="visually-hidden" for="save-{{$index}}">Local save path for {{$row.Name}}</label><input form="category-{{$index}}" id="save-{{$index}}" name="save_path" type="text" value="{{$row.SavePath}}" required></td>
+              <td><label class="visually-hidden" for="enabled-{{$index}}">Availability for {{$row.Name}}</label><select form="category-{{$index}}" id="enabled-{{$index}}" name="enabled"><option value="true" {{if $row.Enabled}}selected{{end}}>Enabled</option><option value="false" {{if not $row.Enabled}}selected{{end}}>Disabled</option></select></td>
+              <td><button form="category-{{$index}}" class="button button-secondary" type="submit">Save route</button></td>
+            </tr>
+          {{end}}
+          </tbody>
+        </table></div>
+        {{else}}<p class="muted">No named categories are registered. Add the first future destination below.</p>{{end}}
+      </section>
+
+      <section class="manifest-section create-category" aria-labelledby="create-title">
+        <header><p class="eyebrow">New future route</p><h2 id="create-title">Register a category</h2></header>
+        <form action="/categories/save" method="post" class="category-form">
+          <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+          <div><label for="new-name">Category name</label><input id="new-name" name="name" type="text" required aria-describedby="name-hint"><small id="name-hint">Trimmed and stored in lowercase.</small></div>
+          <div><label for="new-cloud">Cloud path</label><input id="new-cloud" name="cloud_path" type="text" required aria-describedby="cloud-hint"><small id="cloud-hint">Must be below the configured cloud root.</small></div>
+          <div><label for="new-save">Local save path</label><input id="new-save" name="save_path" type="text" required aria-describedby="save-hint"><small id="save-hint">Must be below the configured local root.</small></div>
+          <div><label for="new-enabled">Availability</label><select id="new-enabled" name="enabled"><option value="true">Enabled</option><option value="false">Disabled</option></select></div>
+          <button class="button button-primary" type="submit">Register category</button>
+        </form>
+      </section>
+    </main>
+  </div>
+  {{template "footer" .}}
+</body>
+</html>{{end}}

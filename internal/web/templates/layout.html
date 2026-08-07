@@ -1,0 +1,56 @@
+{{define "head"}}
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} · CD211</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+{{end}}
+
+{{define "masthead"}}
+<header class="masthead">
+  <a class="brand" href="/" aria-label="CD211 transfer manifest home">
+    <span class="brand-code">CD211</span>
+    <span class="brand-title">Transfer manifest</span>
+  </a>
+  <nav class="top-nav" aria-label="Primary navigation">
+    <a href="/" {{if eq .ActiveNav "downloads"}}aria-current="page"{{end}}>Downloads</a>
+    <a href="/categories" {{if eq .ActiveNav "categories"}}aria-current="page"{{end}}>Categories</a>
+  </nav>
+  <form action="/logout" method="post" class="logout-form">
+    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+    <button class="button button-quiet" type="submit">Sign out</button>
+  </form>
+</header>
+{{end}}
+
+{{define "route-legend"}}
+<aside class="route-legend" aria-label="Transfer route">
+  <p class="eyebrow">Route</p>
+  <ol>
+    <li><strong>115</strong><span>Offline source</span></li>
+    <li><strong>NAS</strong><span>CloudDrive2 copy</span></li>
+    <li><strong>LOCAL</strong><span>Verified staging</span></li>
+  </ol>
+</aside>
+{{end}}
+
+{{define "route-strip"}}
+<div class="route-strip" role="group" aria-label="Transfer evidence: {{.State}}">
+  {{range .Stages}}
+  <section class="route-stage {{.Class}}" aria-label="{{.Label}}: {{.Status}}">
+    <div class="stage-heading"><span>{{.Label}}</span><strong>{{.Status}}</strong></div>
+    <progress max="100" value="{{.Progress}}">{{.Progress}}%</progress>
+  </section>
+  {{end}}
+  {{if .Verified}}<p class="verified-lock" aria-label="Local content verified">LOCKED / VERIFIED</p>{{end}}
+</div>
+{{end}}
+
+{{define "footer"}}
+<footer class="page-footer">
+  <span>CD211 operator surface</span>
+  <span>Cloud copies are retained by every removal action.</span>
+</footer>
+{{end}}
