@@ -1,0 +1,338 @@
+package fsafe
+
+import (
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestVerifySingleFile(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	save := mkdir(t, filepath.Join(root, "save"))
+	content := writeFile(t, filepath.Join(save, "movie.mkv"), "content")
+
+	got, err := verifier.Verify(save, ExpectedContent{Name: "movie.mkv"})
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	want, err := filepath.EvalSymlinks(content)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("Verify() = %q, want %q", got, want)
+	}
+}
+
+func TestVerifyMultiFileDirectory(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	save := mkdir(t, filepath.Join(root, "save"))
+	content := mkdir(t, filepath.Join(save, "album"))
+	writeFile(t, filepath.Join(content, "track.flac"), "content")
+
+	got, err := verifier.Verify(save, ExpectedContent{Name: "album", MultiFile: true})
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	want, err := filepath.EvalSymlinks(content)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("Verify() = %q, want %q", got, want)
+	}
+}
+
+func TestVerifyRejectsNameMismatchAndUnsafeName(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	save := mkdir(t, filepath.Join(root, "save"))
+	writeFile(t, filepath.Join(save, "actual"), "content")
+
+	if _, err := verifier.Verify(save, ExpectedContent{Name: "expected"}); err == nil {
+		t.Fatal("Verify() succeeded for a missing expected name")
+	}
+
+	for _, name := range []string{"", ".", "..", "nested/file", `nested\\file`, "line\nbreak", string([]byte{0xff})} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := verifier.Verify(save, ExpectedContent{Name: name}); err == nil {
+				t.Fatalf("Verify() succeeded for unsafe name %q", name)
+			}
+		})
+	}
+}
+
+func TestVerifyRejectsMissingCandidate(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	save := mkdir(t, filepath.Join(root, "save"))
+
+	if _, err := verifier.Verify(save, ExpectedContent{Name: "missing"}); err == nil {
+		t.Fatal("Verify() succeeded for missing candidate")
+	}
+}
+
+func TestVerifyRejectsCandidateSymlinkEscapingRoot(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	save := mkdir(t, filepath.Join(root, "save"))
+	outside := writeFile(t, filepath.Join(t.TempDir(), "outside"), "outside")
+	mustSymlink(t, outside, filepath.Join(save, "content"))
+
+	if _, err := verifier.Verify(save, ExpectedContent{Name: "content"}); err == nil {
+		t.Fatal("Verify() succeeded for candidate symlink escaping root")
+	}
+}
+
+func TestVerifyRejectsCandidateSymlinkInsideRoot(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	save := mkdir(t, filepath.Join(root, "save"))
+	target := writeFile(t, filepath.Join(save, "target"), "content")
+	mustSymlink(t, target, filepath.Join(save, "content"))
+
+	if _, err := verifier.Verify(save, ExpectedContent{Name: "content"}); err == nil {
+		t.Fatal("Verify() succeeded for a candidate symbolic link inside root")
+	}
+}
+
+func TestVerifyRejectsSaveRootSymlinkEscapingLocalRoot(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	outsideSave := mkdir(t, filepath.Join(t.TempDir(), "save"))
+	writeFile(t, filepath.Join(outsideSave, "content"), "outside")
+	saveLink := filepath.Join(root, "save-link")
+	mustSymlink(t, outsideSave, saveLink)
+
+	if _, err := verifier.Verify(saveLink, ExpectedContent{Name: "content"}); err == nil {
+		t.Fatal("Verify() succeeded for save root symlink escaping local root")
+	}
+}
+
+func TestVerifyRejectsSiblingPrefixPath(t *testing.T) {
+	base := t.TempDir()
+	localRoot := mkdir(t, filepath.Join(base, "local"))
+	siblingSave := mkdir(t, filepath.Join(base, "local-sibling", "save"))
+	writeFile(t, filepath.Join(siblingSave, "content"), "outside")
+	verifier, err := New(localRoot)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	if _, err := verifier.Verify(siblingSave, ExpectedContent{Name: "content"}); err == nil {
+		t.Fatal("Verify() accepted sibling-prefix path outside local root")
+	}
+}
+
+func TestDeleteRejectsRootEquality(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+
+	if err := verifier.Delete(root, root); err == nil {
+		t.Fatal("Delete() allowed deleting the save root")
+	}
+	if _, err := os.Stat(root); err != nil {
+		t.Fatalf("save root removed: %v", err)
+	}
+}
+
+func TestDeleteRemovesOnlyRequestedDirectChild(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	save := mkdir(t, filepath.Join(root, "save"))
+	target := writeFile(t, filepath.Join(save, "target"), "delete me")
+	collateral := writeFile(t, filepath.Join(save, "keep"), "keep me")
+
+	if err := verifier.Delete(target, save); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	assertNotExist(t, target)
+	assertFileContent(t, collateral, "keep me")
+}
+
+func TestDeleteMissingDirectChildIsIdempotent(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	save := mkdir(t, filepath.Join(root, "save"))
+
+	if err := verifier.Delete(filepath.Join(save, "missing"), save); err != nil {
+		t.Fatalf("Delete() error = %v, want nil for missing direct child", err)
+	}
+}
+
+func TestDeleteRejectsNonDirectChild(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	save := mkdir(t, filepath.Join(root, "save"))
+	nested := writeFile(t, filepath.Join(save, "directory", "content"), "keep me")
+
+	if err := verifier.Delete(nested, save); err == nil {
+		t.Fatal("Delete() allowed deleting a non-direct child")
+	}
+	assertFileContent(t, nested, "keep me")
+}
+
+func TestDeleteRejectsUnsafeSymlinkWithoutTouchingOutsideContent(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	save := mkdir(t, filepath.Join(root, "save"))
+	outside := writeFile(t, filepath.Join(t.TempDir(), "outside"), "outside")
+	mustSymlink(t, outside, filepath.Join(save, "content"))
+
+	if err := verifier.Delete(filepath.Join(save, "content"), save); err == nil {
+		t.Fatal("Delete() accepted a symbolic-link content path")
+	}
+	assertFileContent(t, outside, "outside")
+}
+
+func TestDeleteRejectsDirectoryContainingNestedSymlink(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	save := mkdir(t, filepath.Join(root, "save"))
+	target := mkdir(t, filepath.Join(save, "content"))
+	outside := writeFile(t, filepath.Join(t.TempDir(), "outside"), "outside")
+	mustSymlink(t, outside, filepath.Join(target, "outside-link"))
+
+	if err := verifier.Delete(target, save); err == nil {
+		t.Fatal("Delete() accepted a directory containing a symbolic link")
+	}
+	if _, err := os.Lstat(filepath.Join(target, "outside-link")); err != nil {
+		t.Fatalf("nested symbolic link was removed: %v", err)
+	}
+	assertFileContent(t, outside, "outside")
+}
+
+func TestPrepareSaveRootCanonicalizesSymlinkedParent(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(root): %v", err)
+	}
+	if verifier.LocalRoot() != canonicalRoot {
+		t.Fatalf("LocalRoot() = %q, want %q", verifier.LocalRoot(), canonicalRoot)
+	}
+	physical := mkdir(t, filepath.Join(root, "physical"))
+	alias := filepath.Join(root, "alias")
+	mustSymlink(t, physical, alias)
+
+	canonicalPhysical, err := filepath.EvalSymlinks(physical)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(physical): %v", err)
+	}
+	want := filepath.Join(canonicalPhysical, "movies")
+	resolved, exists, err := verifier.ResolveSaveRoot(filepath.Join(alias, "movies"))
+	if err != nil || exists || resolved != want {
+		t.Fatalf("ResolveSaveRoot() = (%q, %t, %v), want (%q, false, nil)", resolved, exists, err, want)
+	}
+	assertNotExist(t, filepath.Join(alias, "movies"))
+	prepared, err := verifier.PrepareSaveRoot(filepath.Join(alias, "movies"))
+	if err != nil {
+		t.Fatalf("PrepareSaveRoot(): %v", err)
+	}
+	if prepared != want {
+		t.Fatalf("PrepareSaveRoot() = %q, want %q", prepared, want)
+	}
+	info, err := os.Stat(want)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("prepared directory = (%+v, %v)", info, err)
+	}
+
+	outside := mkdir(t, filepath.Join(t.TempDir(), "outside"))
+	mustSymlink(t, outside, filepath.Join(root, "outside-link"))
+	if _, err := verifier.PrepareSaveRoot(filepath.Join(root, "outside-link", "escape")); err == nil {
+		t.Fatal("PrepareSaveRoot() accepted an escaping symlink")
+	}
+}
+
+func TestVerifyThenDeleteThroughSaveRootSymlink(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	physicalSave := mkdir(t, filepath.Join(root, "physical-save"))
+	saveLink := filepath.Join(root, "save-link")
+	mustSymlink(t, physicalSave, saveLink)
+	target := writeFile(t, filepath.Join(physicalSave, "payload"), "content")
+
+	contentPath, err := verifier.Verify(saveLink, ExpectedContent{Name: "payload"})
+	if err != nil {
+		t.Fatalf("Verify() through save-root symlink: %v", err)
+	}
+	evaluatedTarget, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contentPath != evaluatedTarget {
+		t.Fatalf("Verify() content path = %q, want %q", contentPath, evaluatedTarget)
+	}
+	if err := verifier.Delete(contentPath, saveLink); err != nil {
+		t.Fatalf("Delete() verified symlink-root content: %v", err)
+	}
+	assertNotExist(t, target)
+}
+
+func TestOpenSaveRootRemainsAnchoredAfterRename(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	save := mkdir(t, filepath.Join(root, "save"))
+	original := writeFile(t, filepath.Join(save, "target"), "original")
+	anchored, _, err := verifier.openSaveRoot(save)
+	if err != nil {
+		t.Fatalf("openSaveRoot() error = %v", err)
+	}
+	defer anchored.Close()
+
+	moved := filepath.Join(root, "save-moved")
+	if err := os.Rename(save, moved); err != nil {
+		t.Fatal(err)
+	}
+	replacement := mkdir(t, save)
+	replacementTarget := writeFile(t, filepath.Join(replacement, "target"), "replacement")
+	if err := anchored.Remove("target"); err != nil {
+		t.Fatalf("anchored Remove() error = %v", err)
+	}
+
+	assertNotExist(t, filepath.Join(moved, filepath.Base(original)))
+	assertFileContent(t, replacementTarget, "replacement")
+}
+
+func newTestVerifier(t *testing.T) (*Verifier, string) {
+	t.Helper()
+	root := mkdir(t, filepath.Join(t.TempDir(), "local"))
+	verifier, err := New(root)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	return verifier, root
+}
+
+func mkdir(t *testing.T, path string) string {
+	t.Helper()
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", path, err)
+	}
+	return path
+}
+
+func writeFile(t *testing.T, path, content string) string {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", path, err)
+	}
+	return path
+}
+
+func mustSymlink(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("Symlink(%q, %q) error = %v", target, link, err)
+	}
+}
+
+func assertNotExist(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Lstat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("Lstat(%q) error = %v, want not exist", path, err)
+	}
+}
+
+func assertFileContent(t *testing.T, path, want string) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+	if string(got) != want {
+		t.Fatalf("ReadFile(%q) = %q, want %q", path, got, want)
+	}
+}
