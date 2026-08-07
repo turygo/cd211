@@ -1,3 +1,5 @@
+// Package store owns the SQLite schema, migrations, and durable download and
+// category repository.
 package store
 
 import (

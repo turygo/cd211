@@ -113,7 +113,6 @@ func (s *Scheduler) Step(ctx context.Context) (claimed bool, err error) {
 	if err != nil || claim == nil {
 		return false, err
 	}
-	claimed = true
 	started := s.clock.Now()
 	download := claim.Download
 	if !download.State.Claimable() || download.PhaseStartedAt.IsZero() {

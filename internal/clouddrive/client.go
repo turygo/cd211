@@ -1,3 +1,5 @@
+// Package clouddrive is the retry-safe gRPC client for CloudDrive2 offline
+// download, copy, and filesystem operations.
 package clouddrive
 
 import (
