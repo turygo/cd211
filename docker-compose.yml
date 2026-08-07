@@ -13,6 +13,9 @@ services:
       - CD2_PASSWORD=${CD2_PASSWORD}
       - CD2_INSECURE=${CD2_INSECURE:-false}
       - CLOUD_ROOT=${CLOUD_ROOT:-/115open/云下载}
+      # Staging directories are created as 2770 PUID:PGID. CloudDrive2, Sonarr,
+      # and Radarr must run in the same PGID group, and CloudDrive2 must use
+      # umask 002 so CD211 can delete the content it copied.
       - PUID=${PUID:-99}
       - PGID=${PGID:-100}
     volumes:

@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -232,6 +233,30 @@ func TestPrepareSaveRootCanonicalizesSymlinkedParent(t *testing.T) {
 	mustSymlink(t, outside, filepath.Join(root, "outside-link"))
 	if _, err := verifier.PrepareSaveRoot(filepath.Join(root, "outside-link", "escape")); err == nil {
 		t.Fatal("PrepareSaveRoot() accepted an escaping symlink")
+	}
+}
+
+// CloudDrive2 copies into the staging directory as a different user, so the
+// group must keep write access even under a restrictive umask, and setgid must
+// pass the shared group on to the content CloudDrive2 creates.
+func TestPrepareSaveRootStaysWritableForTheSharedGroup(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	previousUmask := syscall.Umask(0o022)
+	defer syscall.Umask(previousUmask)
+
+	prepared, err := verifier.PrepareSaveRoot(filepath.Join(root, "tv"))
+	if err != nil {
+		t.Fatalf("PrepareSaveRoot(): %v", err)
+	}
+	info, err := os.Stat(prepared)
+	if err != nil {
+		t.Fatalf("Stat(prepared): %v", err)
+	}
+	if got, want := info.Mode().Perm(), os.FileMode(0o770); got != want {
+		t.Fatalf("prepared permissions = %#o, want %#o", got, want)
+	}
+	if info.Mode()&os.ModeSetgid == 0 {
+		t.Fatalf("prepared mode = %v, want the setgid bit", info.Mode())
 	}
 }
 

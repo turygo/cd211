@@ -194,7 +194,8 @@ Operational constraints:
 - The HTTP API is not exposed directly to the public Internet.
 - CloudDrive2 credentials remain in environment or secret mounts, not in SQLite.
 - The entrypoint drops from root to `PUID:PGID` before starting the service, and only adjusts ownership of the `/data` and `/downloads` mount points themselves. The defaults `99:100` match the Synology `guest:users` pair; a deployment whose staging root belongs to another owner must set both.
-- The staging directories CD211 creates are mode `0750`, so CloudDrive2 must copy into them as the same UID or as a member of `PGID`.
+- CD211 creates each category staging directory as mode `2770` owned by `PUID:PGID`. CloudDrive2, Sonarr, and Radarr must all run in the `PGID` group, because CloudDrive2 writes the copied content into that directory and the other two read it from there. A staging directory that already exists keeps the mode it has and must grant the same group access.
+- Deleting a download removes a tree CloudDrive2 created, and POSIX requires write access on every directory in it. The setgid bit puts that content in the shared group, so CloudDrive2 must additionally use umask `002` or `007`. A deployment that instead runs CloudDrive2 with the same UID as `PUID` needs neither the shared group nor the umask.
 - The container `HEALTHCHECK` probes `/healthz`, which only depends on SQLite. An unreachable CloudDrive2 is reported through `/readyz` and never restarts the container.
 - Release images are built by tag-triggered CI from source and published as `turygo/cd211:<version>` and `turygo/cd211:latest`. The build cross-compiles the binary on the runner's native architecture rather than emulating the Go toolchain.
 

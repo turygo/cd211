@@ -97,7 +97,13 @@ func (v *Verifier) ResolveSaveRoot(savePath string) (string, bool, error) {
 	return filepath.Join(v.localRoot, relative), false, nil
 }
 
-// PrepareSaveRoot creates a missing canonical staging directory.
+// saveRootMode lets CloudDrive2 copy into the staging directory and makes the
+// content it creates inherit the group, which is what allows CD211 to delete it
+// again. CD211 and CloudDrive2 must therefore share a group.
+const saveRootMode = os.ModeSetgid | 0o770
+
+// PrepareSaveRoot creates a missing canonical staging directory. An existing
+// directory keeps the mode and owner it already has.
 func (v *Verifier) PrepareSaveRoot(savePath string) (string, error) {
 	canonical, exists, err := v.ResolveSaveRoot(savePath)
 	if err != nil || exists {
@@ -112,8 +118,27 @@ func (v *Verifier) PrepareSaveRoot(savePath string) (string, error) {
 		return "", fmt.Errorf("fsafe: open local root: %w", err)
 	}
 	defer root.Close()
-	if err := root.MkdirAll(relative, 0o750); err != nil {
+	if err := root.MkdirAll(relative, 0o770); err != nil {
 		return "", fmt.Errorf("fsafe: create save root: %w", err)
+	}
+	// MkdirAll applies the process umask, so the group and setgid bits are set
+	// explicitly. The mode is applied through the descriptor of the directory
+	// that was just checked, which a path-based chmod cannot do without racing
+	// a symlink swap.
+	created, err := root.Open(relative)
+	if err != nil {
+		return "", fmt.Errorf("fsafe: open save root: %w", err)
+	}
+	defer created.Close()
+	info, err := created.Stat()
+	if err != nil {
+		return "", fmt.Errorf("fsafe: inspect save root: %w", err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("fsafe: save root is not a directory")
+	}
+	if err := created.Chmod(saveRootMode); err != nil {
+		return "", fmt.Errorf("fsafe: set save root mode: %w", err)
 	}
 	prepared, err := v.resolveSaveRoot(canonical)
 	if err != nil {
