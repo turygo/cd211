@@ -1,7 +1,9 @@
 .git/
+.github/
 .tools/
 bin/
 docs/
+docker-compose.yml
 *.db
 *.db-shm
 *.db-wal

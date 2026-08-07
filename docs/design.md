@@ -171,12 +171,15 @@ CD2_ADDRESS
 CD2_USERNAME
 CD2_PASSWORD
 CD2_INSECURE=false
+CD211_HTTP_ADDRESS=:8080
 DATABASE_PATH=/data/cd211.sqlite
 CLOUD_ROOT=/115open/云下载
 LOCAL_ROOT=/downloads
 CD211_OFFLINE_TIMEOUT=24h
 CD211_COPY_TIMEOUT=72h
 CD211_VERIFY_TIMEOUT=10m
+PUID=99
+PGID=100
 ```
 
 CloudDrive2 transport uses certificate-verified TLS by default. `CD2_INSECURE=true` is an explicit opt-in for a trusted local deployment whose CloudDrive2 endpoint only supports plaintext gRPC.
@@ -190,7 +193,10 @@ Operational constraints:
 - Backups either stop the container or take an atomic snapshot of the complete SQLite file set.
 - The HTTP API is not exposed directly to the public Internet.
 - CloudDrive2 credentials remain in environment or secret mounts, not in SQLite.
-- The runtime container runs as a non-root user that can write only the configured staging roots and application-data directory.
+- The entrypoint drops from root to `PUID:PGID` before starting the service, and only adjusts ownership of the `/data` and `/downloads` mount points themselves. The defaults `99:100` match the Synology `guest:users` pair; a deployment whose staging root belongs to another owner must set both.
+- The staging directories CD211 creates are mode `0750`, so CloudDrive2 must copy into them as the same UID or as a member of `PGID`.
+- The container `HEALTHCHECK` probes `/healthz`, which only depends on SQLite. An unreachable CloudDrive2 is reported through `/readyz` and never restarts the container.
+- Release images are built by tag-triggered CI from source and published as `turygo/cd211:<version>` and `turygo/cd211:latest`. The build cross-compiles the binary on the runner's native architecture rather than emulating the Go toolchain.
 
 The exact container network and firewall rule are deployment decisions, but the allowed flows must be limited to:
 
