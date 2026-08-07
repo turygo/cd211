@@ -1,0 +1,5 @@
+repository_url=https://github.com/DDSRem-Dev/clouddrive2-client
+commit=5c3124ff3e4bea1fef506057c53d0fb62e795759
+proto_source_path=src/clouddrive2_client/proto/clouddrive.proto
+proto_retrieval_url=https://raw.githubusercontent.com/DDSRem-Dev/clouddrive2-client/5c3124ff3e4bea1fef506057c53d0fb62e795759/src/clouddrive2_client/proto/clouddrive.proto
+license_retrieval_url=https://raw.githubusercontent.com/DDSRem-Dev/clouddrive2-client/5c3124ff3e4bea1fef506057c53d0fb62e795759/LICENSE
