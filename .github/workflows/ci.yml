@@ -1,24 +1,12 @@
 name: CI
 
+# Pushes to main and release tags are checked by the Publish workflow, which
+# runs the same gate before it pushes an image.
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
 
 jobs:
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: 'go.mod'
-      - uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.11
-
   gate:
     name: Gate
     uses: ./.github/workflows/gate.yml
@@ -30,7 +18,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: docker/setup-buildx-action@v3
       # Build only the native platform on pull requests; the multi-arch push
-      # happens in the Docker workflow.
+      # happens in the Publish workflow.
       - uses: docker/build-push-action@v6
         with:
           context: .

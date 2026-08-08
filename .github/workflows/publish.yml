@@ -1,0 +1,96 @@
+name: Publish
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+jobs:
+  gate:
+    name: Gate
+    uses: ./.github/workflows/gate.yml
+
+  image:
+    name: Build and Push Image
+    needs: [gate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # The `latest` decision below compares against every existing tag.
+          fetch-depth: 0
+
+      - name: Resolve image tags
+        id: tags
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version="${GITHUB_REF_NAME#v}"
+            tags="turygo/cd211:${version}"
+            case "$version" in
+              *-*)
+                # Pre-release tags publish their own version only.
+                ;;
+              *)
+                # `latest` tracks the highest stable release, so a backport tag
+                # cut after a newer release must not move it.
+                highest=$(git tag --list 'v*' --sort=-v:refname | awk '!/-/{print; exit}')
+                if [ "$highest" = "$GITHUB_REF_NAME" ]; then
+                  tags="${tags},turygo/cd211:latest"
+                fi
+                ;;
+            esac
+          else
+            tags=turygo/cd211:dev
+          fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+          echo "Publishing $tags"
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # The Dockerfile cross-compiles from the runner's native arch, so QEMU is
+      # only needed for the arm64 runtime stage.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: ${{ steps.tags.outputs.tags }}
+
+  release:
+    name: GitHub Release
+    # A release is only created once its images are pushed.
+    if: github.ref_type == 'tag'
+    needs: [image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="$GITHUB_REF_NAME" --jq .body > generated-notes.md
+          {
+            printf 'Container image: `docker pull turygo/cd211:%s`\n\n' "$version"
+            cat generated-notes.md
+          } > notes.md
+          prerelease=
+          case "$version" in
+            *-*) prerelease=--prerelease ;;
+          esac
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file notes.md \
+            $prerelease
