@@ -165,8 +165,6 @@ CD211 HTTP port              inbound from Sonarr, Radarr, and trusted LAN client
 Runtime configuration:
 
 ```text
-CD211_USERNAME
-CD211_PASSWORD
 CD2_ADDRESS
 CD2_USERNAME
 CD2_PASSWORD
@@ -181,6 +179,8 @@ CD211_VERIFY_TIMEOUT=10m
 PUID=99
 PGID=100
 ```
+
+The operator username for the Web UI and the qBittorrent-compatible API is fixed to `admin`. The password starts as the qBittorrent-conventional `adminadmin` and can be changed from the Web UI after sign-in; the current password hash is persisted in SQLite. This is a trusted-LAN appliance; the HTTP port must never be exposed to the public Internet (Section 8 operational constraints).
 
 CloudDrive2 transport uses certificate-verified TLS by default. `CD2_INSECURE=true` is an explicit opt-in for a trusted local deployment whose CloudDrive2 endpoint only supports plaintext gRPC.
 
@@ -747,6 +747,16 @@ primary key (download_hash, file_index)
 
 This table is populated from uploaded `.torrent` metadata and supports `/torrents/files` without reparsing the source.
 
+### 12.5 `operator_password`
+
+```text
+id                integer primary key check (id = 1)
+password_hash     text not null
+updated_at        timestamp not null
+```
+
+This single-row table holds the PBKDF2-SHA256 hash of the operator password once it has been changed from the default. While the row is absent, the default password `adminadmin` is active. The hash record encodes its scheme, iteration count, and salt, so parameters can be raised later without a migration.
+
 ## 13. Reconciliation and Crash Safety
 
 ### 13.1 Claim Pattern
@@ -830,26 +840,29 @@ Retrying an explicit offline or copy failure first removes or cancels the failed
 
 ## 16. Web UI
 
-The first Web UI contains three views.
+The Web UI contains five server-rendered views: sign-in, downloads, download detail, categories, and change password. Visual design follows the pinned token sheet in `docs/ref/linear-design-tokens.md` (dark-first, Inter/monospace dual typeface, micro-radius geometry, hairline borders).
+
+All views share a slim sidebar shell with primary navigation, a change-password link, a language toggle (English and Simplified Chinese, stored in a preference cookie), and sign-out. Decorative content is excluded by design: no repeated route explainers, no marketing panels, no footer boilerplate.
+
+### 16.0 Sign-in
+
+A single centered card. The page states the initial credentials (`admin` / `adminadmin`) and that the password can be changed after sign-in, so an operator in front of the login form needs no external documentation. The card also carries the language toggle.
 
 ### 16.1 Downloads
 
-Columns:
+A dense table, one row per download:
 
 ```text
-Name
-Hash
+Name (link to detail) + hash prefix + redacted last error
+Internal state badge
+Route progress: 115 OFFLINE / NAS COPY / LOCAL VERIFY segment bars
 Category
-Phase
-115 progress
-Copy progress
-qBittorrent state
-Local content path
-Age
-Last error
+Age since last update
 ```
 
-Filters:
+Offline and copy progress remain separately visible in every row. Full paths are intentionally not shown in the list; they live in the detail view.
+
+Filters (auto-submitting selects):
 
 ```text
 Active
@@ -870,7 +883,7 @@ Remove record
 Remove record and local staging content
 ```
 
-Destructive actions require explicit confirmation.
+Actions are exposed on the detail view only; the list stays read-only. Destructive actions require explicit confirmation.
 
 Explicit 115 cloud-copy deletion is not part of the baseline action set. If Section 22 includes it in the first release, it is added only to the detail view with a separate confirmation and exact persisted cloud-source-path validation.
 
@@ -896,6 +909,10 @@ Allows operators to:
 - configure cloud and local paths;
 - validate that paths remain under their allowed roots;
 - see that edits apply only to future submissions.
+
+### 16.4 Change Password
+
+A form behind authentication (current password, new password, confirmation) that replaces the operator password for both the Web UI and the qBittorrent-compatible API. The new password requires at least 8 characters, a matching confirmation, and proof of the current password; the change is persisted as a PBKDF2-SHA256 hash (Section 12.5). The page reminds the operator to update the qBittorrent password configured in Sonarr and Radarr. Existing sessions stay valid until their TTL expires.
 
 ## 17. Health and Operations
 
@@ -933,7 +950,7 @@ CloudDrive2 access tokens
 ## 18. Security
 
 1. Every qBittorrent and Web UI route requires authentication except login and health checks.
-2. Password comparison uses a password hash or a deployment secret; plaintext credentials are not stored in SQLite.
+2. The operator username is fixed. The password defaults to `adminadmin` and, once changed, is stored in SQLite only as a salted PBKDF2-SHA256 hash; plaintext credentials are never persisted.
 3. Session cookies contain only a cryptographically random opaque SID and are `HttpOnly`, `SameSite=Lax`, `Secure` on HTTPS, and bounded by TTL. Session state exists only in memory and is invalidated on restart.
 4. Login failures are rate-limited by client address with bounded in-memory state and a temporary authentication ban.
 5. Native Web UI state-changing forms require a per-session CSRF token; authenticated browser mutations must also be same-origin.
