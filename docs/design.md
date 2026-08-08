@@ -190,7 +190,7 @@ Operational constraints:
 - Release images support `linux/amd64` and `linux/arm64` without CGO.
 - The SQLite database is on a persistent NAS-host-local filesystem with POSIX locking. NFS and SMB database mounts are unsupported because WAL requires same-host shared memory.
 - Downloaded content is on persistent staging mounts.
-- CD211 sends its own `savePath` string to CloudDrive2 as the copy destination, and CloudDrive2 resolves that string inside its own container. Both containers must therefore mount the same host staging directory at the same absolute path.
+- CD211 sends its own `savePath` string to CloudDrive2 as the copy destination, and CloudDrive2 resolves that string inside **its own virtual filesystem**, not inside its container. That virtual root holds the mounted cloud drives plus the local directories CloudDrive2 has been configured to expose, so a path that exists in the CloudDrive2 container is still rejected unless it is also one of those entries. The staging root must therefore be mounted into CD211 at the exact absolute path CloudDrive2 exposes: if CloudDrive2 exposes the staging tree as `/bt`, CD211 mounts that same host directory at `/bt` and sets `LOCAL_ROOT=/bt`. Verify with `FindFileByPath` before deploying rather than assuming the container path works.
 - Backups either stop the container or take an atomic snapshot of the complete SQLite file set.
 - The HTTP API is not exposed directly to the public Internet.
 - CloudDrive2 credentials remain in environment or secret mounts, not in SQLite.
@@ -486,6 +486,8 @@ Category names are validated. They cannot contain path traversal, control charac
 
 CD211 resolves the evaluated canonical absolute `savePath` without changing the filesystem, then durably registers it as a disabled category before creating a missing directory through the local-root boundary. A destination conflict therefore returns before any filesystem side effect. Successful preparation enables the requested category; a filesystem failure leaves the disabled reservation in place for a safe retry. The resolved path must be a strict descendant of `LOCAL_ROOT`; symbolic-link escapes and the root itself are rejected.
 
+The cloud path is not created when the category is. CD211 creates it lazily on the first offline submission into that folder, because CloudDrive2 rejects both listing and adding offline files under a folder it does not have. Only the leaf is created: a missing parent means `CLOUD_ROOT` is misconfigured, and quietly building that tree on the cloud drive would hide the mistake. Creation is idempotent, so a folder that appears between the check and the create — a concurrent reconciler, or a retry — is adopted rather than reported as an error.
+
 #### `POST /api/v2/torrents/setCategory`
 
 Updates the visible category label. Existing cloud, save, and content paths remain unchanged.
@@ -599,7 +601,7 @@ Before `COMPLETED`, `content_path` is empty. At `COMPLETED`, it is the verified 
 
 `save_path` is normalized as a directory path and must not equal the completed `content_path`.
 
-When total size or transfer rate is unknown, `size` is `0` until metadata becomes available and `eta` is qBittorrent's unknown sentinel `8640000`. CD211 does not invent a transfer rate. Uploaded `.torrent` files provide size immediately; magnet submissions may remain size-unknown until CloudDrive2 exposes the finished source metadata.
+When total size or transfer rate is unknown, `size` is `0` until metadata becomes available and `eta` is qBittorrent's unknown sentinel `8640000`. CD211 does not invent a transfer rate. Uploaded `.torrent` files provide size immediately; magnet submissions stay size-unknown for longer, because CloudDrive2 reports a directory as zero bytes and so cannot supply the size of a multi-file torrent. Local verification therefore measures the staged content — the file itself, or the sum of the regular files in the tree — and that measurement replaces whatever earlier value was recorded. A completed download always reports its real size, which matters because Sonarr and Radarr use `size` when deciding a download is finished and can be cleaned up.
 
 ### 11.6 Torrent Properties and Files
 
