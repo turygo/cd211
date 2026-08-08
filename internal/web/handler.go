@@ -20,6 +20,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/turygo/cd211/internal/creds"
 	"github.com/turygo/cd211/internal/domain"
 	"github.com/turygo/cd211/internal/session"
 	"github.com/turygo/cd211/internal/store"
@@ -28,6 +29,7 @@ import (
 const (
 	formLimit          int64 = 64 << 10
 	cloudStatusTimeout       = 500 * time.Millisecond
+	minPasswordLength        = 8
 )
 
 //go:embed templates/*.html static/app.css static/app.js
@@ -67,16 +69,22 @@ type Filesystem interface {
 	PrepareSaveRoot(string) (string, error)
 }
 
-// Config contains the fixed operator identity and path boundaries.
+// Config contains the fixed path boundaries.
 type Config struct {
-	Username  string
-	Password  string
 	CloudRoot string
 	LocalRoot string
 }
 
+// Credentials verifies operator credentials and applies password changes.
+// A failed current-password proof is reported as creds.ErrCurrentPasswordMismatch.
+type Credentials interface {
+	Verify(ctx context.Context, username, password string) (bool, error)
+	Change(ctx context.Context, current, next string, now time.Time) error
+}
+
 type handler struct {
 	config      Config
+	creds       Credentials
 	repo        Repository
 	sessions    *session.Store
 	clock       Clock
@@ -94,12 +102,9 @@ type authenticatedSession struct {
 }
 
 // New constructs the server-rendered operator interface.
-func New(config Config, repo Repository, sessions *session.Store, clock Clock, waker Waker, cloudStatus CloudStatus, filesystem Filesystem) (http.Handler, error) {
-	if isNil(repo) || sessions == nil || isNil(clock) || isNil(waker) || isNil(cloudStatus) || isNil(filesystem) {
+func New(config Config, credentials Credentials, repo Repository, sessions *session.Store, clock Clock, waker Waker, cloudStatus CloudStatus, filesystem Filesystem) (http.Handler, error) {
+	if isNil(credentials) || isNil(repo) || sessions == nil || isNil(clock) || isNil(waker) || isNil(cloudStatus) || isNil(filesystem) {
 		return nil, errors.New("web dependency is nil")
-	}
-	if config.Username == "" || config.Password == "" {
-		return nil, errors.New("web credentials are required")
 	}
 	if !path.IsAbs(config.CloudRoot) || path.Clean(config.CloudRoot) != config.CloudRoot {
 		return nil, errors.New("cloud root must be an absolute clean POSIX path")
@@ -114,6 +119,7 @@ func New(config Config, repo Repository, sessions *session.Store, clock Clock, w
 
 	h := &handler{
 		config:      config,
+		creds:       credentials,
 		repo:        repo,
 		sessions:    sessions,
 		clock:       clock,
@@ -125,11 +131,14 @@ func New(config Config, repo Repository, sessions *session.Store, clock Clock, w
 	mux := http.NewServeMux()
 	mux.Handle("GET /login", http.HandlerFunc(h.loginPage))
 	mux.Handle("POST /login", http.HandlerFunc(h.login))
+	mux.Handle("GET /lang", http.HandlerFunc(h.setLang))
 	mux.Handle("GET /static/app.css", http.HandlerFunc(h.staticCSS))
 	mux.Handle("GET /static/app.js", http.HandlerFunc(h.staticJS))
 	mux.Handle("GET /", h.auth(h.downloads, false))
 	mux.Handle("GET /downloads/{hash}", h.auth(h.detail, false))
 	mux.Handle("GET /categories", h.auth(h.categories, false))
+	mux.Handle("GET /password", h.auth(h.passwordPage, false))
+	mux.Handle("POST /password", h.auth(h.changePassword, true))
 	mux.Handle("POST /logout", h.auth(h.logout, true))
 	mux.Handle("POST /categories/save", h.auth(h.saveCategory, true))
 	mux.Handle("POST /downloads/{hash}/start", h.auth(h.start, true))
@@ -160,12 +169,12 @@ func New(config Config, repo Repository, sessions *session.Store, clock Clock, w
 
 func routeMethod(requestPath, requestMethod string) (string, bool) {
 	switch requestPath {
-	case "/login":
+	case "/login", "/password":
 		if requestMethod == http.MethodPost {
 			return http.MethodPost, true
 		}
 		return http.MethodGet, true
-	case "/", "/categories", "/static/app.css", "/static/app.js":
+	case "/", "/categories", "/lang", "/static/app.css", "/static/app.js":
 		return http.MethodGet, true
 	case "/logout", "/categories/save":
 		return http.MethodPost, true
@@ -263,7 +272,11 @@ func (h *handler) redirectLogin(w http.ResponseWriter, r *http.Request) {
 func (h *handler) htmlHeaders(w http.ResponseWriter) {
 	w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Referrer-Policy", "no-referrer")
+	// "same-origin" keeps referrers internal while still letting browsers send
+	// a real Origin header on same-origin form POSTs; under "no-referrer",
+	// Chrome serializes that Origin as "null", which the CSRF origin check
+	// must reject.
+	w.Header().Set("Referrer-Policy", "same-origin")
 }
 
 func (h *handler) staticCSS(w http.ResponseWriter, _ *http.Request) {
@@ -286,8 +299,35 @@ func (h *handler) static(w http.ResponseWriter, name, contentType string) {
 	_, _ = w.Write(content)
 }
 
-func (h *handler) loginPage(w http.ResponseWriter, _ *http.Request) {
-	h.render(w, http.StatusOK, "login", LoginView{Title: "Sign in"})
+func (h *handler) loginPage(w http.ResponseWriter, r *http.Request) {
+	h.render(w, http.StatusOK, "login", loginView(requestLang(r), ""))
+}
+
+// setLang stores the display-language preference and returns to the page the
+// operator came from. The cookie carries no authority, so a GET is safe here.
+func (h *handler) setLang(w http.ResponseWriter, r *http.Request) {
+	lang := LangEN
+	if Lang(r.URL.Query().Get("to")) == LangZH {
+		lang = LangZH
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     langCookie,
+		Value:    string(lang),
+		Path:     "/",
+		MaxAge:   365 * 24 * 60 * 60,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   r.TLS != nil,
+	})
+	back := r.URL.Query().Get("back")
+	if !strings.HasPrefix(back, "/") || strings.HasPrefix(back, "//") || strings.ContainsAny(back, "\\\r\n") {
+		back = "/"
+	}
+	http.Redirect(w, r, back, http.StatusSeeOther)
+}
+
+func loginView(lang Lang, errorText string) LoginView {
+	str := tr(lang)
+	return LoginView{Title: str.TitleSignIn, Error: errorText, Lang: lang, OtherLang: otherLang(lang), Path: "/login", Str: str}
 }
 
 func (h *handler) login(w http.ResponseWriter, r *http.Request) {
@@ -297,19 +337,21 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 	}
 	username, usernameOK := exactlyOne(form["username"])
 	password, passwordOK := exactlyOne(form["password"])
-	usernameDigest := sha256.Sum256([]byte(username))
-	expectedUsernameDigest := sha256.Sum256([]byte(h.config.Username))
-	passwordDigest := sha256.Sum256([]byte(password))
-	expectedPasswordDigest := sha256.Sum256([]byte(h.config.Password))
-	usernameMatch := subtle.ConstantTimeCompare(usernameDigest[:], expectedUsernameDigest[:])
-	passwordMatch := subtle.ConstantTimeCompare(passwordDigest[:], expectedPasswordDigest[:])
-	credentialsValid := usernameOK && passwordOK && usernameMatch == 1 && passwordMatch == 1
+	credentialsValid := usernameOK && passwordOK
+	if credentialsValid {
+		match, err := h.creds.Verify(r.Context(), username, password)
+		if err != nil {
+			plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+			return
+		}
+		credentialsValid = match
+	}
 	switch h.sessions.AuthorizeLogin(r.RemoteAddr, credentialsValid) {
 	case session.LoginBanned:
 		plain(w, http.StatusForbidden, "Forbidden\n")
 		return
 	case session.LoginInvalid:
-		h.render(w, http.StatusUnauthorized, "login", LoginView{Title: "Sign in", Error: "The username or password did not match."})
+		h.render(w, http.StatusUnauthorized, "login", loginView(requestLang(r), tr(requestLang(r)).LoginFailed))
 		return
 	}
 	sid, _, err := h.sessions.Create()
@@ -380,11 +422,12 @@ func (h *handler) downloads(w http.ResponseWriter, r *http.Request) {
 	cloudContext, cancel := context.WithTimeout(r.Context(), cloudStatusTimeout)
 	cloudOnline := h.cloudStatus.Check(cloudContext) == nil
 	cancel()
-	page, err := buildDownloadsView(downloads, categories, view, selectedCategory, h.authSession(r).CSRFToken, h.clock.Now().UTC(), cloudOnline)
+	page, err := buildDownloadsView(downloads, categories, view, selectedCategory, h.authSession(r).CSRFToken, h.clock.Now().UTC(), cloudOnline, requestLang(r))
 	if err != nil {
 		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 		return
 	}
+	page.Path = r.URL.RequestURI()
 	h.render(w, http.StatusOK, "downloads", page)
 }
 
@@ -409,11 +452,12 @@ func (h *handler) detail(w http.ResponseWriter, r *http.Request) {
 		repositoryError(w, err)
 		return
 	}
-	page, err := buildDetailView(download, files, h.authSession(r).CSRFToken)
+	page, err := buildDetailView(download, files, h.authSession(r).CSRFToken, requestLang(r))
 	if err != nil {
 		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 		return
 	}
+	page.Path = r.URL.RequestURI()
 	h.render(w, http.StatusOK, "detail", page)
 }
 
@@ -423,7 +467,49 @@ func (h *handler) categories(w http.ResponseWriter, r *http.Request) {
 		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 		return
 	}
-	h.render(w, http.StatusOK, "categories", buildCategoriesView(categories, h.authSession(r).CSRFToken))
+	page := buildCategoriesView(categories, h.authSession(r).CSRFToken, requestLang(r))
+	page.Path = r.URL.RequestURI()
+	h.render(w, http.StatusOK, "categories", page)
+}
+
+func (h *handler) passwordPage(w http.ResponseWriter, r *http.Request) {
+	h.renderPasswordPage(w, r, http.StatusOK, "", false)
+}
+
+func (h *handler) changePassword(w http.ResponseWriter, r *http.Request) {
+	current, currentOK := exactPostValue(r, "current_password")
+	next, nextOK := exactPostValue(r, "new_password")
+	confirm, confirmOK := exactPostValue(r, "confirm_password")
+	if !currentOK || !nextOK || !confirmOK {
+		plain(w, http.StatusBadRequest, "Bad Request\n")
+		return
+	}
+	str := tr(requestLang(r))
+	if len(next) < minPasswordLength {
+		h.renderPasswordPage(w, r, http.StatusBadRequest, str.PasswordTooShort, false)
+		return
+	}
+	if next != confirm {
+		h.renderPasswordPage(w, r, http.StatusBadRequest, str.PasswordMismatch, false)
+		return
+	}
+	err := h.creds.Change(r.Context(), current, next, h.clock.Now().UTC())
+	if errors.Is(err, creds.ErrCurrentPasswordMismatch) {
+		h.renderPasswordPage(w, r, http.StatusBadRequest, str.PasswordWrongCurrent, false)
+		return
+	}
+	if err != nil {
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+		return
+	}
+	h.renderPasswordPage(w, r, http.StatusOK, "", true)
+}
+
+func (h *handler) renderPasswordPage(w http.ResponseWriter, r *http.Request, status int, errorText string, success bool) {
+	lang := requestLang(r)
+	page := PasswordView{PageMeta: pageMeta(tr(lang).TitlePassword, "password", h.authSession(r).CSRFToken, lang), Error: errorText, Success: success}
+	page.Path = "/password"
+	h.render(w, status, "password", page)
 }
 
 func (h *handler) saveCategory(w http.ResponseWriter, r *http.Request) {

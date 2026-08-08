@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/turygo/cd211/internal/creds"
 	"github.com/turygo/cd211/internal/domain"
 	"github.com/turygo/cd211/internal/fsafe"
 	"github.com/turygo/cd211/internal/session"
@@ -107,6 +108,7 @@ type webFixture struct {
 	waker      *countingWaker
 	cloud      *controlledCloudStatus
 	filesystem Filesystem
+	creds      *creds.Manager
 	handler    http.Handler
 	localRoot  string
 	sid        string
@@ -142,11 +144,15 @@ func newWebFixture(t *testing.T) *webFixture {
 		t.Fatalf("fsafe.New(): %v", err)
 	}
 	localRoot = filesystem.LocalRoot()
-	handler, err := New(Config{Username: "operator", Password: "correct horse", CloudRoot: "/cloud", LocalRoot: localRoot}, repo, sessions, clock, waker, cloud, filesystem)
+	credentials, err := creds.New(database)
+	if err != nil {
+		t.Fatalf("creds.New(): %v", err)
+	}
+	handler, err := New(Config{CloudRoot: "/cloud", LocalRoot: localRoot}, credentials, repo, sessions, clock, waker, cloud, filesystem)
 	if err != nil {
 		t.Fatalf("New(): %v", err)
 	}
-	return &webFixture{t: t, clock: clock, store: database, repo: repo, sessions: sessions, waker: waker, cloud: cloud, filesystem: filesystem, handler: handler, localRoot: localRoot, sid: sid, csrf: current.CSRFToken}
+	return &webFixture{t: t, clock: clock, store: database, repo: repo, sessions: sessions, waker: waker, cloud: cloud, filesystem: filesystem, creds: credentials, handler: handler, localRoot: localRoot, sid: sid, csrf: current.CSRFToken}
 }
 
 func (fixture *webFixture) request(method, target string, form url.Values, authenticated bool) *httptest.ResponseRecorder {
@@ -337,9 +343,9 @@ func TestAuthenticationRedirectLoginAndLogout(t *testing.T) {
 	invalid := fixture.request(http.MethodPost, "/login", url.Values{"username": {"operator"}, "password": {"wrong secret"}}, false)
 	requireStatus(t, invalid, http.StatusUnauthorized)
 	requireContains(t, invalid.Body.String(), "The username or password did not match.")
-	requireAbsent(t, invalid.Body.String(), "wrong secret", "correct horse")
+	requireAbsent(t, invalid.Body.String(), "wrong secret")
 
-	valid := fixture.request(http.MethodPost, "/login", url.Values{"username": {"operator"}, "password": {"correct horse"}}, false)
+	valid := fixture.request(http.MethodPost, "/login", url.Values{"username": {"admin"}, "password": {"adminadmin"}}, false)
 	requireStatus(t, valid, http.StatusSeeOther)
 	cookies := valid.Result().Cookies()
 	if len(cookies) != 1 || cookies[0].Name != "SID" || cookies[0].Path != "/" || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteLaxMode {
@@ -350,7 +356,7 @@ func TestAuthenticationRedirectLoginAndLogout(t *testing.T) {
 		t.Fatal("login SID was not retained")
 	}
 
-	secureRequest := httptest.NewRequest(http.MethodPost, "https://cd211.test/login", strings.NewReader(url.Values{"username": {"operator"}, "password": {"correct horse"}}.Encode()))
+	secureRequest := httptest.NewRequest(http.MethodPost, "https://cd211.test/login", strings.NewReader(url.Values{"username": {"admin"}, "password": {"adminadmin"}}.Encode()))
 	secureRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	secureLogin := httptest.NewRecorder()
 	fixture.handler.ServeHTTP(secureLogin, secureRequest)
@@ -374,7 +380,7 @@ func TestAuthenticationRedirectLoginAndLogout(t *testing.T) {
 	}
 }
 
-func TestAuthenticatedMutationRejectsCrossOriginBrowser(t *testing.T) {
+func TestAuthenticatedMutationBrowserOriginPolicy(t *testing.T) {
 	fixture := newWebFixture(t)
 	values := url.Values{
 		"csrf_token": {fixture.csrf},
@@ -383,15 +389,31 @@ func TestAuthenticatedMutationRejectsCrossOriginBrowser(t *testing.T) {
 		"save_path":  {filepath.Join(fixture.localRoot, "blocked")},
 		"enabled":    {"true"},
 	}
-	request := httptest.NewRequest(http.MethodPost, "/categories/save", strings.NewReader(values.Encode()))
-	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	request.Header.Set("Origin", "http://evil.invalid")
-	request.AddCookie(&http.Cookie{Name: "SID", Value: fixture.sid})
-	response := httptest.NewRecorder()
-	fixture.handler.ServeHTTP(response, request)
-	requireStatus(t, response, http.StatusForbidden)
-	if _, err := fixture.store.GetCategory(context.Background(), "blocked"); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("cross-origin category mutation persisted: %v", err)
+	send := func(origin string) *httptest.ResponseRecorder {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodPost, "/categories/save", strings.NewReader(values.Encode()))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if origin != "" {
+			request.Header.Set("Origin", origin)
+		}
+		request.AddCookie(&http.Cookie{Name: "SID", Value: fixture.sid})
+		response := httptest.NewRecorder()
+		fixture.handler.ServeHTTP(response, request)
+		return response
+	}
+
+	for _, origin := range []string{"http://evil.invalid", "null"} {
+		requireStatus(t, send(origin), http.StatusForbidden)
+		if _, err := fixture.store.GetCategory(context.Background(), "blocked"); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("origin %q mutation persisted: %v", origin, err)
+		}
+	}
+
+	// A browser sending its real same-origin Origin header must pass.
+	matching := send("http://" + "example.com")
+	requireStatus(t, matching, http.StatusSeeOther)
+	if _, err := fixture.store.GetCategory(context.Background(), "blocked"); err != nil {
+		t.Fatalf("same-origin mutation did not persist: %v", err)
 	}
 }
 
@@ -402,7 +424,7 @@ func TestSecurityHeadersAndStaticAssets(t *testing.T) {
 	if got := login.Header().Get("Content-Security-Policy"); got != "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'" {
 		t.Errorf("CSP = %q", got)
 	}
-	if got := login.Header().Get("Referrer-Policy"); got != "no-referrer" {
+	if got := login.Header().Get("Referrer-Policy"); got != "same-origin" {
 		t.Errorf("Referrer-Policy = %q", got)
 	}
 
@@ -457,7 +479,7 @@ func TestDashboardFiltersRouteEvidenceRedactionAndCloudStatus(t *testing.T) {
 	all := fixture.request(http.MethodGet, "/?view=all&category=movies", nil, true)
 	requireStatus(t, all, http.StatusOK)
 	body := all.Body.String()
-	requireContains(t, body, "CloudDrive2 online", "115 OFFLINE", "NAS COPY", "LOCAL VERIFY", "LOCKED / VERIFIED", "Protected upstream details were redacted.")
+	requireContains(t, body, "CloudDrive2 online", "115 OFFLINE", "NAS COPY", "LOCAL VERIFY", "is-verified", "Protected upstream details were redacted.")
 	requireAbsent(t, body, "magnet:?", "tracker.invalid", "secret-token", fixture.sid)
 	for _, item := range states {
 		requireContains(t, body, "release-"+item.seed, string(item.state))
@@ -481,7 +503,7 @@ func TestDashboardFiltersRouteEvidenceRedactionAndCloudStatus(t *testing.T) {
 
 	empty := fixture.request(http.MethodGet, "/?view=completed&category=other", nil, true)
 	requireStatus(t, empty, http.StatusOK)
-	requireContains(t, empty.Body.String(), "This manifest slice is clear.")
+	requireContains(t, empty.Body.String(), "No downloads match this filter.")
 
 	fixture.cloud.err = errors.New("private upstream detail")
 	unavailable := fixture.request(http.MethodGet, "/", nil, true)
@@ -510,7 +532,7 @@ func TestCompletedIsOnlyVerifiedRoute(t *testing.T) {
 		requireStatus(t, response, http.StatusOK)
 		body := response.Body.String()
 		requireContains(t, body, "115 OFFLINE", "NAS COPY", "LOCAL VERIFY", string(item.state))
-		verified := strings.Contains(body, "LOCKED / VERIFIED")
+		verified := strings.Contains(body, "is-verified")
 		if verified != (item.state == domain.StateCompleted) {
 			t.Errorf("state %s verified marker = %t", item.state, verified)
 		}
@@ -528,7 +550,7 @@ func TestDetailIsRedactedAndExposesOnlyLegalActions(t *testing.T) {
 		{"a", domain.StateStopped, []string{"/start", "/cancel", "delete_files\" value=\"false", "delete_files\" value=\"true"}, []string{"/retry"}},
 		{"b", domain.StateFailed, []string{"/retry", "delete_files\" value=\"false"}, []string{"/start", "/cancel"}},
 		{"c", domain.StateWaitingCopy, []string{"/cancel", "delete_files\" value=\"true"}, []string{"/start", "/retry"}},
-		{"d", domain.StateCompleted, []string{"delete_files\" value=\"false", "LOCKED / VERIFIED"}, []string{"/start", "/retry", "/cancel"}},
+		{"d", domain.StateCompleted, []string{"delete_files\" value=\"false", "is-verified"}, []string{"/start", "/retry", "/cancel"}},
 	}
 	for _, item := range cases {
 		download := fixture.seedDownload(item.seed, item.state, func(download *domain.Download) {
@@ -637,7 +659,7 @@ func TestFailedCleanupRemainsVisibleAndRetryable(t *testing.T) {
 	requireContains(t, list.Body.String(), download.Hash[:8], "local deletion failed")
 	detail := fixture.request(http.MethodGet, "/downloads/"+download.Hash, nil, true)
 	requireStatus(t, detail, http.StatusOK)
-	requireContains(t, detail.Body.String(), "Retry from evidence", "local deletion failed")
+	requireContains(t, detail.Body.String(), ">Retry</button>", "local deletion failed")
 	retry := fixture.post("/downloads/"+download.Hash+"/retry", nil)
 	requireStatus(t, retry, http.StatusSeeOther)
 	retried, err := fixture.store.GetDownload(context.Background(), download.Hash)
@@ -772,7 +794,7 @@ func TestCloudStatusTimeoutIsBoundedAndPrivate(t *testing.T) {
 
 func TestConstructorValidation(t *testing.T) {
 	fixture := newWebFixture(t)
-	config := Config{Username: "operator", Password: "password", CloudRoot: "/cloud", LocalRoot: t.TempDir()}
+	config := Config{CloudRoot: "/cloud", LocalRoot: t.TempDir()}
 	cases := []struct {
 		name   string
 		config Config
@@ -781,9 +803,8 @@ func TestConstructorValidation(t *testing.T) {
 		waker  Waker
 		cloud  CloudStatus
 	}{
-		{"credentials", Config{CloudRoot: "/cloud", LocalRoot: t.TempDir()}, fixture.repo, fixture.clock, fixture.waker, fixture.cloud},
-		{"cloud root", Config{Username: "operator", Password: "password", CloudRoot: "relative", LocalRoot: t.TempDir()}, fixture.repo, fixture.clock, fixture.waker, fixture.cloud},
-		{"local root", Config{Username: "operator", Password: "password", CloudRoot: "/cloud", LocalRoot: "relative"}, fixture.repo, fixture.clock, fixture.waker, fixture.cloud},
+		{"cloud root", Config{CloudRoot: "relative", LocalRoot: t.TempDir()}, fixture.repo, fixture.clock, fixture.waker, fixture.cloud},
+		{"local root", Config{CloudRoot: "/cloud", LocalRoot: "relative"}, fixture.repo, fixture.clock, fixture.waker, fixture.cloud},
 		{"repository", config, nil, fixture.clock, fixture.waker, fixture.cloud},
 		{"clock", config, fixture.repo, nil, fixture.waker, fixture.cloud},
 		{"waker", config, fixture.repo, fixture.clock, nil, fixture.cloud},
@@ -791,13 +812,16 @@ func TestConstructorValidation(t *testing.T) {
 	}
 	for _, item := range cases {
 		t.Run(item.name, func(t *testing.T) {
-			if handler, err := New(item.config, item.repo, fixture.sessions, item.clock, item.waker, item.cloud, fixture.filesystem); err == nil || handler != nil {
+			if handler, err := New(item.config, fixture.creds, item.repo, fixture.sessions, item.clock, item.waker, item.cloud, fixture.filesystem); err == nil || handler != nil {
 				t.Errorf("New() = (%v, %v), want validation error", handler, err)
 			}
 		})
 	}
-	if handler, err := New(config, fixture.repo, fixture.sessions, fixture.clock, fixture.waker, fixture.cloud, nil); err == nil || handler != nil {
+	if handler, err := New(config, fixture.creds, fixture.repo, fixture.sessions, fixture.clock, fixture.waker, fixture.cloud, nil); err == nil || handler != nil {
 		t.Errorf("New(nil filesystem) = (%v, %v), want validation error", handler, err)
+	}
+	if handler, err := New(config, nil, fixture.repo, fixture.sessions, fixture.clock, fixture.waker, fixture.cloud, fixture.filesystem); err == nil || handler != nil {
+		t.Errorf("New(nil credentials) = (%v, %v), want validation error", handler, err)
 	}
 }
 
@@ -813,4 +837,111 @@ func TestLoginBodyLimitAndExactFields(t *testing.T) {
 	result := httptest.NewRecorder()
 	fixture.handler.ServeHTTP(result, request)
 	requireStatus(t, result, http.StatusUnauthorized)
+}
+
+func (fixture *webFixture) requestLang(method, target string, authenticated bool, lang string) *httptest.ResponseRecorder {
+	fixture.t.Helper()
+	request := httptest.NewRequest(method, target, nil)
+	if authenticated {
+		request.AddCookie(&http.Cookie{Name: "SID", Value: fixture.sid})
+	}
+	if lang != "" {
+		request.AddCookie(&http.Cookie{Name: langCookie, Value: lang})
+	}
+	response := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(response, request)
+	return response
+}
+
+func TestLanguagePreferenceRendersChinese(t *testing.T) {
+	fixture := newWebFixture(t)
+	fixture.seedCategory("movies", true)
+	fixture.seedDownload("a", domain.StateWaitingOffline, nil)
+
+	login := fixture.requestLang(http.MethodGet, "/login", false, "zh")
+	requireStatus(t, login, http.StatusOK)
+	requireContains(t, login.Body.String(), `lang="zh"`, "用户名", "密码", "adminadmin")
+
+	downloads := fixture.requestLang(http.MethodGet, "/?view=all", true, "zh")
+	requireStatus(t, downloads, http.StatusOK)
+	requireContains(t, downloads.Body.String(), "115 离线", "复制到 NAS", "本地校验", "CloudDrive2 在线", "下载任务", "分类管理")
+
+	fallback := fixture.requestLang(http.MethodGet, "/login", false, "de")
+	requireStatus(t, fallback, http.StatusOK)
+	requireContains(t, fallback.Body.String(), `lang="en"`, "Username")
+}
+
+func TestSetLangCookieAndRedirectSanitization(t *testing.T) {
+	fixture := newWebFixture(t)
+	cases := []struct {
+		target       string
+		wantLang     string
+		wantLocation string
+	}{
+		{"/lang?to=zh&back=/categories", "zh", "/categories"},
+		{"/lang?to=en&back=/downloads/abc", "en", "/downloads/abc"},
+		{"/lang?to=zh&back=//evil.example", "zh", "/"},
+		{"/lang?to=zh&back=https://evil.example", "zh", "/"},
+		{"/lang?to=unknown", "en", "/"},
+	}
+	for _, item := range cases {
+		response := fixture.requestLang(http.MethodGet, item.target, false, "")
+		requireStatus(t, response, http.StatusSeeOther)
+		if location := response.Header().Get("Location"); location != item.wantLocation {
+			t.Errorf("%s Location = %q, want %q", item.target, location, item.wantLocation)
+		}
+		cookies := response.Result().Cookies()
+		if len(cookies) != 1 || cookies[0].Name != langCookie || cookies[0].Value != item.wantLang || cookies[0].Path != "/" {
+			t.Errorf("%s cookies = %+v, want %s=%s", item.target, cookies, langCookie, item.wantLang)
+		}
+	}
+}
+
+func TestPasswordChangeFlow(t *testing.T) {
+	fixture := newWebFixture(t)
+
+	page := fixture.request(http.MethodGet, "/password", nil, true)
+	requireStatus(t, page, http.StatusOK)
+	requireContains(t, page.Body.String(), `action="/password"`, "current_password", "new_password", "confirm_password")
+
+	wrongCurrent := fixture.post("/password", url.Values{
+		"current_password": {"not-the-password"}, "new_password": {"horse staple 9"}, "confirm_password": {"horse staple 9"},
+	})
+	requireStatus(t, wrongCurrent, http.StatusBadRequest)
+	requireContains(t, wrongCurrent.Body.String(), "The current password is incorrect.")
+
+	tooShort := fixture.post("/password", url.Values{
+		"current_password": {"adminadmin"}, "new_password": {"short"}, "confirm_password": {"short"},
+	})
+	requireStatus(t, tooShort, http.StatusBadRequest)
+	requireContains(t, tooShort.Body.String(), "at least 8 characters")
+
+	mismatch := fixture.post("/password", url.Values{
+		"current_password": {"adminadmin"}, "new_password": {"horse staple 9"}, "confirm_password": {"horse staple 8"},
+	})
+	requireStatus(t, mismatch, http.StatusBadRequest)
+	requireContains(t, mismatch.Body.String(), "do not match")
+
+	changed := fixture.post("/password", url.Values{
+		"current_password": {"adminadmin"}, "new_password": {"horse staple 9"}, "confirm_password": {"horse staple 9"},
+	})
+	requireStatus(t, changed, http.StatusOK)
+	requireContains(t, changed.Body.String(), "Password changed.")
+	requireAbsent(t, changed.Body.String(), "horse staple 9")
+
+	oldLogin := fixture.request(http.MethodPost, "/login", url.Values{"username": {"admin"}, "password": {"adminadmin"}}, false)
+	requireStatus(t, oldLogin, http.StatusUnauthorized)
+
+	newLogin := fixture.request(http.MethodPost, "/login", url.Values{"username": {"admin"}, "password": {"horse staple 9"}}, false)
+	requireStatus(t, newLogin, http.StatusSeeOther)
+
+	// The persisted hash survives a fresh manager over the same store.
+	fresh, err := creds.New(fixture.store)
+	if err != nil {
+		t.Fatalf("creds.New(): %v", err)
+	}
+	ok, err := fresh.Verify(context.Background(), "admin", "horse staple 9")
+	if err != nil || !ok {
+		t.Fatalf("Verify(new) = (%t, %v), want (true, nil)", ok, err)
+	}
 }

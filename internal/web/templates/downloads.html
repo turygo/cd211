@@ -1,66 +1,71 @@
 {{define "downloads"}}<!doctype html>
-<html lang="en">
+<html lang="{{.Lang}}">
 {{template "head" .}}
 <body>
-  {{template "masthead" .}}
-  <div class="app-frame">
-    {{template "route-legend" .}}
-    <main class="manifest-main" id="main-content">
-      <header class="page-heading">
-        <div>
-          <p class="eyebrow">Current registry</p>
-          <h1>Transfer manifest</h1>
-          <p>Each record preserves separate offline, copy, and local verification evidence.</p>
+  <div class="app-shell">
+    {{template "sidebar" .}}
+    <main class="content" id="main-content">
+      <header class="page-header">
+        <div class="page-title">
+          <h1>{{.Str.TitleDownloads}}</h1>
+          <span class="record-count">{{printf .Str.ShownFormat (len .Rows)}}</span>
         </div>
-        <p class="system-status {{.CloudStatusClass}}"><span aria-hidden="true"></span>{{.CloudStatus}}</p>
+        <span class="status-chip {{.CloudStatusClass}}"><span class="status-dot" aria-hidden="true"></span>{{.CloudStatus}}</span>
       </header>
 
-      <form class="filter-rail" action="/" method="get" data-auto-submit aria-label="Filter transfer records">
-        <label for="view">Manifest view</label>
-        <select id="view" name="view">
-          {{range .Views}}<option value="{{.Value}}" {{if .Active}}selected{{end}}>{{.Label}}</option>{{end}}
-        </select>
-        <label for="category">Category</label>
-        <select id="category" name="category">
-          <option value="">Every category</option>
-          {{range .Categories}}<option value="{{.Name}}" {{if .Selected}}selected{{end}}>{{.Name}}</option>{{end}}
-        </select>
-        <button class="button button-secondary" type="submit">Apply filters</button>
+      <form class="filter-bar" action="/" method="get" data-auto-submit>
+        <label class="filter-field">
+          <span>{{.Str.FilterView}}</span>
+          <select id="view" name="view">
+            {{range .Views}}<option value="{{.Value}}" {{if .Active}}selected{{end}}>{{.Label}}</option>{{end}}
+          </select>
+        </label>
+        <label class="filter-field">
+          <span>{{.Str.FilterCategory}}</span>
+          <select id="category" name="category">
+            <option value="">{{.Str.AllCategories}}</option>
+            {{range .Categories}}<option value="{{.Name}}" {{if .Selected}}selected{{end}}>{{.Name}}</option>{{end}}
+          </select>
+        </label>
+        <button class="button button-secondary" type="submit">{{.Str.Apply}}</button>
       </form>
 
-      <div class="manifest-list" aria-live="polite">
-        {{if .Rows}}
-          {{range .Rows}}
-          <article class="manifest-record" aria-labelledby="record-{{.HashPrefix}}">
-            <header class="record-header">
-              <div>
-                <p class="record-hash">{{.HashPrefix}} · {{.Category}} · updated {{.Age}} ago</p>
-                <h2 id="record-{{.HashPrefix}}"><a href="/downloads/{{.Hash}}">{{.Name}}</a></h2>
-              </div>
-              <span class="state-badge">{{.InternalState}}</span>
-            </header>
-            {{template "route-strip" .Route}}
-            <dl class="record-evidence">
-              <div><dt>Internal / projected</dt><dd>{{.InternalState}} / {{.ProjectedState}}</dd></div>
-              <div><dt>Overall</dt><dd>{{.Projected}}</dd></div>
-              <div><dt>Offline / copy</dt><dd>{{.Offline}} / {{.Copy}}</dd></div>
-              <div><dt>Cloud source</dt><dd class="path-value">{{.CloudSource}}</dd></div>
-              <div><dt>Local content</dt><dd class="path-value">{{.ContentPath}}</dd></div>
-            </dl>
-            {{if .Error}}<p class="record-error"><strong>Recorded error:</strong> {{.Error}}</p>{{end}}
-            <footer class="record-footer"><a class="text-link" href="/downloads/{{.Hash}}">Inspect evidence and actions</a></footer>
-          </article>
-          {{end}}
-        {{else}}
-          <section class="empty-state" aria-labelledby="empty-title">
-            <p class="eyebrow">No matching records</p>
-            <h2 id="empty-title">This manifest slice is clear.</h2>
-            <p>Choose another state or category to inspect retained transfer evidence.</p>
-          </section>
-        {{end}}
+      {{if .Rows}}
+      <div class="table-wrap" aria-live="polite">
+        <table class="download-table">
+          <thead>
+            <tr>
+              <th scope="col">{{.Str.ThName}}</th>
+              <th scope="col">{{.Str.ThState}}</th>
+              <th scope="col" class="col-progress">{{.Str.ThProgress}}</th>
+              <th scope="col">{{.Str.ThCategory}}</th>
+              <th scope="col" class="col-age">{{.Str.ThUpdated}}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Rows}}
+            <tr>
+              <td class="cell-name">
+                <a href="/downloads/{{.Hash}}">{{.Name}}</a>
+                <span class="cell-meta"><code>{{.HashPrefix}}</code></span>
+                {{if .Error}}<span class="cell-error">{{.Error}}</span>{{end}}
+              </td>
+              <td><span class="state-badge" data-state="{{.InternalState}}">{{.InternalState}}</span></td>
+              <td class="cell-progress">{{template "route-strip" .Route}}</td>
+              <td class="cell-category">{{.Category}}</td>
+              <td class="cell-age">{{printf $.Str.AgoFormat .Age}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
       </div>
+      {{else}}
+      <section class="empty-state" aria-labelledby="empty-title">
+        <h2 id="empty-title">{{.Str.EmptyTitle}}</h2>
+        <p>{{.Str.EmptyBody}}</p>
+      </section>
+      {{end}}
     </main>
   </div>
-  {{template "footer" .}}
 </body>
 </html>{{end}}

@@ -1,24 +1,22 @@
 {{define "categories"}}<!doctype html>
-<html lang="en">
+<html lang="{{.Lang}}">
 {{template "head" .}}
 <body>
-  {{template "masthead" .}}
-  <div class="app-frame">
-    {{template "route-legend" .}}
-    <main class="manifest-main" id="main-content">
-      <header class="page-heading">
-        <div>
-          <p class="eyebrow">Destination registry</p>
-          <h1>Category paths</h1>
-          <p>Category changes affect future submissions only. Existing transfers keep their frozen paths.</p>
+  <div class="app-shell">
+    {{template "sidebar" .}}
+    <main class="content" id="main-content">
+      <header class="page-header">
+        <div class="page-title">
+          <h1>{{.Str.TitleCategories}}</h1>
         </div>
       </header>
+      <p class="page-lede">{{.Str.CategoriesLede}}</p>
 
-      <section class="manifest-section registry-section" aria-labelledby="registry-title">
-        <header><p class="eyebrow">Registered routes</p><h2 id="registry-title">Cloud and local path pairs</h2></header>
+      <section class="panel" aria-labelledby="registry-title">
+        <h2 id="registry-title">{{.Str.SectionRegistered}}</h2>
         {{if .Rows}}
-        <div class="table-wrap"><table class="registry-table">
-          <thead><tr><th scope="col">Category</th><th scope="col">Cloud path</th><th scope="col">Local save path</th><th scope="col">Availability</th><th scope="col">Action</th></tr></thead>
+        <div class="table-wrap"><table class="category-table">
+          <thead><tr><th scope="col">{{.Str.ThCategory}}</th><th scope="col">{{.Str.ThCloudPath}}</th><th scope="col">{{.Str.ThSavePath}}</th><th scope="col">{{.Str.ThAvailability}}</th><th scope="col"></th></tr></thead>
           <tbody>
           {{range $index, $row := .Rows}}
             <tr>
@@ -28,32 +26,31 @@
                   <input type="hidden" name="name" value="{{$row.Name}}">
                 </form>
                 <span class="category-name">{{$row.Name}}</span>
-                <span class="registry-time">Updated {{$row.UpdatedAt}}</span>
+                <span class="cell-meta">{{printf $.Str.UpdatedAtFormat $row.UpdatedAt}}</span>
               </th>
-              <td><label class="visually-hidden" for="cloud-{{$index}}">Cloud path for {{$row.Name}}</label><input form="category-{{$index}}" id="cloud-{{$index}}" name="cloud_path" type="text" value="{{$row.CloudPath}}" required></td>
-              <td><label class="visually-hidden" for="save-{{$index}}">Local save path for {{$row.Name}}</label><input form="category-{{$index}}" id="save-{{$index}}" name="save_path" type="text" value="{{$row.SavePath}}" required></td>
-              <td><label class="visually-hidden" for="enabled-{{$index}}">Availability for {{$row.Name}}</label><select form="category-{{$index}}" id="enabled-{{$index}}" name="enabled"><option value="true" {{if $row.Enabled}}selected{{end}}>Enabled</option><option value="false" {{if not $row.Enabled}}selected{{end}}>Disabled</option></select></td>
-              <td><button form="category-{{$index}}" class="button button-secondary" type="submit">Save route</button></td>
+              <td><label class="visually-hidden" for="cloud-{{$index}}">{{$.Str.ThCloudPath}}: {{$row.Name}}</label><input form="category-{{$index}}" id="cloud-{{$index}}" name="cloud_path" type="text" value="{{$row.CloudPath}}" required></td>
+              <td><label class="visually-hidden" for="save-{{$index}}">{{$.Str.ThSavePath}}: {{$row.Name}}</label><input form="category-{{$index}}" id="save-{{$index}}" name="save_path" type="text" value="{{$row.SavePath}}" required></td>
+              <td><label class="visually-hidden" for="enabled-{{$index}}">{{$.Str.ThAvailability}}: {{$row.Name}}</label><select form="category-{{$index}}" id="enabled-{{$index}}" name="enabled"><option value="true" {{if $row.Enabled}}selected{{end}}>{{$.Str.Enabled}}</option><option value="false" {{if not $row.Enabled}}selected{{end}}>{{$.Str.Disabled}}</option></select></td>
+              <td class="cell-action"><button form="category-{{$index}}" class="button button-secondary" type="submit">{{$.Str.Save}}</button></td>
             </tr>
           {{end}}
           </tbody>
         </table></div>
-        {{else}}<p class="muted">No named categories are registered. Add the first future destination below.</p>{{end}}
+        {{else}}<p class="muted">{{.Str.NoCategories}}</p>{{end}}
       </section>
 
-      <section class="manifest-section create-category" aria-labelledby="create-title">
-        <header><p class="eyebrow">New future route</p><h2 id="create-title">Register a category</h2></header>
+      <section class="panel" aria-labelledby="create-title">
+        <h2 id="create-title">{{.Str.SectionRegister}}</h2>
         <form action="/categories/save" method="post" class="category-form">
           <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-          <div><label for="new-name">Category name</label><input id="new-name" name="name" type="text" required aria-describedby="name-hint"><small id="name-hint">Trimmed and stored in lowercase.</small></div>
-          <div><label for="new-cloud">Cloud path</label><input id="new-cloud" name="cloud_path" type="text" required aria-describedby="cloud-hint"><small id="cloud-hint">Must be below the configured cloud root.</small></div>
-          <div><label for="new-save">Local save path</label><input id="new-save" name="save_path" type="text" required aria-describedby="save-hint"><small id="save-hint">Must be below the configured local root.</small></div>
-          <div><label for="new-enabled">Availability</label><select id="new-enabled" name="enabled"><option value="true">Enabled</option><option value="false">Disabled</option></select></div>
-          <button class="button button-primary" type="submit">Register category</button>
+          <div class="form-field"><label for="new-name">{{.Str.FieldName}}</label><input id="new-name" name="name" type="text" required aria-describedby="name-hint"><small id="name-hint">{{.Str.HintName}}</small></div>
+          <div class="form-field"><label for="new-cloud">{{.Str.FieldCloudPath}}</label><input id="new-cloud" name="cloud_path" type="text" required aria-describedby="cloud-hint"><small id="cloud-hint">{{.Str.HintCloud}}</small></div>
+          <div class="form-field"><label for="new-save">{{.Str.FieldSavePath}}</label><input id="new-save" name="save_path" type="text" required aria-describedby="save-hint"><small id="save-hint">{{.Str.HintSave}}</small></div>
+          <div class="form-field"><label for="new-enabled">{{.Str.FieldAvailability}}</label><select id="new-enabled" name="enabled"><option value="true">{{.Str.Enabled}}</option><option value="false">{{.Str.Disabled}}</option></select></div>
+          <button class="button button-primary" type="submit">{{.Str.RegisterButton}}</button>
         </form>
       </section>
     </main>
   </div>
-  {{template "footer" .}}
 </body>
 </html>{{end}}

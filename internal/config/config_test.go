@@ -8,8 +8,6 @@ import (
 
 func TestLoad(t *testing.T) {
 	base := map[string]string{
-		usernameEnv:    " user ",
-		passwordEnv:    " password ",
 		cd2AddressEnv:  " cd2.example:443 ",
 		cd2UsernameEnv: " cd2-user ",
 		cd2PasswordEnv: " cd2-password ",
@@ -22,11 +20,9 @@ func TestLoad(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name: "uses defaults and preserves credentials",
+			name: "uses defaults and preserves CD2 credentials",
 			env:  base,
 			want: Config{
-				Username:       " user ",
-				Password:       " password ",
 				CD2Address:     "cd2.example:443",
 				CD2Username:    " cd2-user ",
 				CD2Password:    " cd2-password ",
@@ -53,8 +49,6 @@ func TestLoad(t *testing.T) {
 				verifyTimeoutEnv:  " 4m ",
 			}),
 			want: Config{
-				Username:       " user ",
-				Password:       " password ",
 				CD2Address:     "[2001:db8::1]:443",
 				CD2Username:    " cd2-user ",
 				CD2Insecure:    true,
@@ -119,20 +113,16 @@ func TestLoad(t *testing.T) {
 
 func TestLoadRejectsMissingCredentialsWithoutLeakingSecrets(t *testing.T) {
 	secrets := []string{
-		"username-secret",
-		"password-secret",
 		"cd2-username-secret",
 		"cd2-password-secret",
 	}
 	base := map[string]string{
-		usernameEnv:    secrets[0],
-		passwordEnv:    secrets[1],
 		cd2AddressEnv:  "cd2.example:443",
-		cd2UsernameEnv: secrets[2],
-		cd2PasswordEnv: secrets[3],
+		cd2UsernameEnv: secrets[0],
+		cd2PasswordEnv: secrets[1],
 	}
 
-	for _, missing := range []string{usernameEnv, passwordEnv, cd2AddressEnv, cd2UsernameEnv, cd2PasswordEnv} {
+	for _, missing := range []string{cd2AddressEnv, cd2UsernameEnv, cd2PasswordEnv} {
 		t.Run(missing, func(t *testing.T) {
 			env := mergeEnv(base, map[string]string{missing: " \t "})
 			_, err := load(mapLookup(env))

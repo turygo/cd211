@@ -1,80 +1,79 @@
 {{define "detail"}}<!doctype html>
-<html lang="en">
+<html lang="{{.Lang}}">
 {{template "head" .}}
 <body>
-  {{template "masthead" .}}
-  <div class="app-frame">
-    {{template "route-legend" .}}
-    <main class="manifest-main" id="main-content">
-      <nav class="breadcrumb" aria-label="Breadcrumb"><a href="/">Transfer manifest</a><span aria-hidden="true">/</span><span>{{.Hash}}</span></nav>
-      <header class="page-heading detail-heading">
-        <div>
-          <p class="eyebrow">Immutable transfer record</p>
+  <div class="app-shell">
+    {{template "sidebar" .}}
+    <main class="content" id="main-content">
+      <nav class="breadcrumb" aria-label="Breadcrumb"><a href="/">{{.Str.NavDownloads}}</a><span aria-hidden="true">/</span><code>{{.Hash}}</code></nav>
+      <header class="page-header detail-header">
+        <div class="page-title">
           <h1>{{.Name}}</h1>
-          <p class="full-hash">{{.Hash}}</p>
+          <span class="state-badge" data-state="{{.InternalState}}">{{.InternalState}}</span>
         </div>
-        <span class="state-badge">{{.InternalState}}</span>
       </header>
 
-      {{template "route-strip" .Route}}
+      <section class="panel">
+        {{template "route-strip" .Route}}
+      </section>
 
-      <div class="detail-grid">
-        <section class="manifest-section" aria-labelledby="evidence-title">
-          <header><p class="eyebrow">Route evidence</p><h2 id="evidence-title">Paths and identity</h2></header>
+      {{if .Error}}<div class="notice notice-error"><strong>{{.Str.RecordedError}}</strong><p>{{.Error}}</p></div>{{end}}
+
+      <div class="panel-grid">
+        <section class="panel" aria-labelledby="paths-title">
+          <h2 id="paths-title">{{.Str.SectionPaths}}</h2>
           <dl class="detail-list">
-            <div><dt>Frozen cloud folder</dt><dd class="path-value">{{.CloudFolder}}</dd></div>
-            <div><dt>Frozen save path</dt><dd class="path-value">{{.SavePath}}</dd></div>
-            <div><dt>Cloud source path</dt><dd class="path-value">{{.CloudSourcePath}}</dd></div>
-            <div><dt>Local content path</dt><dd class="path-value">{{.ContentPath}}</dd></div>
-            <div><dt>Category</dt><dd>{{.Category}}</dd></div>
+            <div><dt>{{.Str.CloudFolder}}</dt><dd><code>{{.CloudFolder}}</code></dd></div>
+            <div><dt>{{.Str.CloudSource}}</dt><dd><code>{{.CloudSourcePath}}</code></dd></div>
+            <div><dt>{{.Str.SavePathLabel}}</dt><dd><code>{{.SavePath}}</code></dd></div>
+            <div><dt>{{.Str.LocalContent}}</dt><dd><code>{{.ContentPath}}</code></dd></div>
+            <div><dt>{{.Str.CategoryLabel}}</dt><dd>{{.Category}}</dd></div>
           </dl>
+          <p class="panel-note">{{.Str.FrozenNote}}</p>
         </section>
 
-        <section class="manifest-section" aria-labelledby="status-title">
-          <header><p class="eyebrow">Workflow chronology</p><h2 id="status-title">State and timing</h2></header>
+        <section class="panel" aria-labelledby="timing-title">
+          <h2 id="timing-title">{{.Str.SectionChronology}}</h2>
           <dl class="detail-list">
-            <div><dt>Internal / projected</dt><dd>{{.InternalState}} / {{.ProjectedState}}</dd></div>
-            <div><dt>Overall progress</dt><dd>{{.Projected}}</dd></div>
-            <div><dt>Offline / copy</dt><dd>{{.Offline}} / {{.Copy}}</dd></div>
-            <div><dt>Created</dt><dd>{{.CreatedAt}}</dd></div>
-            <div><dt>Updated</dt><dd>{{.UpdatedAt}}</dd></div>
-            <div><dt>Phase started</dt><dd>{{.PhaseStartedAt}}</dd></div>
-            <div><dt>Next run</dt><dd>{{.NextRunAt}}</dd></div>
-            <div><dt>Completed</dt><dd>{{.CompletedAt}}</dd></div>
-            <div><dt>Attempts</dt><dd>{{.AttemptCount}}</dd></div>
+            <div><dt>{{.Str.ProgressLabel}}</dt><dd>{{printf .Str.ProgressSummary .Projected .Offline .Copy}}</dd></div>
+            <div><dt>{{.Str.ProjectedState}}</dt><dd>{{.ProjectedState}}</dd></div>
+            <div><dt>{{.Str.Created}}</dt><dd>{{.CreatedAt}}</dd></div>
+            <div><dt>{{.Str.Updated}}</dt><dd>{{.UpdatedAt}}</dd></div>
+            <div><dt>{{.Str.PhaseStarted}}</dt><dd>{{.PhaseStartedAt}}</dd></div>
+            <div><dt>{{.Str.NextRun}}</dt><dd>{{.NextRunAt}}</dd></div>
+            <div><dt>{{.Str.CompletedLabel}}</dt><dd>{{.CompletedAt}}</dd></div>
+            <div><dt>{{.Str.Attempts}}</dt><dd>{{.AttemptCount}}</dd></div>
           </dl>
-          {{if .Error}}<div class="notice notice-error"><strong>Recorded error</strong><p>{{.Error}}</p></div>{{end}}
         </section>
       </div>
 
-      <section class="manifest-section action-section" aria-labelledby="actions-title">
-        <header><p class="eyebrow">Safe intervention</p><h2 id="actions-title">Available actions</h2></header>
+      <section class="panel" aria-labelledby="actions-title">
+        <h2 id="actions-title">{{.Str.SectionActions}}</h2>
         <div class="action-bar">
-          {{if .CanStart}}<form action="/downloads/{{.Hash}}/start" method="post"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="button button-primary" type="submit">Start transfer</button></form>{{end}}
-          {{if .CanRetry}}<form action="/downloads/{{.Hash}}/retry" method="post"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="button button-primary" type="submit">Retry from evidence</button></form>{{end}}
-          {{if .CanCancel}}<form action="/downloads/{{.Hash}}/cancel" method="post" data-confirm="Cancel active work for this transfer?"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="button button-secondary" type="submit">Cancel transfer</button></form>{{end}}
+          {{if .CanStart}}<form action="/downloads/{{.Hash}}/start" method="post"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="button button-primary" type="submit">{{.Str.ActionStart}}</button></form>{{end}}
+          {{if .CanRetry}}<form action="/downloads/{{.Hash}}/retry" method="post"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="button button-primary" type="submit">{{.Str.ActionRetry}}</button></form>{{end}}
+          {{if .CanCancel}}<form action="/downloads/{{.Hash}}/cancel" method="post" data-confirm="{{.Str.ConfirmCancel}}"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="button button-secondary" type="submit">{{.Str.ActionCancel}}</button></form>{{end}}
           {{if .CanRemove}}
-          <form action="/downloads/{{.Hash}}/remove" method="post" data-confirm="Remove this record? The qBittorrent cloud copy will be retained.">
-            <input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="delete_files" value="false"><button class="button button-secondary" type="submit">Remove record</button>
+          <form action="/downloads/{{.Hash}}/remove" method="post" data-confirm="{{.Str.ConfirmRemove}}">
+            <input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="delete_files" value="false"><button class="button button-secondary" type="submit">{{.Str.ActionRemove}}</button>
           </form>
-          <form action="/downloads/{{.Hash}}/remove" method="post" data-confirm="Remove this record and local files? The qBittorrent cloud copy will still be retained.">
-            <input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="delete_files" value="true"><button class="button button-danger" type="submit">Remove + local files</button>
+          <form action="/downloads/{{.Hash}}/remove" method="post" data-confirm="{{.Str.ConfirmRemoveFiles}}">
+            <input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="delete_files" value="true"><button class="button button-danger" type="submit">{{.Str.ActionRemoveFiles}}</button>
           </form>
           {{end}}
         </div>
-        <p class="action-note">Removal never deletes the qBittorrent cloud copy.</p>
+        <p class="panel-note">{{.Str.RemovalNote}}</p>
       </section>
 
-      <section class="manifest-section" aria-labelledby="files-title">
-        <header><p class="eyebrow">Ordered payload</p><h2 id="files-title">Files</h2></header>
+      <section class="panel" aria-labelledby="files-title">
+        <h2 id="files-title">{{.Str.SectionFiles}}</h2>
         {{if .Files}}
-        <div class="table-wrap"><table><thead><tr><th scope="col">Index</th><th scope="col">Relative path</th><th scope="col">Size</th></tr></thead><tbody>
-          {{range .Files}}<tr><td class="data-value">{{.Index}}</td><td class="path-value">{{.Path}}</td><td class="data-value">{{.Size}}</td></tr>{{end}}
+        <div class="table-wrap"><table class="file-table"><thead><tr><th scope="col">{{.Str.ThIndex}}</th><th scope="col">{{.Str.ThPath}}</th><th scope="col" class="col-size">{{.Str.ThSize}}</th></tr></thead><tbody>
+          {{range .Files}}<tr><td class="cell-index">{{.Index}}</td><td><code>{{.Path}}</code></td><td class="cell-size">{{.Size}}</td></tr>{{end}}
         </tbody></table></div>
-        {{else}}<p class="muted">No ordered file entries were recorded for this transfer.</p>{{end}}
+        {{else}}<p class="muted">{{.Str.NoFiles}}</p>{{end}}
       </section>
     </main>
   </div>
-  {{template "footer" .}}
 </body>
 </html>{{end}}

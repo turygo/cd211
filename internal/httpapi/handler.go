@@ -52,18 +52,22 @@ type filesystem interface {
 	PrepareSaveRoot(string) (string, error)
 }
 
-// Config provides the fixed API identity and submission bounds.
+// Config provides the fixed API path boundaries and submission bounds.
 type Config struct {
-	Username        string
-	Password        string
 	CloudRoot       string
 	LocalRoot       string
 	TorrentLimits   torrentmeta.Limits
 	MaxRequestBytes int64
 }
 
+// Credentials verifies operator credentials shared with the Web UI.
+type Credentials interface {
+	Verify(ctx context.Context, username, password string) (bool, error)
+}
+
 type handler struct {
 	config     Config
+	creds      Credentials
 	repo       repository
 	sessions   *session.Store
 	clock      Clock
@@ -72,12 +76,9 @@ type handler struct {
 }
 
 // New creates the authenticated qBittorrent-compatible HTTP handler.
-func New(config Config, repo repository, sessions *session.Store, clock Clock, waker Waker, files filesystem) (http.Handler, error) {
-	if isNil(repo) || sessions == nil || isNil(clock) || isNil(waker) || isNil(files) {
+func New(config Config, credentials Credentials, repo repository, sessions *session.Store, clock Clock, waker Waker, files filesystem) (http.Handler, error) {
+	if isNil(credentials) || isNil(repo) || sessions == nil || isNil(clock) || isNil(waker) || isNil(files) {
 		return nil, errors.New("httpapi dependency is nil")
-	}
-	if config.Username == "" || config.Password == "" {
-		return nil, errors.New("httpapi credentials are required")
 	}
 	if !validCloudRoot(config.CloudRoot) {
 		return nil, errors.New("cloud root must be an absolute clean POSIX path")
@@ -92,7 +93,7 @@ func New(config Config, repo repository, sessions *session.Store, clock Clock, w
 		return nil, errors.New("request limit is too small")
 	}
 
-	h := &handler{config: config, repo: repo, sessions: sessions, clock: clock, waker: waker, filesystem: files}
+	h := &handler{config: config, creds: credentials, repo: repo, sessions: sessions, clock: clock, waker: waker, filesystem: files}
 	mux := http.NewServeMux()
 	routes := map[string]string{
 		apiPrefix + "auth/login":              http.MethodPost,

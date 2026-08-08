@@ -1,8 +1,6 @@
 package httpapi
 
 import (
-	"crypto/sha256"
-	"crypto/subtle"
 	"mime"
 	"net/http"
 	"net/url"
@@ -62,11 +60,15 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 	}
 	username, usernameOK := exactlyOne(form["username"])
 	password, passwordOK := exactlyOne(form["password"])
-	usernameInput, usernameConfigured := sha256.Sum256([]byte(username)), sha256.Sum256([]byte(h.config.Username))
-	passwordInput, passwordConfigured := sha256.Sum256([]byte(password)), sha256.Sum256([]byte(h.config.Password))
-	usernameMatch := subtle.ConstantTimeCompare(usernameInput[:], usernameConfigured[:])
-	passwordMatch := subtle.ConstantTimeCompare(passwordInput[:], passwordConfigured[:])
-	credentialsValid := usernameOK && passwordOK && usernameMatch == 1 && passwordMatch == 1
+	credentialsValid := usernameOK && passwordOK
+	if credentialsValid {
+		match, err := h.creds.Verify(r.Context(), username, password)
+		if err != nil {
+			internalError(w)
+			return
+		}
+		credentialsValid = match
+	}
 	switch h.sessions.AuthorizeLogin(r.RemoteAddr, credentialsValid) {
 	case session.LoginBanned:
 		plain(w, http.StatusForbidden, "Fails.")

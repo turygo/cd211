@@ -57,3 +57,9 @@ type DownloadFile struct {
 	RelativePath string `json:"relative_path"`
 	Size         int64  `json:"size"`
 }
+
+type OperatorPassword struct {
+	ID           int64     `json:"id"`
+	PasswordHash string    `json:"password_hash"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}

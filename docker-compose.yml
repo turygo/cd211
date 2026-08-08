@@ -6,8 +6,6 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - CD211_USERNAME=${CD211_USERNAME}
-      - CD211_PASSWORD=${CD211_PASSWORD}
       - CD2_ADDRESS=${CD2_ADDRESS}
       - CD2_USERNAME=${CD2_USERNAME}
       - CD2_PASSWORD=${CD2_PASSWORD}

@@ -73,10 +73,10 @@ func TestRealStoreSubmissionChain(t *testing.T) {
 	}
 	waker := &contractWaker{}
 	api, err := New(Config{
-		Username: "user", Password: "password", CloudRoot: "/cloud", LocalRoot: "/local",
+		CloudRoot: "/cloud", LocalRoot: "/local",
 		TorrentLimits:   torrentmeta.Limits{MaxInputBytes: 1 << 20, MaxInfoBytes: 1 << 18, MaxFiles: 16, MaxNameBytes: 255, MaxPathBytes: 1024, MaxComponentBytes: 255, MaxTrackerCount: 16, MaxTrackerBytes: 1024, MaxTotalSize: 1 << 30},
 		MaxRequestBytes: (1 << 20) + (64 << 10),
-	}, repository, sessions, clock, waker, &contractFilesystem{root: "/local", err: fs.ErrNotExist})
+	}, stubCredentials{username: "user", password: "password"}, repository, sessions, clock, waker, &contractFilesystem{root: "/local", err: fs.ErrNotExist})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,13 +177,22 @@ func newContractHarness(t *testing.T) *contractHarness {
 	waker := &contractWaker{}
 	filesystem := &contractFilesystem{root: "/local", err: fs.ErrNotExist}
 	api, err := New(Config{
-		Username: "user", Password: "password", CloudRoot: "/cloud", LocalRoot: "/local",
+		CloudRoot: "/cloud", LocalRoot: "/local",
 		TorrentLimits: limits, MaxRequestBytes: int64(limits.MaxInputBytes) + (64 << 10),
-	}, repository, sessions, clock, waker, filesystem)
+	}, stubCredentials{username: "user", password: "password"}, repository, sessions, clock, waker, filesystem)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return &contractHarness{api: api, repository: repository, clock: clock, waker: waker, filesystem: filesystem, limits: limits}
+}
+
+type stubCredentials struct {
+	username string
+	password string
+}
+
+func (s stubCredentials) Verify(_ context.Context, username, password string) (bool, error) {
+	return username == s.username && password == s.password, nil
 }
 
 func (h *contractHarness) login(t *testing.T) *http.Cookie {

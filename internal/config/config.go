@@ -12,8 +12,6 @@ import (
 )
 
 const (
-	usernameEnv       = "CD211_USERNAME"
-	passwordEnv       = "CD211_PASSWORD"
 	cd2AddressEnv     = "CD2_ADDRESS"
 	cd2UsernameEnv    = "CD2_USERNAME"
 	cd2PasswordEnv    = "CD2_PASSWORD"
@@ -29,8 +27,6 @@ const (
 
 // Config is the validated runtime configuration.
 type Config struct {
-	Username       string
-	Password       string
 	CD2Address     string
 	CD2Username    string
 	CD2Password    string
@@ -50,14 +46,6 @@ func Load() (Config, error) {
 }
 
 func load(lookup func(string) (string, bool)) (Config, error) {
-	username, err := required(lookup, usernameEnv)
-	if err != nil {
-		return Config{}, err
-	}
-	password, err := required(lookup, passwordEnv)
-	if err != nil {
-		return Config{}, err
-	}
 	cd2Address, err := required(lookup, cd2AddressEnv)
 	if err != nil {
 		return Config{}, err
@@ -111,8 +99,6 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	}
 
 	return Config{
-		Username:       username,
-		Password:       password,
 		CD2Address:     cd2Address,
 		CD2Username:    cd2Username,
 		CD2Password:    cd2Password,

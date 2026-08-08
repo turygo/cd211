@@ -14,6 +14,7 @@ import (
 
 	"github.com/turygo/cd211/internal/clouddrive"
 	"github.com/turygo/cd211/internal/config"
+	"github.com/turygo/cd211/internal/creds"
 	"github.com/turygo/cd211/internal/fsafe"
 	"github.com/turygo/cd211/internal/httpapi"
 	"github.com/turygo/cd211/internal/reconcile"
@@ -108,18 +109,23 @@ func run() (result error) {
 		return err
 	}
 
+	credentials, err := creds.New(st)
+	if err != nil {
+		logger.Error("runtime startup failed", "error", err)
+		return err
+	}
 	limits := metadataLimits()
 	api, err := httpapi.New(httpapi.Config{
-		Username: cfg.Username, Password: cfg.Password, CloudRoot: cfg.CloudRoot, LocalRoot: cfg.LocalRoot,
+		CloudRoot: cfg.CloudRoot, LocalRoot: cfg.LocalRoot,
 		TorrentLimits: limits, MaxRequestBytes: int64(limits.MaxInputBytes) + 64<<10,
-	}, st, sessions, clock, coordinator, files)
+	}, credentials, st, sessions, clock, coordinator, files)
 	if err != nil {
 		logger.Error("runtime startup failed", "error", err)
 		return err
 	}
 	ui, err := web.New(web.Config{
-		Username: cfg.Username, Password: cfg.Password, CloudRoot: cfg.CloudRoot, LocalRoot: cfg.LocalRoot,
-	}, st, sessions, clock, coordinator, cloud, files)
+		CloudRoot: cfg.CloudRoot, LocalRoot: cfg.LocalRoot,
+	}, credentials, st, sessions, clock, coordinator, cloud, files)
 	if err != nil {
 		logger.Error("runtime startup failed", "error", err)
 		return err

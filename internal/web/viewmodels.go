@@ -14,11 +14,25 @@ type PageMeta struct {
 	Title     string
 	ActiveNav string
 	CSRFToken string
+	Lang      Lang
+	OtherLang Lang
+	Path      string
+	Str       *Strings
 }
 
 type LoginView struct {
-	Title string
-	Error string
+	Title     string
+	Error     string
+	Lang      Lang
+	OtherLang Lang
+	Path      string
+	Str       *Strings
+}
+
+type PasswordView struct {
+	PageMeta
+	Error   string
+	Success bool
 }
 
 type DownloadsView struct {
@@ -122,24 +136,25 @@ type CategoryRow struct {
 	UpdatedAt string
 }
 
-func buildDownloadsView(downloads []domain.Download, categories []domain.Category, selectedView, selectedCategory, csrfToken string, now time.Time, cloudOnline bool) (DownloadsView, error) {
+func buildDownloadsView(downloads []domain.Download, categories []domain.Category, selectedView, selectedCategory, csrfToken string, now time.Time, cloudOnline bool, lang Lang) (DownloadsView, error) {
+	str := tr(lang)
 	page := DownloadsView{
-		PageMeta:         PageMeta{Title: "Transfer manifest", ActiveNav: "downloads", CSRFToken: csrfToken},
+		PageMeta:         pageMeta(str.TitleDownloads, "downloads", csrfToken, lang),
 		SelectedView:     selectedView,
 		SelectedCategory: selectedCategory,
 		Views: []ViewOption{
-			{Value: "active", Label: "Active", Active: selectedView == "active"},
-			{Value: "completed", Label: "Completed", Active: selectedView == "completed"},
-			{Value: "failed", Label: "Failed", Active: selectedView == "failed"},
-			{Value: "cancelled", Label: "Cancelled", Active: selectedView == "cancelled"},
-			{Value: "all", Label: "All records", Active: selectedView == "all"},
+			{Value: "active", Label: str.ViewActive, Active: selectedView == "active"},
+			{Value: "completed", Label: str.ViewCompleted, Active: selectedView == "completed"},
+			{Value: "failed", Label: str.ViewFailed, Active: selectedView == "failed"},
+			{Value: "cancelled", Label: str.ViewCancelled, Active: selectedView == "cancelled"},
+			{Value: "all", Label: str.ViewAll, Active: selectedView == "all"},
 		},
 	}
 	if cloudOnline {
-		page.CloudStatus = "CloudDrive2 online"
+		page.CloudStatus = str.CloudOnline
 		page.CloudStatusClass = "is-online"
 	} else {
-		page.CloudStatus = "CloudDrive2 unavailable"
+		page.CloudStatus = str.CloudUnavailable
 		page.CloudStatusClass = "is-unavailable"
 	}
 	for _, category := range categories {
@@ -156,7 +171,7 @@ func buildDownloadsView(downloads []domain.Download, categories []domain.Categor
 		if !downloadMatchesView(download, selectedView) {
 			continue
 		}
-		row, err := buildDownloadRow(download, projection, now)
+		row, err := buildDownloadRow(download, projection, now, str)
 		if err != nil {
 			return DownloadsView{}, err
 		}
@@ -165,7 +180,7 @@ func buildDownloadsView(downloads []domain.Download, categories []domain.Categor
 	return page, nil
 }
 
-func buildDownloadRow(download domain.Download, projection domain.Projection, now time.Time) (DownloadRow, error) {
+func buildDownloadRow(download domain.Download, projection domain.Projection, now time.Time, str *Strings) (DownloadRow, error) {
 	if len(download.Hash) < 8 {
 		return DownloadRow{}, errors.New("download hash is too short")
 	}
@@ -173,47 +188,48 @@ func buildDownloadRow(download domain.Download, projection domain.Projection, no
 		Hash:           download.Hash,
 		HashPrefix:     download.Hash[:8],
 		Name:           download.Name,
-		Category:       displayCategory(download.Category),
+		Category:       displayCategory(download.Category, str),
 		InternalState:  string(download.State),
 		ProjectedState: projection.State,
 		Projected:      percent(projection.Progress),
 		Offline:        percent(download.OfflineProgress),
 		Copy:           percent(download.CopyProgress),
 		Age:            displayAge(now, download.UpdatedAt),
-		Error:          safeError(download),
-		CloudSource:    displayPath(download.CloudSourcePath),
-		ContentPath:    displayPath(download.ContentPath),
-		Route:          buildRoute(download),
+		Error:          safeError(download, str),
+		CloudSource:    displayPath(download.CloudSourcePath, str),
+		ContentPath:    displayPath(download.ContentPath, str),
+		Route:          buildRoute(download, str),
 	}, nil
 }
 
-func buildDetailView(download domain.Download, files []domain.DownloadFile, csrfToken string) (DetailView, error) {
+func buildDetailView(download domain.Download, files []domain.DownloadFile, csrfToken string, lang Lang) (DetailView, error) {
 	projection, err := domain.Project(download)
 	if err != nil {
 		return DetailView{}, err
 	}
+	str := tr(lang)
 	page := DetailView{
-		PageMeta:        PageMeta{Title: download.Name, ActiveNav: "downloads", CSRFToken: csrfToken},
+		PageMeta:        pageMeta(download.Name, "downloads", csrfToken, lang),
 		Hash:            download.Hash,
 		Name:            download.Name,
-		Category:        displayCategory(download.Category),
+		Category:        displayCategory(download.Category, str),
 		CloudFolder:     download.CloudFolder,
 		SavePath:        download.SavePath,
-		CloudSourcePath: displayPath(download.CloudSourcePath),
-		ContentPath:     displayPath(download.ContentPath),
+		CloudSourcePath: displayPath(download.CloudSourcePath, str),
+		ContentPath:     displayPath(download.ContentPath, str),
 		InternalState:   string(download.State),
 		ProjectedState:  projection.State,
 		Projected:       percent(projection.Progress),
 		Offline:         percent(download.OfflineProgress),
 		Copy:            percent(download.CopyProgress),
-		CreatedAt:       displayTime(download.CreatedAt),
-		UpdatedAt:       displayTime(download.UpdatedAt),
-		PhaseStartedAt:  displayTime(download.PhaseStartedAt),
-		CompletedAt:     displayOptionalTime(download.CompletedAt),
-		NextRunAt:       displayOptionalTime(download.NextRunAt),
+		CreatedAt:       displayTime(download.CreatedAt, str),
+		UpdatedAt:       displayTime(download.UpdatedAt, str),
+		PhaseStartedAt:  displayTime(download.PhaseStartedAt, str),
+		CompletedAt:     displayOptionalTime(download.CompletedAt, str.NotCompleted, str),
+		NextRunAt:       displayOptionalTime(download.NextRunAt, str.NotScheduled, str),
 		AttemptCount:    download.AttemptCount,
-		Error:           safeError(download),
-		Route:           buildRoute(download),
+		Error:           safeError(download, str),
+		Route:           buildRoute(download, str),
 		CanStart:        download.State == domain.StateStopped,
 		CanRetry:        canRetry(download),
 		CanCancel:       canCancel(download.State),
@@ -225,52 +241,57 @@ func buildDetailView(download domain.Download, files []domain.DownloadFile, csrf
 	return page, nil
 }
 
-func buildCategoriesView(categories []domain.Category, csrfToken string) CategoriesView {
-	page := CategoriesView{PageMeta: PageMeta{Title: "Path registry", ActiveNav: "categories", CSRFToken: csrfToken}}
+func buildCategoriesView(categories []domain.Category, csrfToken string, lang Lang) CategoriesView {
+	str := tr(lang)
+	page := CategoriesView{PageMeta: pageMeta(str.TitleCategories, "categories", csrfToken, lang)}
 	for _, category := range categories {
 		page.Rows = append(page.Rows, CategoryRow{
 			Name: category.Name, CloudPath: category.CloudPath, SavePath: category.SavePath, Enabled: category.Enabled,
-			CreatedAt: displayTime(category.CreatedAt), UpdatedAt: displayTime(category.UpdatedAt),
+			CreatedAt: displayTime(category.CreatedAt, str), UpdatedAt: displayTime(category.UpdatedAt, str),
 		})
 	}
 	return page
 }
 
-func buildRoute(download domain.Download) RouteView {
+func pageMeta(title, activeNav, csrfToken string, lang Lang) PageMeta {
+	return PageMeta{Title: title, ActiveNav: activeNav, CSRFToken: csrfToken, Lang: lang, OtherLang: otherLang(lang), Str: tr(lang)}
+}
+
+func buildRoute(download domain.Download, str *Strings) RouteView {
 	offline := routePercent(download.OfflineProgress)
 	copyProgress := routePercent(download.CopyProgress)
 	stages := []RouteStage{
-		{Label: "115 OFFLINE", Progress: offline, Status: fmt.Sprintf("%d%%", offline), Class: "is-idle"},
-		{Label: "NAS COPY", Progress: copyProgress, Status: fmt.Sprintf("%d%%", copyProgress), Class: "is-idle"},
-		{Label: "LOCAL VERIFY", Progress: 0, Status: "Pending", Class: "is-idle"},
+		{Label: str.Stage115, Progress: offline, Status: fmt.Sprintf("%d%%", offline), Class: "is-idle"},
+		{Label: str.StageCopy, Progress: copyProgress, Status: fmt.Sprintf("%d%%", copyProgress), Class: "is-idle"},
+		{Label: str.StageVerify, Progress: 0, Status: str.StatusPending, Class: "is-idle"},
 	}
 	switch download.State {
 	case domain.StateAccepted, domain.StateSubmittingOffline, domain.StateWaitingOffline:
 		stages[0].Class = "is-current"
-		stages[0].Status += " · Active"
-		stages[1].Status = "Queued"
+		stages[0].Status += str.StatusActiveSuffix
+		stages[1].Status = str.StatusQueued
 	case domain.StateSubmittingCopy, domain.StateWaitingCopy:
 		stages[0].Class = "is-passed"
-		stages[0].Status = "Source ready"
+		stages[0].Status = str.StatusSourceReady
 		stages[1].Class = "is-current"
-		stages[1].Status += " · Active"
+		stages[1].Status += str.StatusActiveSuffix
 	case domain.StateVerifyingLocal:
 		stages[0].Class = "is-passed"
-		stages[0].Status = "Source ready"
+		stages[0].Status = str.StatusSourceReady
 		stages[1].Class = "is-passed"
-		stages[1].Status = "Copy present"
+		stages[1].Status = str.StatusCopyPresent
 		stages[2].Class = "is-current"
-		stages[2].Status = "Checking"
+		stages[2].Status = str.StatusChecking
 	case domain.StateCompleted:
 		stages[0].Class = "is-passed"
 		stages[0].Progress = 100
-		stages[0].Status = "Source ready"
+		stages[0].Status = str.StatusSourceReady
 		stages[1].Class = "is-passed"
 		stages[1].Progress = 100
-		stages[1].Status = "Copy present"
+		stages[1].Status = str.StatusCopyPresent
 		stages[2].Class = "is-verified"
 		stages[2].Progress = 100
-		stages[2].Status = "Verified"
+		stages[2].Status = str.StatusVerified
 	default:
 		stages[2].Class = "is-halted"
 		stages[2].Status = string(download.State)
@@ -349,7 +370,7 @@ func canCancel(state domain.State) bool {
 	}
 }
 
-func safeError(download domain.Download) string {
+func safeError(download domain.Download, str *Strings) string {
 	errorText := strings.TrimSpace(download.LastError)
 	if errorText == "" {
 		return ""
@@ -358,7 +379,7 @@ func safeError(download domain.Download) string {
 	if (download.SubmissionURI != "" && strings.Contains(errorText, download.SubmissionURI)) ||
 		strings.Contains(lower, "magnet:") || strings.Contains(lower, "tracker") ||
 		strings.Contains(lower, "token") || strings.Contains(lower, "sid=") {
-		return "Protected upstream details were redacted."
+		return str.RedactedError
 	}
 	return errorText
 }
@@ -389,32 +410,32 @@ func routePercent(value float64) int {
 	return int(math.Round(math.Max(0, math.Min(1, value)) * 100))
 }
 
-func displayCategory(category string) string {
+func displayCategory(category string, str *Strings) string {
 	if category == "" {
-		return "Uncategorized"
+		return str.Uncategorized
 	}
 	return category
 }
 
-func displayPath(value string) string {
+func displayPath(value string, str *Strings) string {
 	if value == "" {
-		return "Not recorded"
+		return str.NotRecorded
 	}
 	return value
 }
 
-func displayTime(value time.Time) string {
+func displayTime(value time.Time, str *Strings) string {
 	if value.IsZero() {
-		return "Not recorded"
+		return str.NotRecorded
 	}
 	return value.UTC().Format(time.RFC3339)
 }
 
-func displayOptionalTime(value *time.Time) string {
+func displayOptionalTime(value *time.Time, missing string, str *Strings) string {
 	if value == nil {
-		return "Not scheduled"
+		return missing
 	}
-	return displayTime(*value)
+	return displayTime(*value, str)
 }
 
 func byteSize(value int64) string {

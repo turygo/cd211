@@ -8,49 +8,34 @@
 </head>
 {{end}}
 
-{{define "masthead"}}
-<header class="masthead">
-  <a class="brand" href="/" aria-label="CD211 transfer manifest home">
-    <span class="brand-code">CD211</span>
-    <span class="brand-title">Transfer manifest</span>
+{{define "sidebar"}}
+<aside class="sidebar">
+  <a class="brand" href="/" aria-label="CD211 home">
+    <span class="brand-mark" aria-hidden="true">CD</span>
+    <span class="brand-name">CD211</span>
   </a>
-  <nav class="top-nav" aria-label="Primary navigation">
-    <a href="/" {{if eq .ActiveNav "downloads"}}aria-current="page"{{end}}>Downloads</a>
-    <a href="/categories" {{if eq .ActiveNav "categories"}}aria-current="page"{{end}}>Categories</a>
+  <nav class="side-nav" aria-label="Primary navigation">
+    <a class="nav-item" href="/" {{if eq .ActiveNav "downloads"}}aria-current="page"{{end}}>{{.Str.NavDownloads}}</a>
+    <a class="nav-item" href="/categories" {{if eq .ActiveNav "categories"}}aria-current="page"{{end}}>{{.Str.NavCategories}}</a>
   </nav>
-  <form action="/logout" method="post" class="logout-form">
-    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-    <button class="button button-quiet" type="submit">Sign out</button>
-  </form>
-</header>
-{{end}}
-
-{{define "route-legend"}}
-<aside class="route-legend" aria-label="Transfer route">
-  <p class="eyebrow">Route</p>
-  <ol>
-    <li><strong>115</strong><span>Offline source</span></li>
-    <li><strong>NAS</strong><span>CloudDrive2 copy</span></li>
-    <li><strong>LOCAL</strong><span>Verified staging</span></li>
-  </ol>
+  <div class="sidebar-foot">
+    <a class="lang-toggle" href="/password" {{if eq .ActiveNav "password"}}aria-current="page"{{end}}>{{.Str.NavPassword}}</a>
+    <a class="lang-toggle" href="/lang?to={{.OtherLang}}&amp;back={{.Path}}" rel="nofollow">{{.Str.SwitchLang}}</a>
+    <form action="/logout" method="post">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <button class="button button-ghost" type="submit">{{.Str.SignOut}}</button>
+    </form>
+  </div>
 </aside>
 {{end}}
 
 {{define "route-strip"}}
-<div class="route-strip" role="group" aria-label="Transfer evidence: {{.State}}">
+<div class="stage-strip" role="group" aria-label="{{.State}}">
   {{range .Stages}}
-  <section class="route-stage {{.Class}}" aria-label="{{.Label}}: {{.Status}}">
-    <div class="stage-heading"><span>{{.Label}}</span><strong>{{.Status}}</strong></div>
-    <progress max="100" value="{{.Progress}}">{{.Progress}}%</progress>
-  </section>
+  <div class="stage {{.Class}}" title="{{.Label}}: {{.Status}}">
+    <span class="stage-head"><span class="stage-label">{{.Label}}</span><span class="stage-status">{{.Status}}</span></span>
+    <span class="stage-bar"><span class="stage-fill" style="width: {{.Progress}}%"></span></span>
+  </div>
   {{end}}
-  {{if .Verified}}<p class="verified-lock" aria-label="Local content verified">LOCKED / VERIFIED</p>{{end}}
 </div>
-{{end}}
-
-{{define "footer"}}
-<footer class="page-footer">
-  <span>CD211 operator surface</span>
-  <span>Cloud copies are retained by every removal action.</span>
-</footer>
 {{end}}
