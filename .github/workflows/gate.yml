@@ -15,6 +15,9 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.11
+          # `config verify` downloads a JSONSchema from golangci-lint.run, which
+          # makes the gate fail whenever that host is slow or unreachable.
+          verify: false
 
   unit:
     name: Unit Tests
