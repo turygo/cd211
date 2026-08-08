@@ -28,6 +28,7 @@ type grpcContractServer struct {
 	statusCalls        int
 	tokenCalls         int
 	findCalls          int
+	createFolderCalls  int
 	addOfflineCalls    int
 	removeOfflineCalls int
 	offlineListCalls   int
@@ -35,6 +36,7 @@ type grpcContractServer struct {
 	copyListCalls      int
 	cancelCopyCalls    int
 	offlineAdded       bool
+	folderCreated      bool
 	copyAdded          bool
 }
 
@@ -65,11 +67,34 @@ func (s *grpcContractServer) FindFileByPath(ctx context.Context, req *pb.FindFil
 	if err := requireContractAuthorization(ctx); err != nil {
 		return nil, err
 	}
-	if req.ParentPath != "/cloud/folder" || req.Path != "movie" {
+	switch {
+	case req.ParentPath == "/cloud/folder" && req.Path == "movie":
+		s.findCalls++
+		return &pb.CloudDriveFile{Name: "movie", FullPathName: "/cloud/folder/movie"}, nil
+	case req.ParentPath == "/cloud" && req.Path == "folder":
+		// The offline target folder does not exist until CreateFolder runs.
+		if !s.folderCreated {
+			return nil, status.Error(codes.NotFound, "folder not found")
+		}
+		return &pb.CloudDriveFile{Name: "folder", FullPathName: "/cloud/folder", IsDirectory: true}, nil
+	default:
 		return nil, status.Error(codes.InvalidArgument, "unexpected find request")
 	}
-	s.findCalls++
-	return &pb.CloudDriveFile{Name: "movie", FullPathName: "/cloud/folder/movie"}, nil
+}
+
+func (s *grpcContractServer) CreateFolder(ctx context.Context, req *pb.CreateFolderRequest) (*pb.CreateFolderResult, error) {
+	if err := requireContractAuthorization(ctx); err != nil {
+		return nil, err
+	}
+	if req.ParentPath != "/cloud" || req.FolderName != "folder" {
+		return nil, status.Error(codes.InvalidArgument, "unexpected create folder request")
+	}
+	s.createFolderCalls++
+	s.folderCreated = true
+	return &pb.CreateFolderResult{
+		FolderCreated: &pb.CloudDriveFile{Name: "folder", FullPathName: "/cloud/folder", IsDirectory: true},
+		Result:        &pb.FileOperationResult{Success: true},
+	}, nil
 }
 
 func (s *grpcContractServer) AddOfflineFiles(ctx context.Context, req *pb.AddOfflineFileRequest) (*pb.FileOperationResult, error) {
@@ -256,7 +281,7 @@ func TestClientGRPCTransportContract(t *testing.T) {
 		t.Fatalf("CancelCopy: %v", err)
 	}
 
-	if contract.statusCalls != 1 || contract.tokenCalls != 1 || contract.findCalls != 1 || contract.addOfflineCalls != 1 || contract.removeOfflineCalls != 1 || contract.offlineListCalls != 3 || contract.copyFileCalls != 1 || contract.copyListCalls != 3 || contract.cancelCopyCalls != 1 {
-		t.Fatalf("RPC calls = status:%d token:%d find:%d addOffline:%d removeOffline:%d listOffline:%d copy:%d listCopy:%d cancelCopy:%d", contract.statusCalls, contract.tokenCalls, contract.findCalls, contract.addOfflineCalls, contract.removeOfflineCalls, contract.offlineListCalls, contract.copyFileCalls, contract.copyListCalls, contract.cancelCopyCalls)
+	if contract.statusCalls != 1 || contract.tokenCalls != 1 || contract.findCalls != 1 || contract.createFolderCalls != 1 || contract.addOfflineCalls != 1 || contract.removeOfflineCalls != 1 || contract.offlineListCalls != 3 || contract.copyFileCalls != 1 || contract.copyListCalls != 3 || contract.cancelCopyCalls != 1 {
+		t.Fatalf("RPC calls = status:%d token:%d find:%d createFolder:%d addOffline:%d removeOffline:%d listOffline:%d copy:%d listCopy:%d cancelCopy:%d", contract.statusCalls, contract.tokenCalls, contract.findCalls, contract.createFolderCalls, contract.addOfflineCalls, contract.removeOfflineCalls, contract.offlineListCalls, contract.copyFileCalls, contract.copyListCalls, contract.cancelCopyCalls)
 	}
 }

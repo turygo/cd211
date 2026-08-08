@@ -88,6 +88,7 @@ type CopySpec struct {
 type rpcClient interface {
 	GetToken(context.Context, *pb.GetTokenRequest, ...grpc.CallOption) (*pb.JWTToken, error)
 	FindFileByPath(context.Context, *pb.FindFileByPathRequest, ...grpc.CallOption) (*pb.CloudDriveFile, error)
+	CreateFolder(context.Context, *pb.CreateFolderRequest, ...grpc.CallOption) (*pb.CreateFolderResult, error)
 	AddOfflineFiles(context.Context, *pb.AddOfflineFileRequest, ...grpc.CallOption) (*pb.FileOperationResult, error)
 	RemoveOfflineFiles(context.Context, *pb.RemoveOfflineFilesRequest, ...grpc.CallOption) (*pb.FileOperationResult, error)
 	ListOfflineFilesByPath(context.Context, *pb.FileRequest, ...grpc.CallOption) (*pb.OfflineFileListResult, error)
@@ -203,6 +204,9 @@ func (c *Client) EnsureOffline(ctx context.Context, spec OfflineSpec) (OfflineTa
 	if !ok || !validLowerInfoHash(spec.Hash) || strings.TrimSpace(spec.SubmissionURI) == "" {
 		return OfflineTask{}, newError("add_offline", ErrorPermanent, nil)
 	}
+	if err := c.ensureCloudFolder(ctx, folder); err != nil {
+		return OfflineTask{}, err
+	}
 	if task, found, err := c.InspectOffline(ctx, folder, spec.Hash); err != nil || found {
 		return task, err
 	}
@@ -229,6 +233,51 @@ func (c *Client) EnsureOffline(ctx context.Context, spec OfflineSpec) (OfflineTa
 		return task, nil
 	}
 	return OfflineTask{InfoHash: spec.Hash, State: OfflineInit}, nil
+}
+
+// ensureCloudFolder creates the offline target folder when CloudDrive2 does not
+// have it yet, because listing or adding offline files under a missing folder
+// fails permanently. Only the leaf is created: a missing parent means CloudRoot
+// itself is misconfigured, and silently building that tree on the cloud drive
+// would hide the mistake.
+func (c *Client) ensureCloudFolder(ctx context.Context, folder string) error {
+	switch file, err := c.FindFile(ctx, folder); {
+	case err == nil && file.GetIsDirectory():
+		return nil
+	case err == nil:
+		return newError("create_folder", ErrorPermanent, nil)
+	}
+	// path.Dir only equals the input at the filesystem root, which has no parent
+	// to create the folder in.
+	parent, name := path.Dir(folder), path.Base(folder)
+	if parent == folder {
+		return newError("create_folder", ErrorPermanent, nil)
+	}
+	callCtx, cancel, err := c.authorizedContext(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	result, rpcErr := c.rpc.CreateFolder(callCtx, &pb.CreateFolderRequest{ParentPath: parent, FolderName: name})
+	if rpcErr != nil {
+		return c.recheckCloudFolder(ctx, folder, c.rpcError("create_folder", rpcErr))
+	}
+	if result.GetResult() == nil {
+		return newError("create_folder", ErrorInvalidResponse, nil)
+	}
+	if !result.GetResult().GetSuccess() {
+		return c.recheckCloudFolder(ctx, folder, newError("create_folder", ErrorPermanent, nil))
+	}
+	return nil
+}
+
+// recheckCloudFolder treats a folder that exists after a failed create as
+// success, so a concurrent reconciler or a retried attempt is not an error.
+func (c *Client) recheckCloudFolder(ctx context.Context, folder string, original error) error {
+	if file, err := c.FindFile(ctx, folder); err == nil && file.GetIsDirectory() {
+		return nil
+	}
+	return original
 }
 
 func (c *Client) recheckOffline(ctx context.Context, folder, hash string, original error) (OfflineTask, error) {

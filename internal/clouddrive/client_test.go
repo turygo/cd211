@@ -22,6 +22,7 @@ type fakeRPC struct {
 	systemInfo    func(context.Context, *emptypb.Empty) (*pb.CloudDriveSystemInfo, error)
 	getToken      func(context.Context, *pb.GetTokenRequest) (*pb.JWTToken, error)
 	findFile      func(context.Context, *pb.FindFileByPathRequest) (*pb.CloudDriveFile, error)
+	createFolder  func(context.Context, *pb.CreateFolderRequest) (*pb.CreateFolderResult, error)
 	addOffline    func(context.Context, *pb.AddOfflineFileRequest) (*pb.FileOperationResult, error)
 	removeOffline func(context.Context, *pb.RemoveOfflineFilesRequest) (*pb.FileOperationResult, error)
 	listOffline   func(context.Context, *pb.FileRequest) (*pb.OfflineFileListResult, error)
@@ -37,8 +38,21 @@ func (f *fakeRPC) GetSystemInfo(ctx context.Context, req *emptypb.Empty, _ ...gr
 func (f *fakeRPC) GetToken(ctx context.Context, req *pb.GetTokenRequest, _ ...grpc.CallOption) (*pb.JWTToken, error) {
 	return f.getToken(ctx, req)
 }
+
+// FindFileByPath and CreateFolder default to "the offline folder is already
+// there", so tests that predate the folder check keep their original meaning
+// and only folder-specific tests have to wire these up.
 func (f *fakeRPC) FindFileByPath(ctx context.Context, req *pb.FindFileByPathRequest, _ ...grpc.CallOption) (*pb.CloudDriveFile, error) {
+	if f.findFile == nil {
+		return &pb.CloudDriveFile{IsDirectory: true}, nil
+	}
 	return f.findFile(ctx, req)
+}
+func (f *fakeRPC) CreateFolder(ctx context.Context, req *pb.CreateFolderRequest, _ ...grpc.CallOption) (*pb.CreateFolderResult, error) {
+	if f.createFolder == nil {
+		return &pb.CreateFolderResult{Result: &pb.FileOperationResult{Success: true}}, nil
+	}
+	return f.createFolder(ctx, req)
 }
 func (f *fakeRPC) AddOfflineFiles(ctx context.Context, req *pb.AddOfflineFileRequest, _ ...grpc.CallOption) (*pb.FileOperationResult, error) {
 	return f.addOffline(ctx, req)
@@ -277,6 +291,112 @@ func TestOfflineInspectionRejectsFallbackAndInvalidCandidate(t *testing.T) {
 	}
 	_, _, err := client.InspectOffline(context.Background(), "/cloud", testHash)
 	assertErrorKind(t, err, "list_offline", ErrorInvalidResponse)
+}
+
+func TestEnsureOfflineCreatesMissingCloudFolder(t *testing.T) {
+	base := time.Date(2026, 8, 6, 0, 0, 0, 0, time.UTC)
+
+	newFolderRPC := func() (*fakeRPC, *int, *int, *bool) {
+		created, adds := 0, 0
+		exists := false
+		rpc := &fakeRPC{}
+		rpc.getToken = func(_ context.Context, _ *pb.GetTokenRequest) (*pb.JWTToken, error) { return token(base), nil }
+		rpc.findFile = func(_ context.Context, req *pb.FindFileByPathRequest) (*pb.CloudDriveFile, error) {
+			if req.ParentPath != "/cloud" || req.Path != "folder" {
+				return nil, status.Error(codes.InvalidArgument, "unexpected find")
+			}
+			if !exists {
+				return nil, status.Error(codes.NotFound, "missing")
+			}
+			return &pb.CloudDriveFile{Name: "folder", FullPathName: "/cloud/folder", IsDirectory: true}, nil
+		}
+		rpc.createFolder = func(_ context.Context, req *pb.CreateFolderRequest) (*pb.CreateFolderResult, error) {
+			if req.ParentPath != "/cloud" || req.FolderName != "folder" {
+				t.Errorf("unexpected create request: %#v", req)
+			}
+			created++
+			exists = true
+			return &pb.CreateFolderResult{Result: &pb.FileOperationResult{Success: true}}, nil
+		}
+		rpc.listOffline = func(_ context.Context, _ *pb.FileRequest) (*pb.OfflineFileListResult, error) {
+			return &pb.OfflineFileListResult{}, nil
+		}
+		rpc.addOffline = func(_ context.Context, _ *pb.AddOfflineFileRequest) (*pb.FileOperationResult, error) {
+			adds++
+			return &pb.FileOperationResult{Success: true}, nil
+		}
+		return rpc, &created, &adds, &exists
+	}
+
+	spec := OfflineSpec{SubmissionURI: "magnet:?xt=urn:btih:x", CloudFolder: "/cloud//folder", Hash: testHash}
+
+	t.Run("missing folder is created before submitting", func(t *testing.T) {
+		rpc, created, adds, _ := newFolderRPC()
+		client := newTestClient(t, rpc, func() time.Time { return base })
+		task, err := client.EnsureOffline(context.Background(), spec)
+		if err != nil {
+			t.Fatalf("EnsureOffline: %v", err)
+		}
+		if task != (OfflineTask{InfoHash: testHash, State: OfflineInit}) {
+			t.Fatalf("task = %#v", task)
+		}
+		if *created != 1 || *adds != 1 {
+			t.Fatalf("created = %d, adds = %d, want 1 and 1", *created, *adds)
+		}
+	})
+
+	t.Run("existing folder is not recreated", func(t *testing.T) {
+		rpc, created, adds, exists := newFolderRPC()
+		*exists = true
+		client := newTestClient(t, rpc, func() time.Time { return base })
+		if _, err := client.EnsureOffline(context.Background(), spec); err != nil {
+			t.Fatalf("EnsureOffline: %v", err)
+		}
+		if *created != 0 || *adds != 1 {
+			t.Fatalf("created = %d, adds = %d, want 0 and 1", *created, *adds)
+		}
+	})
+
+	t.Run("a file where the folder belongs is permanent", func(t *testing.T) {
+		rpc, created, adds, _ := newFolderRPC()
+		rpc.findFile = func(_ context.Context, _ *pb.FindFileByPathRequest) (*pb.CloudDriveFile, error) {
+			return &pb.CloudDriveFile{Name: "folder", FullPathName: "/cloud/folder"}, nil
+		}
+		client := newTestClient(t, rpc, func() time.Time { return base })
+		_, err := client.EnsureOffline(context.Background(), spec)
+		assertErrorKind(t, err, "create_folder", ErrorPermanent)
+		if *created != 0 || *adds != 0 {
+			t.Fatalf("created = %d, adds = %d, want 0 and 0", *created, *adds)
+		}
+	})
+
+	t.Run("a folder that appears after a failed create is adopted", func(t *testing.T) {
+		rpc, _, adds, exists := newFolderRPC()
+		rpc.createFolder = func(_ context.Context, _ *pb.CreateFolderRequest) (*pb.CreateFolderResult, error) {
+			*exists = true // a concurrent reconciler won the race
+			return nil, status.Error(codes.AlreadyExists, "exists")
+		}
+		client := newTestClient(t, rpc, func() time.Time { return base })
+		if _, err := client.EnsureOffline(context.Background(), spec); err != nil {
+			t.Fatalf("EnsureOffline: %v", err)
+		}
+		if *adds != 1 {
+			t.Fatalf("adds = %d, want 1", *adds)
+		}
+	})
+
+	t.Run("a failed create that leaves nothing behind stops the submission", func(t *testing.T) {
+		rpc, _, adds, _ := newFolderRPC()
+		rpc.createFolder = func(_ context.Context, _ *pb.CreateFolderRequest) (*pb.CreateFolderResult, error) {
+			return &pb.CreateFolderResult{Result: &pb.FileOperationResult{Success: false}}, nil
+		}
+		client := newTestClient(t, rpc, func() time.Time { return base })
+		_, err := client.EnsureOffline(context.Background(), spec)
+		assertErrorKind(t, err, "create_folder", ErrorPermanent)
+		if *adds != 0 {
+			t.Fatalf("adds = %d, want 0", *adds)
+		}
+	})
 }
 
 func TestCopyRequestsMappingAndCrashAdoption(t *testing.T) {
