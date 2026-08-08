@@ -47,7 +47,7 @@ type Waker interface {
 }
 
 type filesystem interface {
-	Verify(string, fsafe.ExpectedContent) (string, error)
+	Verify(string, fsafe.ExpectedContent) (fsafe.VerifiedContent, error)
 	ResolveSaveRoot(string) (string, bool, error)
 	PrepareSaveRoot(string) (string, error)
 }

@@ -22,16 +22,23 @@ func TestVerifySingleFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvalSymlinks() error = %v", err)
 	}
-	if got != want {
-		t.Fatalf("Verify() = %q, want %q", got, want)
+	if got.Path != want {
+		t.Fatalf("Verify() path = %q, want %q", got.Path, want)
+	}
+	if got.Size != int64(len("content")) {
+		t.Fatalf("Verify() size = %d, want %d", got.Size, len("content"))
 	}
 }
 
-func TestVerifyMultiFileDirectory(t *testing.T) {
+func TestVerifyMultiFileDirectorySumsRegularFiles(t *testing.T) {
 	verifier, root := newTestVerifier(t)
 	save := mkdir(t, filepath.Join(root, "save"))
 	content := mkdir(t, filepath.Join(save, "album"))
 	writeFile(t, filepath.Join(content, "track.flac"), "content")
+	writeFile(t, filepath.Join(content, "cover.jpg"), "xx")
+	// A nested directory contributes its files but not its own inode size.
+	nested := mkdir(t, filepath.Join(content, "extras"))
+	writeFile(t, filepath.Join(nested, "notes.txt"), "abc")
 
 	got, err := verifier.Verify(save, ExpectedContent{Name: "album", MultiFile: true})
 	if err != nil {
@@ -41,8 +48,11 @@ func TestVerifyMultiFileDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvalSymlinks() error = %v", err)
 	}
-	if got != want {
-		t.Fatalf("Verify() = %q, want %q", got, want)
+	if got.Path != want {
+		t.Fatalf("Verify() path = %q, want %q", got.Path, want)
+	}
+	if wantSize := int64(len("content") + len("xx") + len("abc")); got.Size != wantSize {
+		t.Fatalf("Verify() size = %d, want %d", got.Size, wantSize)
 	}
 }
 
@@ -275,10 +285,10 @@ func TestVerifyThenDeleteThroughSaveRootSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if contentPath != evaluatedTarget {
-		t.Fatalf("Verify() content path = %q, want %q", contentPath, evaluatedTarget)
+	if contentPath.Path != evaluatedTarget {
+		t.Fatalf("Verify() content path = %q, want %q", contentPath.Path, evaluatedTarget)
 	}
-	if err := verifier.Delete(contentPath, saveLink); err != nil {
+	if err := verifier.Delete(contentPath.Path, saveLink); err != nil {
 		t.Fatalf("Delete() verified symlink-root content: %v", err)
 	}
 	assertNotExist(t, target)

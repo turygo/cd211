@@ -18,6 +18,15 @@ type ExpectedContent struct {
 	MultiFile bool
 }
 
+// VerifiedContent is the checked content path together with the number of bytes
+// actually on disk. CloudDrive2 reports zero bytes for a directory, and a magnet
+// submission carries no metadata at all, so the staged content is the only
+// trustworthy source for a torrent's size.
+type VerifiedContent struct {
+	Path string
+	Size int64
+}
+
 // Verifier validates torrent content beneath localRoot.
 type Verifier struct {
 	localRoot string
@@ -151,48 +160,77 @@ func (v *Verifier) PrepareSaveRoot(savePath string) (string, error) {
 }
 
 // Verify checks that the expected torrent content is a safe child of savePath
-// and returns its cleaned, evaluated absolute path.
-func (v *Verifier) Verify(savePath string, expected ExpectedContent) (string, error) {
+// and returns its cleaned, evaluated absolute path with the bytes on disk.
+func (v *Verifier) Verify(savePath string, expected ExpectedContent) (VerifiedContent, error) {
 	if err := validateName(expected.Name); err != nil {
-		return "", err
+		return VerifiedContent{}, err
 	}
 
 	saveRoot, err := v.resolveSaveRoot(savePath)
 	if err != nil {
-		return "", err
+		return VerifiedContent{}, err
 	}
 
 	candidatePath := filepath.Join(filepath.Clean(savePath), expected.Name)
 	info, err := os.Lstat(candidatePath)
 	if err != nil {
-		return "", fmt.Errorf("fsafe: inspect candidate: %w", err)
+		return VerifiedContent{}, fmt.Errorf("fsafe: inspect candidate: %w", err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return "", fmt.Errorf("fsafe: candidate must not be a symbolic link")
+		return VerifiedContent{}, fmt.Errorf("fsafe: candidate must not be a symbolic link")
 	}
 
 	candidate, err := filepath.EvalSymlinks(candidatePath)
 	if err != nil {
-		return "", fmt.Errorf("fsafe: resolve candidate: %w", err)
+		return VerifiedContent{}, fmt.Errorf("fsafe: resolve candidate: %w", err)
 	}
 	candidate = filepath.Clean(candidate)
 	if !strictlyWithin(saveRoot, candidate) || !strictlyWithin(v.localRoot, candidate) {
-		return "", fmt.Errorf("fsafe: candidate escapes configured roots")
+		return VerifiedContent{}, fmt.Errorf("fsafe: candidate escapes configured roots")
 	}
 
 	info, err = os.Stat(candidate)
 	if err != nil {
-		return "", fmt.Errorf("fsafe: inspect resolved candidate: %w", err)
+		return VerifiedContent{}, fmt.Errorf("fsafe: inspect resolved candidate: %w", err)
 	}
-	if expected.MultiFile {
-		if !info.IsDir() {
-			return "", fmt.Errorf("fsafe: multi-file candidate is not a directory")
+	if !expected.MultiFile {
+		if !info.Mode().IsRegular() {
+			return VerifiedContent{}, fmt.Errorf("fsafe: single-file candidate is not a regular file")
 		}
-	} else if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("fsafe: single-file candidate is not a regular file")
+		return VerifiedContent{Path: candidate, Size: info.Size()}, nil
 	}
+	if !info.IsDir() {
+		return VerifiedContent{}, fmt.Errorf("fsafe: multi-file candidate is not a directory")
+	}
+	size, err := treeSize(candidate)
+	if err != nil {
+		return VerifiedContent{}, err
+	}
+	return VerifiedContent{Path: candidate, Size: size}, nil
+}
 
-	return candidate, nil
+// treeSize sums the regular files under root. Symlinks are skipped rather than
+// followed, matching Verify's refusal to trust links inside the staging tree.
+func treeSize(root string) (int64, error) {
+	var total int64
+	err := filepath.WalkDir(root, func(_ string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.Type().IsRegular() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		total += info.Size()
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("fsafe: measure content: %w", err)
+	}
+	return total, nil
 }
 
 // Delete safely removes a checked direct child of savePath. A missing direct

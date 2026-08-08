@@ -35,12 +35,13 @@ type contractFilesystem struct {
 	root         string
 	prepareCalls int
 	content      string
+	size         int64
 	prepareErr   error
 	err          error
 }
 
-func (f *contractFilesystem) Verify(string, fsafe.ExpectedContent) (string, error) {
-	return f.content, f.err
+func (f *contractFilesystem) Verify(string, fsafe.ExpectedContent) (fsafe.VerifiedContent, error) {
+	return fsafe.VerifiedContent{Path: f.content, Size: f.size}, f.err
 }
 func (f *contractFilesystem) ResolveSaveRoot(savePath string) (string, bool, error) {
 	relative, err := filepath.Rel(f.root, savePath)

@@ -118,11 +118,13 @@ func (c fakeCloud) CancelCopy(ctx context.Context, source, destination string) e
 
 type fakeFilesystem struct {
 	verify func(string, fsafe.ExpectedContent) (string, error)
+	size   int64
 	delete func(string, string) error
 }
 
-func (f fakeFilesystem) Verify(save string, expected fsafe.ExpectedContent) (string, error) {
-	return f.verify(save, expected)
+func (f fakeFilesystem) Verify(save string, expected fsafe.ExpectedContent) (fsafe.VerifiedContent, error) {
+	path, err := f.verify(save, expected)
+	return fsafe.VerifiedContent{Path: path, Size: f.size}, err
 }
 func (f fakeFilesystem) Delete(content, save string) error { return f.delete(content, save) }
 
@@ -329,6 +331,8 @@ func TestStepWorkflowAndMissingCopyRecovery(t *testing.T) {
 		return clouddrive.CopyTask{}, false, nil
 	}
 	verifyCalls := 0
+	// CloudDrive2 claimed 42 bytes above; the staged tree is what counts.
+	files.size = 4096
 	files.verify = func(string, fsafe.ExpectedContent) (string, error) {
 		verifyCalls++
 		if verifyCalls == 1 {
@@ -367,11 +371,11 @@ func TestStepWorkflowAndMissingCopyRecovery(t *testing.T) {
 		t.Fatalf("copy submit state = %s", d.State)
 	}
 	d = step(t, s, repo, d)
-	if d.State != domain.StateVerifyingLocal || d.ContentPath != "/downloads/payload" {
+	if d.State != domain.StateVerifyingLocal || d.ContentPath != "/downloads/payload" || d.TotalSize != 4096 {
 		t.Fatalf("missing task recovery = %#v", d)
 	}
 	d = step(t, s, repo, d)
-	if d.State != domain.StateCompleted || d.CompletedAt == nil || d.NextRunAt != nil {
+	if d.State != domain.StateCompleted || d.CompletedAt == nil || d.NextRunAt != nil || d.TotalSize != 4096 {
 		t.Fatalf("completion = %#v", d)
 	}
 }

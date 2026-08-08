@@ -142,16 +142,18 @@ func (h *handler) prepareRetainedContent(ctx context.Context, download *domain.D
 		return
 	}
 	content, err := h.filesystem.Verify(existing.SavePath, fsafe.ExpectedContent{Name: existing.Name, MultiFile: *existing.IsMultiFile})
-	if err != nil || filepath.Clean(content) != filepath.Clean(existing.ContentPath) {
+	if err != nil || filepath.Clean(content.Path) != filepath.Clean(existing.ContentPath) {
 		return
 	}
 	multiFile := *existing.IsMultiFile
 	download.Name = existing.Name
 	download.CloudTaskName = existing.CloudTaskName
 	download.CloudSourcePath = existing.CloudSourcePath
-	download.ContentPath = content
+	download.ContentPath = content.Path
 	download.IsMultiFile = &multiFile
-	download.TotalSize = existing.TotalSize
+	// The retained tree is already on disk, so its measured size supersedes
+	// whatever the previous submission recorded.
+	download.TotalSize = content.Size
 	download.State = domain.StateVerifyingLocal
 	download.OfflineProgress = 1
 	download.CopyProgress = 1

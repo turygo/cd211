@@ -50,7 +50,7 @@ type CloudDrive interface {
 
 // Filesystem verifies and deletes local torrent content under its configured root.
 type Filesystem interface {
-	Verify(string, fsafe.ExpectedContent) (string, error)
+	Verify(string, fsafe.ExpectedContent) (fsafe.VerifiedContent, error)
 	Delete(string, string) error
 }
 
@@ -296,9 +296,8 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 			return "find_file", nil
 		}
 		if d.LastUpstreamStatus != destinationClear {
-			content, err := s.files.Verify(d.SavePath, expected(*d))
+			_, err := s.files.Verify(d.SavePath, expected(*d))
 			if err == nil {
-				_ = content
 				s.fail(d, "destination collision")
 				return "preflight_local", nil
 			}
@@ -341,7 +340,7 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 		if !found {
 			content, verifyErr := s.verify(d)
 			if verifyErr == nil {
-				d.ContentPath = content
+				d.ContentPath, d.TotalSize = content.Path, content.Size
 				s.advance(d, domain.StateVerifyingLocal, now, now)
 				return "verify_local", nil
 			}
@@ -376,7 +375,9 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 		}
 		content, err := s.verify(d)
 		if err == nil {
-			d.ContentPath = content
+			// CloudDrive2 reports a directory as zero bytes and a magnet carries
+			// no metadata, so the staged tree is what Sonarr and Radarr are told.
+			d.ContentPath, d.TotalSize = content.Path, content.Size
 			d.OfflineProgress, d.CopyProgress, d.QbitProgress = 1, 1, 1
 			d.State, d.LastError, d.AttemptCount = domain.StateCompleted, "", 0
 			d.CompletedAt, d.NextRunAt = new(now), nil
@@ -481,9 +482,9 @@ func hasCopyEvidence(status string) bool {
 	}
 }
 
-func (s *Scheduler) verify(d *domain.Download) (string, error) {
+func (s *Scheduler) verify(d *domain.Download) (fsafe.VerifiedContent, error) {
 	if d.IsMultiFile == nil {
-		return "", errors.New("missing file metadata")
+		return fsafe.VerifiedContent{}, errors.New("missing file metadata")
 	}
 	return s.files.Verify(d.SavePath, expected(*d))
 }
