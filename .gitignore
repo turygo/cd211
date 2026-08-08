@@ -6,6 +6,11 @@ bin/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+
+# docker-compose reads CD211_PASSWORD and CD2_PASSWORD from here.
+.env
+.env.*
+
 .DS_Store
 .idea/
 .vscode/
