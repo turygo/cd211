@@ -190,12 +190,13 @@ Operational constraints:
 - Release images support `linux/amd64` and `linux/arm64` without CGO.
 - The SQLite database is on a persistent NAS-host-local filesystem with POSIX locking. NFS and SMB database mounts are unsupported because WAL requires same-host shared memory.
 - Downloaded content is on persistent staging mounts.
+- CD211 sends its own `savePath` string to CloudDrive2 as the copy destination, and CloudDrive2 resolves that string inside its own container. Both containers must therefore mount the same host staging directory at the same absolute path.
 - Backups either stop the container or take an atomic snapshot of the complete SQLite file set.
 - The HTTP API is not exposed directly to the public Internet.
 - CloudDrive2 credentials remain in environment or secret mounts, not in SQLite.
 - The entrypoint drops from root to `PUID:PGID` before starting the service, and only adjusts ownership of the `/data` and `/downloads` mount points themselves. The defaults `99:100` match the Synology `guest:users` pair; a deployment whose staging root belongs to another owner must set both.
 - CD211 creates each category staging directory as mode `2770` owned by `PUID:PGID`. CloudDrive2, Sonarr, and Radarr must all run in the `PGID` group, because CloudDrive2 writes the copied content into that directory and the other two read it from there. A staging directory that already exists keeps the mode it has and must grant the same group access.
-- Deleting a download removes a tree CloudDrive2 created, and POSIX requires write access on every directory in it. The setgid bit puts that content in the shared group, so CloudDrive2 must additionally use umask `002` or `007`. A deployment that instead runs CloudDrive2 with the same UID as `PUID` needs neither the shared group nor the umask.
+- Deleting a download removes a tree CloudDrive2 created, and POSIX requires write access on every directory in it. The setgid bit puts that content in the shared group, so CloudDrive2 must additionally run with umask `002` or `007`. The `cloudnas/clouddrive2` image runs as root with the default umask `022` and has no umask setting, so its entrypoint has to be wrapped: `["/bin/sh", "-c", "umask 0002; exec /clouddrive/clouddrive"]`. Without this, CD211 reports the qBittorrent `deleteFiles=true` cleanup as a blocked operator error and the staging directory keeps growing.
 - The container `HEALTHCHECK` probes `/healthz`, which only depends on SQLite. An unreachable CloudDrive2 is reported through `/readyz` and never restarts the container.
 - Release images are built by tag-triggered CI from source and published as `turygo/cd211:<version>` and `turygo/cd211:latest`. The build cross-compiles the binary on the runner's native architecture rather than emulating the Go toolchain.
 
