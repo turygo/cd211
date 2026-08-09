@@ -5,12 +5,15 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"
+    # The binary reads no environment variables: its HTTP address and database
+    # path are command-line flags. The defaults below match the image, so no
+    # override is usually needed; if you must change them, pass a command:
+    #   command: ["--http-address", ":8080"]
     environment:
-      - CD2_ADDRESS=${CD2_ADDRESS}
-      - CD2_USERNAME=${CD2_USERNAME}
-      - CD2_PASSWORD=${CD2_PASSWORD}
-      - CD2_INSECURE=${CD2_INSECURE:-false}
-      - CLOUD_ROOT=${CLOUD_ROOT:-/115open/云下载}
+      # All service configuration (CloudDrive2 connection, cloud/local paths,
+      # timeouts) happens in the first-run web setup wizard and is stored in
+      # SQLite; no CD2_* or CLOUD_ROOT environment variables are read.
+      #
       # Staging directories are created as 2770 PUID:PGID, so CloudDrive2,
       # Sonarr, and Radarr must all run in the PGID group. CloudDrive2 must also
       # start with umask 0002, otherwise CD211 cannot delete what it copied; the
