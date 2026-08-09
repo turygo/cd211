@@ -113,6 +113,9 @@ func TestSetupModeMux(t *testing.T) {
 		{name: "unknown redirects", method: http.MethodGet, path: "/login", wantStatus: http.StatusSeeOther, wantLocation: "/setup"},
 		{name: "setup exact", method: http.MethodGet, path: "/setup", wantStatus: http.StatusOK, wantBody: "setup handler"},
 		{name: "setup sub path", method: http.MethodPost, path: "/setup/password", wantStatus: http.StatusOK, wantBody: "setup handler"},
+		{name: "setup language", method: http.MethodGet, path: "/lang", wantStatus: http.StatusOK, wantBody: "setup handler"},
+		{name: "setup css", method: http.MethodGet, path: "/static/app.css", wantStatus: http.StatusOK, wantBody: "setup handler"},
+		{name: "setup javascript", method: http.MethodGet, path: "/static/app.js", wantStatus: http.StatusOK, wantBody: "setup handler"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

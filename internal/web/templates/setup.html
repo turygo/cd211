@@ -1,94 +1,148 @@
 {{define "setup"}}<!doctype html>
 <html lang="{{.Lang}}">
 {{template "head" .}}
-<body class="login-page">
-  <main class="login-shell">
-    <div class="login-card login-card-wide">
-      <div class="login-top">
-        <div class="login-brand"><span class="brand-mark" aria-hidden="true">CD</span><span class="brand-name">CD211</span></div>
-        <a class="lang-toggle" href="/lang?to={{.OtherLang}}&amp;back={{.Path}}" rel="nofollow">{{.Str.SwitchLang}}</a>
-      </div>
-      {{if .AlreadyConfigured}}
-      <h1>{{.Str.SetupTitle}}</h1>
-      <p class="login-hint">{{.Str.SetupAlreadyConfigured}}</p>
-      {{else}}
-      <h1>{{.Str.SetupTitle}}</h1>
-      <p class="login-hint">{{printf .Str.SetupStepFormat .Step}}</p>
-      {{if .Error}}<div class="notice notice-error" role="alert">{{.Error}}</div>{{end}}
-      {{if .Success}}<div class="notice notice-success" role="status">{{.Success}}</div>{{end}}
-
-      {{if eq .Step 1}}
-      <form action="/setup/password" method="post" class="stack-form">
-        <label for="setup-password">{{.Str.Password}}</label>
-        <input id="setup-password" name="password" type="password" autocomplete="new-password" required minlength="8" autofocus>
-        <label for="setup-confirm">{{.Str.SetupConfirmPassword}}</label>
-        <input id="setup-confirm" name="confirm_password" type="password" autocomplete="new-password" required minlength="8">
-        <p class="form-hint">{{.Str.SetupPasswordLede}}</p>
-        <button class="button button-primary" type="submit">{{.Str.SetupSetPassword}}</button>
-      </form>
-      {{end}}
-
-      {{if eq .Step 2}}
-      <form action="/setup/cd2/test" method="post" class="stack-form">
-        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-        <label for="cd2-address">{{.Str.CD2Address}}</label>
-        <input id="cd2-address" name="address" type="text" value="{{.Values.CD2Address}}" placeholder="host:port" required autofocus>
-        <label for="cd2-username">{{.Str.Username}}</label>
-        <input id="cd2-username" name="username" type="text" value="{{.Values.CD2Username}}" autocomplete="username" required>
-        <label for="cd2-password">{{.Str.Password}}</label>
-        <input id="cd2-password" name="password" type="password" autocomplete="new-password">
-        <label class="check-row"><input id="cd2-insecure" name="insecure" type="checkbox" value="true" {{if .Values.CD2Insecure}}checked{{end}}> {{.Str.CD2Insecure}}</label>
-        <p class="form-hint">{{.Str.CD2InsecureHint}}</p>
-        <div class="button-row">
-          <button class="button button-secondary" type="submit" name="action" value="test">{{.Str.TestButton}}</button>
-          <button class="button button-primary" type="submit" name="action" value="continue">{{.Str.ContinueButton}}</button>
+<body class="setup-page">
+  <main class="setup-shell">
+    <section class="setup-console" aria-labelledby="setup-title">
+      <aside class="setup-rail">
+        <header class="setup-top">
+          <div class="login-brand"><span class="brand-mark" aria-hidden="true">CD</span><span class="brand-name">CD211</span></div>
+          <a class="lang-toggle" href="/lang?to={{.OtherLang}}&amp;back={{.Path}}" rel="nofollow">{{.Str.SwitchLang}}</a>
+        </header>
+        <div class="setup-heading">
+          <h1 id="setup-title">{{.Str.SetupTitle}}</h1>
+          {{if not .AlreadyConfigured}}
+          <p class="setup-progress-hint">{{printf .Str.SetupStepFormat .Step}}</p>
+          {{end}}
         </div>
-      </form>
-      {{end}}
+        {{if not .AlreadyConfigured}}
+        <ol class="setup-stepper">
+          <li class="setup-step{{if lt 1 .Step}} is-complete{{else if eq 1 .Step}} is-current{{end}}" {{if eq .Step 1}}aria-current="step"{{end}}>
+            <span class="setup-step-node" aria-hidden="true">01</span>
+            <span class="visually-hidden">{{printf .Str.SetupStepFormat 1}}</span>
+          </li>
+          <li class="setup-step{{if lt 2 .Step}} is-complete{{else if eq 2 .Step}} is-current{{end}}" {{if eq .Step 2}}aria-current="step"{{end}}>
+            <span class="setup-step-node" aria-hidden="true">02</span>
+            <span class="visually-hidden">{{printf .Str.SetupStepFormat 2}}</span>
+          </li>
+          <li class="setup-step{{if lt 3 .Step}} is-complete{{else if eq 3 .Step}} is-current{{end}}" {{if eq .Step 3}}aria-current="step"{{end}}>
+            <span class="setup-step-node" aria-hidden="true">03</span>
+            <span class="visually-hidden">{{printf .Str.SetupStepFormat 3}}</span>
+          </li>
+          <li class="setup-step{{if lt 4 .Step}} is-complete{{else if eq 4 .Step}} is-current{{end}}" {{if eq .Step 4}}aria-current="step"{{end}}>
+            <span class="setup-step-node" aria-hidden="true">04</span>
+            <span class="visually-hidden">{{printf .Str.SetupStepFormat 4}}</span>
+          </li>
+        </ol>
+        {{end}}
+      </aside>
 
-      {{if eq .Step 3}}
-      <form action="/setup/paths/test" method="post" class="stack-form">
-        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-        <label for="cloud-root">{{.Str.CloudRootLabel}}</label>
-        <input id="cloud-root" name="cloud_root" type="text" value="{{.Values.CloudRoot}}" placeholder="/cloud" required autofocus>
-        <p class="form-hint">{{.Str.CloudRootHint}}</p>
-        <label for="local-root">{{.Str.LocalRootLabel}}</label>
-        <input id="local-root" name="local_root" type="text" value="{{.Values.LocalRoot}}" placeholder="/data/downloads" required>
-        <p class="form-hint">{{.Str.LocalRootHint}}</p>
-        <div class="button-row">
-          <button class="button button-secondary" type="submit" name="action" value="test">{{.Str.TestButton}}</button>
-          <button class="button button-primary" type="submit" name="action" value="continue">{{.Str.ContinueButton}}</button>
-        </div>
-      </form>
-      {{end}}
+      <div class="setup-content">
+        {{if .AlreadyConfigured}}
+        <p class="setup-configured">{{.Str.SetupAlreadyConfigured}}</p>
+        {{else}}
+        {{if .Error}}<div class="notice notice-error" role="alert">{{.Error}}</div>{{end}}
+        {{if .Success}}<div class="notice notice-success" role="status">{{.Success}}</div>{{end}}
 
-      {{if eq .Step 4}}
-      <form action="/setup/finish" method="post" class="stack-form">
-        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-        <dl class="review-list">
-          <div><dt>{{.Str.CD2Address}}</dt><dd>{{.Values.CD2Address}}</dd></div>
-          <div><dt>{{.Str.Username}}</dt><dd>{{.Values.CD2Username}}</dd></div>
-          <div><dt>{{.Str.Password}}</dt><dd>{{.Values.MaskedPassword}}</dd></div>
-          <div><dt>{{.Str.CloudRootLabel}}</dt><dd>{{.Values.CloudRoot}}</dd></div>
-          <div><dt>{{.Str.LocalRootLabel}}</dt><dd>{{.Values.LocalRoot}}</dd></div>
-        </dl>
-        <details class="advanced">
-          <summary>{{.Str.AdvancedSettings}}</summary>
-          <div class="stack-form">
-            <label for="timeout-offline">{{.Str.OfflineTimeoutLabel}}</label>
-            <input id="timeout-offline" name="timeout_offline" type="text" value="{{.Values.OfflineTimeout}}" required>
-            <label for="timeout-copy">{{.Str.CopyTimeoutLabel}}</label>
-            <input id="timeout-copy" name="timeout_copy" type="text" value="{{.Values.CopyTimeout}}" required>
-            <label for="timeout-verify">{{.Str.VerifyTimeoutLabel}}</label>
-            <input id="timeout-verify" name="timeout_verify" type="text" value="{{.Values.VerifyTimeout}}" required>
-            <p class="form-hint">{{.Str.TimeoutFormatHint}}</p>
+        {{if eq .Step 1}}
+        <form action="/setup/password" method="post" class="setup-form">
+          <div class="setup-field">
+            <label for="setup-password">{{.Str.Password}}</label>
+            <input id="setup-password" name="password" type="password" autocomplete="new-password" required minlength="8" autofocus>
           </div>
-        </details>
-        <button class="button button-primary" type="submit">{{.Str.FinishButton}}</button>
-      </form>
-      {{end}}
-      {{end}}
-    </div>
+          <div class="setup-field">
+            <label for="setup-confirm">{{.Str.SetupConfirmPassword}}</label>
+            <input id="setup-confirm" name="confirm_password" type="password" autocomplete="new-password" required minlength="8">
+            <p class="form-hint">{{.Str.SetupPasswordLede}}</p>
+          </div>
+          <div class="setup-actions">
+            <button class="button button-primary" type="submit">{{.Str.SetupSetPassword}}</button>
+          </div>
+        </form>
+        {{end}}
+
+        {{if eq .Step 2}}
+        <form action="/setup/cd2/test" method="post" class="setup-form">
+          <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+          <div class="setup-field">
+            <label for="cd2-address">{{.Str.CD2Address}}</label>
+            <input id="cd2-address" name="address" type="text" value="{{.Values.CD2Address}}" placeholder="host:port" required autofocus>
+          </div>
+          <div class="setup-field">
+            <label for="cd2-username">{{.Str.Username}}</label>
+            <input id="cd2-username" name="username" type="text" value="{{.Values.CD2Username}}" autocomplete="username" required>
+          </div>
+          <div class="setup-field">
+            <label for="cd2-password">{{.Str.Password}}</label>
+            <input id="cd2-password" name="password" type="password" autocomplete="new-password">
+          </div>
+          <div class="setup-field">
+            <label class="check-row"><input id="cd2-insecure" name="insecure" type="checkbox" value="true" {{if .Values.CD2Insecure}}checked{{end}}> {{.Str.CD2Insecure}}</label>
+            <p class="form-hint">{{.Str.CD2InsecureHint}}</p>
+          </div>
+          <div class="setup-actions">
+            <button class="button button-secondary" type="submit" name="action" value="test">{{.Str.TestButton}}</button>
+            <button class="button button-primary" type="submit" name="action" value="continue">{{.Str.ContinueButton}}</button>
+          </div>
+        </form>
+        {{end}}
+
+        {{if eq .Step 3}}
+        <form action="/setup/paths/test" method="post" class="setup-form">
+          <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+          <div class="setup-field">
+            <label for="cloud-root">{{.Str.CloudRootLabel}}</label>
+            <input id="cloud-root" name="cloud_root" type="text" value="{{.Values.CloudRoot}}" placeholder="/cloud" required autofocus>
+            <p class="form-hint">{{.Str.CloudRootHint}}</p>
+          </div>
+          <div class="setup-field">
+            <label for="local-root">{{.Str.LocalRootLabel}}</label>
+            <input id="local-root" name="local_root" type="text" value="{{.Values.LocalRoot}}" placeholder="/data/downloads" required>
+            <p class="form-hint">{{.Str.LocalRootHint}}</p>
+          </div>
+          <div class="setup-actions">
+            <button class="button button-secondary" type="submit" name="action" value="test">{{.Str.TestButton}}</button>
+            <button class="button button-primary" type="submit" name="action" value="continue">{{.Str.ContinueButton}}</button>
+          </div>
+        </form>
+        {{end}}
+
+        {{if eq .Step 4}}
+        <form action="/setup/finish" method="post" class="setup-form setup-review-form">
+          <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+          <dl class="setup-review">
+            <div><dt>{{.Str.CD2Address}}</dt><dd>{{.Values.CD2Address}}</dd></div>
+            <div><dt>{{.Str.Username}}</dt><dd>{{.Values.CD2Username}}</dd></div>
+            <div><dt>{{.Str.Password}}</dt><dd>{{.Values.MaskedPassword}}</dd></div>
+            <div><dt>{{.Str.CloudRootLabel}}</dt><dd>{{.Values.CloudRoot}}</dd></div>
+            <div><dt>{{.Str.LocalRootLabel}}</dt><dd>{{.Values.LocalRoot}}</dd></div>
+          </dl>
+          <details class="setup-advanced">
+            <summary>{{.Str.AdvancedSettings}}</summary>
+            <div class="setup-advanced-fields">
+              <div class="setup-field">
+                <label for="timeout-offline">{{.Str.OfflineTimeoutLabel}}</label>
+                <input id="timeout-offline" name="timeout_offline" type="text" value="{{.Values.OfflineTimeout}}" required>
+              </div>
+              <div class="setup-field">
+                <label for="timeout-copy">{{.Str.CopyTimeoutLabel}}</label>
+                <input id="timeout-copy" name="timeout_copy" type="text" value="{{.Values.CopyTimeout}}" required>
+              </div>
+              <div class="setup-field">
+                <label for="timeout-verify">{{.Str.VerifyTimeoutLabel}}</label>
+                <input id="timeout-verify" name="timeout_verify" type="text" value="{{.Values.VerifyTimeout}}" required>
+                <p class="form-hint">{{.Str.TimeoutFormatHint}}</p>
+              </div>
+            </div>
+          </details>
+          <div class="setup-actions">
+            <button class="button button-primary" type="submit">{{.Str.FinishButton}}</button>
+          </div>
+        </form>
+        {{end}}
+        {{end}}
+      </div>
+    </section>
   </main>
 </body>
 </html>{{end}}

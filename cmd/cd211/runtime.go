@@ -259,8 +259,9 @@ func (m *manager) build(ctx context.Context, cfg settings.Config) (*runtime, err
 }
 
 // setupModeMux serves the HTTP surface while setup has not completed: the
-// wizard under /setup, fixed liveness and readiness probes, a 503 placeholder
-// for the API, and a redirect to the wizard for everything else.
+// wizard and its static/localization routes, fixed liveness and readiness
+// probes, a 503 API placeholder, and a redirect to the wizard for everything
+// else.
 func setupModeMux(setup http.Handler) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", plainTextHandler(http.StatusOK, "ok\n"))
@@ -268,6 +269,9 @@ func setupModeMux(setup http.Handler) *http.ServeMux {
 	mux.Handle("/api/v2/", plainTextHandler(http.StatusServiceUnavailable, "setup in progress\n"))
 	mux.Handle("/setup", setup)
 	mux.Handle("/setup/", setup)
+	mux.Handle("/lang", setup)
+	mux.Handle("/static/app.css", setup)
+	mux.Handle("/static/app.js", setup)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/setup", http.StatusSeeOther)
 	})
