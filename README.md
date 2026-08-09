@@ -1,139 +1,181 @@
 # CD211
 
-CD211 is a qBittorrent-compatible download client for Sonarr and Radarr that turns 115 offline downloads into verified local imports:
+CD211 lets Sonarr and Radarr use 115 offline downloads through CloudDrive2 as if they were using qBittorrent.
 
-1. Sonarr/Radarr submits a magnet or `.torrent` to CD211 over the qBittorrent WebAPI.
-2. CD211 sends it to the 115 offline downloader through CloudDrive2.
-3. When 115 finishes, CloudDrive2 copies the content to a category-specific staging directory on your NAS.
-4. Only after the local path is verified does CD211 report the download as completed, so Sonarr/Radarr import real files, never phantom cloud paths.
+Sonarr or Radarr sends a magnet link or `.torrent` file to CD211. CD211 starts the 115 offline download, copies the finished content to a local staging directory, verifies the local files, and then reports the download as complete so Sonarr or Radarr can import it.
 
-CD211 is not a BitTorrent client and does not seed. It is a single Go binary with an embedded SQLite database — no Redis, no external queue.
+CD211 is not a BitTorrent client and does not seed. Run it on a trusted LAN; do not expose its HTTP port to the public Internet.
 
-```mermaid
-flowchart LR
-    ARR[Sonarr / Radarr] -->|qBittorrent WebAPI| CD211
-    OP[Operator browser] -->|Web UI| CD211
-    CD211 -->|gRPC| CD2[CloudDrive2]
-    CD2 --> C115[115 offline download]
-    CD2 --> NAS[Local staging directory]
-    CD211 -->|verify| NAS
+## Features
+
+- qBittorrent WebAPI 2.11-compatible integration for Sonarr and Radarr.
+- Magnet link and `.torrent` file submissions.
+- 115 offline downloads and NAS copies through CloudDrive2.
+- Local file verification before a download is reported as complete.
+- Category-specific cloud folders and local staging directories.
+- Persistent downloads and settings across restarts.
+- English and Simplified Chinese Web UI.
+- Download filtering, progress, file lists, history, and error details.
+- Start, retry, cancel, remove-record, and remove-local-files actions.
+- Editable CloudDrive2, path, timeout, category, and password settings without restarting CD211.
+- `/healthz` and `/readyz` endpoints for container health checks.
+
+Removing a download never deletes its copy in 115.
+
+## Quick start
+
+### 1. Prepare the shared staging directory
+
+CloudDrive2, CD211, Sonarr, and Radarr must mount the same host directory at the same absolute path. The supplied Compose file uses `/downloads`:
+
+```text
+Host staging directory -> /downloads in CloudDrive2
+                       -> /downloads in CD211
+                       -> /downloads in Sonarr
+                       -> /downloads in Radarr
 ```
 
-## Quick start (Docker Compose)
+Use a shared group for all four containers. CloudDrive2 must create files with group write permission; when using its official image, start it with `umask 0002`.
+
+### 2. Start CD211
 
 ```sh
-curl -O https://raw.githubusercontent.com/turygo/cd211/main/docker-compose.yml
+mkdir -p cd211/downloads
+cd cd211
+curl -LO https://raw.githubusercontent.com/turygo/cd211/main/docker-compose.yml
 docker compose up -d
 ```
 
-Then open `http://<nas-ip>:8080`. On first run the setup wizard walks you through:
+The default Compose configuration publishes CD211 on port `8080`, stores SQLite data in the `cd211_data` volume, and uses `./downloads` as the staging directory.
 
-1. **Operator password** — create the `admin` password. There is no default password, and until this step is done anyone on the LAN can claim the instance.
-2. **CloudDrive2 connection** — endpoint, account, and password, with an in-page connectivity test.
-3. **Cloud and local paths** — the 115 folder as seen by CloudDrive2 and the local staging root; both are validated.
-4. **Timeouts** — optional phase deadlines for offline, copy, and verify.
+If CD211 should run as a specific user and group, create `.env` before starting it:
 
-Everything is stored in SQLite and survives restarts. `.env` is only needed to override `PUID`/`PGID`; CD211's own startup configuration is passed as command-line flags (see the configuration reference below).
+```dotenv
+PUID=99
+PGID=100
+```
 
-## Credentials
+Use the same `PGID` for CloudDrive2, Sonarr, and Radarr.
 
-The username is fixed to `admin`. The password is chosen during first-run setup — there is no default password — and can be changed any time in the Web UI (**Change password** in the sidebar); it is stored as a salted PBKDF2-SHA256 hash in SQLite and survives restarts. Until setup completes, anyone on the LAN can claim the instance, so set the password as soon as the container starts (trusted-LAN assumption). The same credentials are used in two places:
+### 3. Complete first-run setup
 
-- **Web UI**: the browser login form at `http://<nas-ip>:8080/login`.
-- **Sonarr/Radarr**: the Username/Password fields of the qBittorrent download client entry — update them there after changing the password.
+Open `http://<cd211-host>:8080`. The setup wizard asks for:
 
-CD211 is built for trusted-LAN deployments. **Never expose its HTTP port to the public Internet.**
+1. An operator password for the fixed username `admin`. The password must contain at least 8 characters. There is no default password.
+2. The CloudDrive2 gRPC address, username, password, and TLS mode.
+3. A cloud root directory in 115 and the local staging root. With the supplied Compose file, the local root is normally `/downloads`.
+4. Offline, copy, and local verification timeouts.
 
-Five failed logins from one address within five minutes trigger a 15-minute ban. Sessions live in memory only; restarting CD211 signs everyone out.
+Complete the wizard before testing the download client in Sonarr or Radarr.
 
-## Configuration reference
+### 4. Register categories
 
-Command-line flags (read once at startup):
+Open **Categories** in the CD211 Web UI and register each category used by Sonarr or Radarr.
+
+Example:
+
+| Field | TV example | Movie example |
+|---|---|---|
+| Name | `tv` | `movies` |
+| Cloud path | `/115open/云下载/TV` | `/115open/云下载/Movies` |
+| Local save path | `/downloads/tv` | `/downloads/movies` |
+| Availability | Enabled | Enabled |
+
+The cloud path must be inside the configured cloud root. The local save path must be inside the configured local root. Category names must match the values configured in Sonarr and Radarr.
+
+### 5. Add CD211 to Sonarr and Radarr
+
+In Sonarr or Radarr, open **Settings → Download Clients → Add → qBittorrent** and enter:
+
+| Field | Value |
+|---|---|
+| Host | A hostname or IP address from which Sonarr/Radarr can reach CD211 |
+| Port | `8080` |
+| Use SSL | Off, unless TLS is provided by your own reverse proxy |
+| Username | `admin` |
+| Password | The operator password created during setup |
+| Category | A category registered and enabled in CD211, such as `tv` or `movies` |
+
+Run the Sonarr/Radarr connection test, then save the download client.
+
+## Configuration
+
+### Docker Compose
+
+The supplied [`docker-compose.yml`](docker-compose.yml) supports these deployment settings:
+
+| Setting | Default | How to change it |
+|---|---:|---|
+| Published HTTP port | `8080` | Change the host side of `ports`, for example `8090:8080` |
+| Process user | `PUID=99` | Set `PUID` in `.env` |
+| Process group | `PGID=100` | Set `PGID` in `.env`; use the same group for all services that access staging files |
+| SQLite storage | Named volume `cd211_data` mounted at `/data` | Replace the volume source with a host-local directory if required |
+| Staging storage | `./downloads` mounted at `/downloads` | Replace `./downloads` with the shared host staging directory |
+
+The SQLite path must be on a host-local filesystem with POSIX locking. Do not put `/data` on NFS or SMB.
+
+`PUID` and `PGID` are handled by the container entrypoint. The CD211 binary itself does not read environment variables.
+
+### Startup flags
 
 | Flag | Default | Description |
-|------|---------|-------------|
-| `--http-address` | `:8080` | HTTP listen address as `[host]:port` |
-| `--database-path` | `/data/cd211.sqlite` | SQLite database file on a host-local filesystem (no NFS/SMB) |
+|---|---|---|
+| `--http-address` | `:8080` | HTTP listen address in `[host]:port` format |
+| `--database-path` | `/data/cd211.sqlite` | Absolute path to the SQLite database |
 
-The binary reads **no environment variables**. Under Docker, override the flags via the Compose service `command:`:
+Override flags with the Compose service `command` field:
 
 ```yaml
 services:
   cd211:
-    command: ["--http-address", ":8080"]
+    command: ["cd211", "--http-address", ":8080", "--database-path", "/data/cd211.sqlite"]
 ```
 
-`PUID`/`PGID` are container-identity settings consumed by the entrypoint (it drops privileges before exec'ing the binary), not by the binary itself.
+### Application settings
 
-Everything else is configured in the setup wizard or the Settings page and stored in SQLite:
+Configure these values during first-run setup or later from **Settings** in the Web UI:
 
 | Setting | Default | Description |
-|---------|---------|-------------|
-| CloudDrive2 address | — | gRPC endpoint, e.g. `192.168.1.10:19798` |
-| CloudDrive2 username | — | CloudDrive2 account |
-| CloudDrive2 password | — | CloudDrive2 password |
-| Insecure CloudDrive2 | `false` | Set `true` if CloudDrive2 serves plaintext gRPC without TLS |
-| Cloud root | `/115open/云下载` | 115 folder (as seen by CloudDrive2) that receives offline downloads; all category cloud paths must live below it |
-| Local root | `/downloads` | Local staging root; all category save paths must live below it |
-| Offline timeout | `24h` | Max time for one 115 offline task |
-| Copy timeout | `72h` | Max time for one CloudDrive2 copy task |
-| Verify timeout | `10m` | Max time for local verification |
+|---|---:|---|
+| CloudDrive2 address | None | gRPC address such as `192.168.1.10:19798` |
+| CloudDrive2 username | None | CloudDrive2 account username |
+| CloudDrive2 password | None | CloudDrive2 account password |
+| Insecure CloudDrive2 connection | Off | Enable when CloudDrive2 serves plaintext gRPC without TLS |
+| Cloud root | None | Existing 115 directory used for offline downloads |
+| Local root | None | Existing writable staging directory; normally `/downloads` with the supplied Compose file |
+| Offline timeout | `24h` | Maximum time allowed for a 115 offline download |
+| Copy timeout | `72h` | Maximum time allowed for a CloudDrive2 copy |
+| Verify timeout | `10m` | Maximum time allowed for local file verification |
 
-Deployment constraints (see comments in `docker-compose.yml`):
+Timeouts use Go duration notation, for example `30m`, `24h`, or `72h`.
 
-- CloudDrive2 must mount the same host directory at the same container path as CD211's `/downloads`, because CD211 hands its own save path to CloudDrive2 as the copy destination. Sonarr and Radarr import from that path too.
-- Staging directories are created as mode `2770 PUID:PGID`. CloudDrive2, Sonarr, and Radarr must run in the `PGID` group, and CloudDrive2 must start with `umask 0002`.
-- `/data` (SQLite) must be a host-local filesystem with POSIX locking.
+Saving application settings rechecks the CloudDrive2 connection and both root directories. New root or category paths apply only to future submissions; existing downloads keep the paths assigned when they were added.
 
-## Connect Sonarr / Radarr
+### Categories
 
-Settings → Download Clients → Add → **qBittorrent**:
+Each category contains:
 
-| Field | Value |
-|-------|-------|
-| Host | NAS IP |
-| Port | `8080` |
-| Username | `admin` |
-| Password | the password you chose during setup (changeable in the Web UI) |
-| Category | a category registered in the CD211 Web UI (e.g. `tv`, `movies`) |
+| Setting | Description |
+|---|---|
+| Name | The value sent by Sonarr or Radarr, such as `tv` or `movies` |
+| Cloud path | The destination directory below the configured cloud root |
+| Local save path | The staging directory below the configured local root |
+| Availability | Disabled categories reject new submissions |
 
-Register the category in the Web UI first (**Categories** page): map it to a 115 cloud folder under the configured cloud root and a local save path under the configured local root. Categories added via the Sonarr/Radarr qBittorrent API also work; edit their paths in the Web UI afterwards if needed.
+Configure categories in the CD211 Web UI before using them in Sonarr or Radarr. If Sonarr or Radarr creates a category through the qBittorrent API, review its generated paths in CD211 before using it.
 
-## Web UI
+### Credentials
 
-**Setup wizard** — on a fresh database every visit lands on the first-run wizard (see Quick start): it creates the `admin` password, connects CloudDrive2 with an in-page connectivity test, validates the cloud and local paths, and collects optional timeouts. Finishing applies everything without a restart.
+- The username is always `admin`.
+- The operator password is created during first-run setup and can be changed from **Change password** in the Web UI.
+- The same credentials are used by the Web UI and Sonarr/Radarr.
+- After changing the password, update the qBittorrent download client entry in Sonarr and Radarr.
 
-Five views behind the login, in English and Simplified Chinese — switch with the language toggle in the sidebar (or on the login card); the preference is remembered in a cookie.
-
-- **Downloads** — one table row per download: name, state, per-stage progress (`115 OFFLINE` → `NAS COPY` → `LOCAL VERIFY`), category, and age. Filter by view (Active/Completed/Failed/Cancelled/All) and category.
-- **Download detail** — frozen paths, chronology, file list, and every safe action: Start, Retry, Cancel, Remove record, Remove + local files. Removal **never** deletes the 115 cloud copy.
-- **Categories** — register or edit category path pairs. Edits apply to future submissions only; existing downloads keep the paths frozen at add time.
-- **Change password** — replaces the operator password for both the Web UI and the API (minimum 8 characters, current password required).
-- **Settings** — review and edit everything configured at setup. Saving re-tests the CloudDrive2 connection and the paths server-side and applies the new settings without a restart. Changing the cloud or local roots never affects downloads whose paths were frozen at add time.
-
-Magnets, tracker URLs, and passkeys are never displayed; errors that contain them are redacted.
-
-## Health endpoints
-
-Unauthenticated, service-native:
+### Health checks
 
 ```text
-GET /healthz    process and SQLite liveness
-GET /readyz     migrations complete, database writable, local root available
+GET /healthz
+GET /readyz
 ```
 
-CloudDrive2 being down never makes CD211 unready — Sonarr and Radarr can keep polling durable state during an outage. The Web UI shows CloudDrive2 availability on the Downloads page. Until first-run setup completes, `/readyz` and the `/api/v2/*` routes return 503, so upstream connection tests fail until the wizard has finished.
-
-## Development
-
-Go 1.26 toolchain, no CGO.
-
-```sh
-make build     # bin/cd211
-make test      # go test ./...
-make lint      # golangci-lint
-make generate  # protoc + sqlc
-make image     # docker build
-```
-
-Architecture and invariants are documented in [`docs/design.md`](docs/design.md). The Web UI design token sheet lives in [`docs/ref/linear-design-tokens.md`](docs/ref/linear-design-tokens.md).
+`/readyz` becomes successful after first-run setup is complete and the local root is available. Until setup is complete, qBittorrent API requests return `503`.
