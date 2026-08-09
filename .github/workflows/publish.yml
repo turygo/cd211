@@ -74,17 +74,19 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v6
+
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           version="${GITHUB_REF_NAME#v}"
-          gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
-            -f tag_name="$GITHUB_REF_NAME" --jq .body > generated-notes.md
+          scripts/extract-changelog.sh CHANGELOG.md "$GITHUB_REF_NAME" > changelog-notes.md
           {
-            printf 'Container image: `docker pull turygo/cd211:%s`\n\n' "$version"
-            cat generated-notes.md
+            printf "## What's Changed\n"
+            cat changelog-notes.md
+            printf '\nContainer image: `docker pull turygo/cd211:%s`\n' "$version"
           } > notes.md
           prerelease=
           case "$version" in
