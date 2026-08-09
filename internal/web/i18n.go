@@ -16,6 +16,23 @@ const (
 // authority, so it is readable by scripts and set through an idempotent GET.
 const langCookie = "LANG"
 
+// StateLabels contains the operator-visible labels for durable download states.
+type StateLabels struct {
+	Accepted          string
+	Stopped           string
+	SubmittingOffline string
+	WaitingOffline    string
+	SubmittingCopy    string
+	WaitingCopy       string
+	VerifyingLocal    string
+	Completed         string
+	Failed            string
+	CancelRequested   string
+	Cancelled         string
+	DeleteRequested   string
+	Deleted           string
+}
+
 // Strings is the full set of operator-visible interface text for one language.
 // Templates and view builders read translated text exclusively from here.
 type Strings struct {
@@ -55,6 +72,7 @@ type Strings struct {
 	AgoFormat        string // printf with age like "5m"
 	EmptyTitle       string
 	EmptyBody        string
+	States           StateLabels
 
 	// Route stages
 	Stage115           string
@@ -273,6 +291,21 @@ var stringsEN = Strings{
 	AgoFormat:        "%s ago",
 	EmptyTitle:       "No downloads match this filter.",
 	EmptyBody:        "Pick another view or category, or submit a release from Sonarr or Radarr.",
+	States: StateLabels{
+		Accepted:          "Accepted",
+		Stopped:           "Stopped",
+		SubmittingOffline: "Submitting offline download",
+		WaitingOffline:    "Waiting for offline download",
+		SubmittingCopy:    "Submitting copy",
+		WaitingCopy:       "Waiting for copy",
+		VerifyingLocal:    "Verifying local files",
+		Completed:         "Completed",
+		Failed:            "Failed",
+		CancelRequested:   "Cancelling",
+		Cancelled:         "Cancelled",
+		DeleteRequested:   "Deleting",
+		Deleted:           "Deleted",
+	},
 
 	Stage115:           "115 OFFLINE",
 	StageCopy:          "NAS COPY",
@@ -483,6 +516,21 @@ var stringsZH = Strings{
 	AgoFormat:        "%s 前",
 	EmptyTitle:       "没有符合筛选条件的下载任务。",
 	EmptyBody:        "可尝试切换视图或分类，也可以从 Sonarr 或 Radarr 提交新任务。",
+	States: StateLabels{
+		Accepted:          "待处理",
+		Stopped:           "已停止",
+		SubmittingOffline: "正在提交离线下载",
+		WaitingOffline:    "等待离线下载",
+		SubmittingCopy:    "正在提交复制任务",
+		WaitingCopy:       "等待复制完成",
+		VerifyingLocal:    "正在本地校验",
+		Completed:         "已完成",
+		Failed:            "已失败",
+		CancelRequested:   "正在取消",
+		Cancelled:         "已取消",
+		DeleteRequested:   "正在删除",
+		Deleted:           "已删除",
+	},
 
 	Stage115:           "115 离线下载",
 	StageCopy:          "复制到 NAS",

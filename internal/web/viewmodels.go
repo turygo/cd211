@@ -65,6 +65,7 @@ type DownloadRow struct {
 	Name           string
 	Category       string
 	InternalState  string
+	StateLabel     string
 	ProjectedState string
 	Projected      string
 	Offline        string
@@ -99,6 +100,7 @@ type DetailView struct {
 	CloudSourcePath string
 	ContentPath     string
 	InternalState   string
+	StateLabel      string
 	ProjectedState  string
 	Projected       string
 	Offline         string
@@ -228,6 +230,7 @@ func buildDownloadRow(download domain.Download, projection domain.Projection, no
 		Name:           download.Name,
 		Category:       displayCategory(download.Category, str),
 		InternalState:  string(download.State),
+		StateLabel:     displayState(download.State, str),
 		ProjectedState: projection.State,
 		Projected:      percent(projection.Progress),
 		Offline:        percent(download.OfflineProgress),
@@ -256,6 +259,7 @@ func buildDetailView(download domain.Download, files []domain.DownloadFile, csrf
 		CloudSourcePath: displayPath(download.CloudSourcePath, str),
 		ContentPath:     displayPath(download.ContentPath, str),
 		InternalState:   string(download.State),
+		StateLabel:      displayState(download.State, str),
 		ProjectedState:  projection.State,
 		Projected:       percent(projection.Progress),
 		Offline:         percent(download.OfflineProgress),
@@ -368,9 +372,42 @@ func buildRoute(download domain.Download, str *Strings) RouteView {
 		stages[2].Status = str.StatusVerified
 	default:
 		stages[2].Class = "is-halted"
-		stages[2].Status = string(download.State)
+		stages[2].Status = displayState(download.State, str)
 	}
 	return RouteView{Stages: stages, Verified: download.State == domain.StateCompleted, State: string(download.State)}
+}
+
+func displayState(state domain.State, str *Strings) string {
+	switch state {
+	case domain.StateAccepted:
+		return str.States.Accepted
+	case domain.StateStopped:
+		return str.States.Stopped
+	case domain.StateSubmittingOffline:
+		return str.States.SubmittingOffline
+	case domain.StateWaitingOffline:
+		return str.States.WaitingOffline
+	case domain.StateSubmittingCopy:
+		return str.States.SubmittingCopy
+	case domain.StateWaitingCopy:
+		return str.States.WaitingCopy
+	case domain.StateVerifyingLocal:
+		return str.States.VerifyingLocal
+	case domain.StateCompleted:
+		return str.States.Completed
+	case domain.StateFailed:
+		return str.States.Failed
+	case domain.StateCancelRequested:
+		return str.States.CancelRequested
+	case domain.StateCancelled:
+		return str.States.Cancelled
+	case domain.StateDeleteRequested:
+		return str.States.DeleteRequested
+	case domain.StateDeleted:
+		return str.States.Deleted
+	default:
+		return string(state)
+	}
 }
 
 func validDownloadView(view string) bool {

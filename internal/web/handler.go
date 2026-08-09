@@ -420,7 +420,7 @@ func (h *handler) downloads(w http.ResponseWriter, r *http.Request) {
 		plain(w, http.StatusBadRequest, "Bad Request\n")
 		return
 	}
-	view := "active"
+	view := "all"
 	if hasView {
 		view = viewValues[0]
 	}

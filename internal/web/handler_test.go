@@ -492,10 +492,10 @@ func TestDashboardFiltersRouteEvidenceRedactionAndCloudStatus(t *testing.T) {
 		})
 	}
 
-	all := fixture.request(http.MethodGet, "/?view=all&category=movies", nil, true)
+	all := fixture.request(http.MethodGet, "/?category=movies", nil, true)
 	requireStatus(t, all, http.StatusOK)
 	body := all.Body.String()
-	requireContains(t, body, "CloudDrive2 online", "115 OFFLINE", "NAS COPY", "LOCAL VERIFY", "is-verified", "Protected upstream details were redacted.")
+	requireContains(t, body, "CloudDrive2 online", "115 OFFLINE", "NAS COPY", "LOCAL VERIFY", "is-verified", "Protected upstream details were redacted.", `value="all" selected`)
 	requireAbsent(t, body, "magnet:?", "tracker.invalid", "secret-token", fixture.sid)
 	for _, item := range states {
 		requireContains(t, body, "release-"+item.seed, string(item.state))
@@ -940,7 +940,11 @@ func TestLanguagePreferenceRendersChinese(t *testing.T) {
 
 	downloads := fixture.requestLang(http.MethodGet, "/?view=all", true, "zh")
 	requireStatus(t, downloads, http.StatusOK)
-	requireContains(t, downloads.Body.String(), "115 离线", "复制到 NAS", "本地校验", "CloudDrive2 在线", "下载任务", "分类管理")
+	requireContains(t, downloads.Body.String(), "115 离线", "复制到 NAS", "本地校验", "CloudDrive2 在线", "下载任务", "分类管理", `data-state="WAITING_OFFLINE">等待离线下载</span>`)
+
+	detail := fixture.requestLang(http.MethodGet, "/downloads/"+strings.Repeat("a", 40), true, "zh")
+	requireStatus(t, detail, http.StatusOK)
+	requireContains(t, detail.Body.String(), `data-state="WAITING_OFFLINE">等待离线下载</span>`)
 
 	fallback := fixture.requestLang(http.MethodGet, "/login", false, "de")
 	requireStatus(t, fallback, http.StatusOK)
