@@ -162,27 +162,20 @@ CloudDrive2:19798            outbound gRPC dependency
 CD211 HTTP port              inbound from Sonarr, Radarr, and trusted LAN clients
 ```
 
-Runtime configuration:
+Bootstrap command-line flags (read once at startup; the binary reads no environment variables):
 
 ```text
-CD2_ADDRESS
-CD2_USERNAME
-CD2_PASSWORD
-CD2_INSECURE=false
-CD211_HTTP_ADDRESS=:8080
-DATABASE_PATH=/data/cd211.sqlite
-CLOUD_ROOT=/115open/云下载
-LOCAL_ROOT=/downloads
-CD211_OFFLINE_TIMEOUT=24h
-CD211_COPY_TIMEOUT=72h
-CD211_VERIFY_TIMEOUT=10m
-PUID=99
-PGID=100
+--http-address=:8080
+--database-path=/data/cd211.sqlite
 ```
 
-The operator username for the Web UI and the qBittorrent-compatible API is fixed to `admin`. The password starts as the qBittorrent-conventional `adminadmin` and can be changed from the Web UI after sign-in; the current password hash is persisted in SQLite. This is a trusted-LAN appliance; the HTTP port must never be exposed to the public Internet (Section 8 operational constraints).
+The container-level identity pair `PUID`/`PGID` is not read by the binary either; the entrypoint consumes it to drop privileges before `exec su-exec "$PUID:$PGID" "$@"`.
 
-CloudDrive2 transport uses certificate-verified TLS by default. `CD2_INSECURE=true` is an explicit opt-in for a trusted local deployment whose CloudDrive2 endpoint only supports plaintext gRPC.
+Every other runtime setting — the CloudDrive2 connection, the cloud and local roots, and the phase timeouts — is configured in the first-run web setup wizard or the Settings page and persisted in the SQLite `settings` table (Section 8.1).
+
+The operator username for the Web UI and the qBittorrent-compatible API is fixed to `admin`. The password is chosen during first-run setup — there is no default password — and can be changed from the Web UI afterwards; the current password hash is persisted in SQLite. This is a trusted-LAN appliance; the HTTP port must never be exposed to the public Internet (Section 8 operational constraints). Until setup completes the service answers only the setup wizard, so anyone on the LAN can claim the instance; the password should be set as soon as the container starts.
+
+CloudDrive2 transport uses certificate-verified TLS by default. The insecure opt-in (`cd2.insecure`) is set in the wizard or the Settings page, for a trusted local deployment whose CloudDrive2 endpoint only supports plaintext gRPC.
 
 Operational constraints:
 
@@ -190,10 +183,10 @@ Operational constraints:
 - Release images support `linux/amd64` and `linux/arm64` without CGO.
 - The SQLite database is on a persistent NAS-host-local filesystem with POSIX locking. NFS and SMB database mounts are unsupported because WAL requires same-host shared memory.
 - Downloaded content is on persistent staging mounts.
-- CD211 sends its own `savePath` string to CloudDrive2 as the copy destination, and CloudDrive2 resolves that string inside **its own virtual filesystem**, not inside its container. That virtual root holds the mounted cloud drives plus the local directories CloudDrive2 has been configured to expose, so a path that exists in the CloudDrive2 container is still rejected unless it is also one of those entries. The staging root must therefore be mounted into CD211 at the exact absolute path CloudDrive2 exposes: if CloudDrive2 exposes the staging tree as `/bt`, CD211 mounts that same host directory at `/bt` and sets `LOCAL_ROOT=/bt`. Verify with `FindFileByPath` before deploying rather than assuming the container path works.
+- CD211 sends its own `savePath` string to CloudDrive2 as the copy destination, and CloudDrive2 resolves that string inside **its own virtual filesystem**, not inside its container. That virtual root holds the mounted cloud drives plus the local directories CloudDrive2 has been configured to expose, so a path that exists in the CloudDrive2 container is still rejected unless it is also one of those entries. The staging root must therefore be mounted into CD211 at the exact absolute path CloudDrive2 exposes: if CloudDrive2 exposes the staging tree as `/bt`, CD211 mounts that same host directory at `/bt` and sets the local root to `/bt`. Verify with `FindFileByPath` before deploying rather than assuming the container path works.
 - Backups either stop the container or take an atomic snapshot of the complete SQLite file set.
 - The HTTP API is not exposed directly to the public Internet.
-- CloudDrive2 credentials remain in environment or secret mounts, not in SQLite.
+- CloudDrive2 credentials are stored in the SQLite `settings` table (Section 8.1); the operator password exists only as a PBKDF2-SHA256 hash.
 - The entrypoint drops from root to `PUID:PGID` before starting the service, and only adjusts ownership of the `/data` and `/downloads` mount points themselves. The defaults `99:100` match the Synology `guest:users` pair; a deployment whose staging root belongs to another owner must set both.
 - CD211 creates each category staging directory as mode `2770` owned by `PUID:PGID`. CloudDrive2, Sonarr, and Radarr must all run in the `PGID` group, because CloudDrive2 writes the copied content into that directory and the other two read it from there. A staging directory that already exists keeps the mode it has and must grant the same group access.
 - Deleting a download removes a tree CloudDrive2 created, and POSIX requires write access on every directory in it. The setgid bit puts that content in the shared group, so CloudDrive2 must additionally run with umask `002` or `007`. The `cloudnas/clouddrive2` image runs as root with the default umask `022` and has no umask setting, so its entrypoint has to be wrapped: `["/bin/sh", "-c", "umask 0002; exec /clouddrive/clouddrive"]`. Without this, CD211 reports the qBittorrent `deleteFiles=true` cleanup as a blocked operator error and the staging directory keeps growing.
@@ -208,6 +201,53 @@ Trusted LAN   -> CD211 HTTP
 CD211         -> CloudDrive2 gRPC
 CD211         -> configured local staging mounts
 ```
+
+### 8.1 First-run setup and runtime configuration
+
+Service configuration is split into two layers:
+
+- **Bootstrap** — command-line flags, parsed once at startup: `--http-address` and `--database-path` (Section 8). The container-level `PUID`/`PGID` are entrypoint-only.
+- **Runtime settings** — web-configured, persisted in SQLite: the CloudDrive2 connection, the cloud and local roots, and the phase timeouts.
+
+Runtime settings live in a single key-value table:
+
+```text
+settings(key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TIMESTAMP NOT NULL)
+```
+
+| Key | Meaning |
+|-----|---------|
+| `cd2.address` | CloudDrive2 gRPC endpoint `host:port` |
+| `cd2.username` | CloudDrive2 account |
+| `cd2.password` | CloudDrive2 password |
+| `cd2.insecure` | `"true"` \| `"false"`; opt-in for plaintext gRPC without TLS |
+| `paths.cloud_root` | 115 folder as seen by CloudDrive2; every category cloud path must live below it |
+| `paths.local_root` | Local staging root; every category save path must live below it |
+| `timeouts.offline` | Max time for one 115 offline task (default `24h`) |
+| `timeouts.copy` | Max time for one CloudDrive2 copy task (default `72h`) |
+| `timeouts.verify` | Max time for local verification (default `10m`) |
+| `setup.completed_at` | RFC3339 UTC timestamp; written last in the same transaction, and its presence is the definition of a completed setup |
+
+The CloudDrive2 password is stored plaintext in this table. The CloudDrive2 API authenticates with the credential directly and offers no token or hash exchange, so a one-way hash would be unusable; the table lives on the same trusted-LAN host as the rest of the database. The operator password is not stored here — it exists only as a PBKDF2-SHA256 hash (Section 12.5).
+
+**Startup state machine.** At boot, CD211 loads the settings and switches on `setup.completed_at`:
+
+- **Absent** — setup mode. The HTTP root serves the wizard routes (`/setup` and its POST endpoints), `/healthz` returns 200, `/readyz` and every `/api/v2/*` route return 503 with a plain-text body, and every other path redirects to `/setup`. There is no fallback to other configuration sources and no default password.
+- **Present and valid** — the full runtime is built from the stored values and installed as the HTTP root.
+- **Present but invalid** — a startup error; CD211 exits instead of silently falling back to setup mode.
+
+**In-process hot swap.** The HTTP root is held in an atomic handler pointer; swapping it takes no locks. Every settings save — the wizard's finish step or the Settings page — persists first, then rebuilds the whole runtime generation (CloudDrive2 client, reconciler coordinator, credentials, HTTP API, Web UI, health mux) and installs it with one atomic store. The previous generation's coordinator is cancelled and awaited, and its CloudDrive2 client is closed; sessions survive because the session store lives for the process lifetime. No restart is involved, and an old generation never keeps serving requests after the swap.
+
+**Wizard steps** (served only in setup mode):
+
+1. **Operator password** — the first visitor creates the `admin` password (minimum 8 characters). It is hashed immediately and held in memory, and a session is created; every later step requires that session.
+2. **CloudDrive2 connection** — address, username, password, and the insecure toggle, with an in-page connectivity test that distinguishes network unreachability/timeout, TLS failure (with a hint to try insecure), authentication failure, and other errors.
+3. **Cloud and local paths** — the cloud root is tested as an existing CloudDrive2 directory; the local root is validated through the local-root boundary and a probe-file create/delete round trip.
+4. **Timeouts** — optional offline, copy, and verify phase deadlines.
+
+`POST /setup/finish` re-runs every test server-side (never trusting the client's earlier results), then persists the password hash and all settings in one transaction with `setup.completed_at` written last, then builds and hot-swaps the full runtime and redirects to `/`.
+
+**Settings page** (authenticated, normal mode). `GET /settings` shows the current values; `POST /settings/test` re-runs the connectivity and path tests; `POST /settings/save` re-tests server-side, persists via `ReplaceSettings` (which never touches `setup.completed_at` or the operator password), then applies the new generation through the same hot-swap path. If the apply fails, the saved settings remain persisted and take effect on the next restart. A blank CloudDrive2 password field keeps the stored value. Changing the cloud or local roots never affects downloads whose paths were frozen at add time.
 
 ## 9. Download State Machine
 
@@ -346,7 +386,7 @@ CloudDrive2 copy: 72 hours
 Local verification: 10 minutes
 ```
 
-These values are configured by `CD211_OFFLINE_TIMEOUT`, `CD211_COPY_TIMEOUT`, and `CD211_VERIFY_TIMEOUT`. Explicit 115 or copy errors fail immediately. A timeout enters `FAILED` with the last observed upstream state.
+These values are configured in the setup wizard and the Settings page (`timeouts.offline`, `timeouts.copy`, `timeouts.verify`; Section 8.1). Explicit 115 or copy errors fail immediately. A timeout enters `FAILED` with the last observed upstream state.
 
 Manual Retry resumes from the earliest safe phase encoded by persisted upstream evidence; it does not blindly submit the whole workflow again. Cleanup failures preserve `CANCEL_REQUESTED` or `DELETE_REQUESTED` and Retry resumes that same cleanup intent.
 
@@ -476,17 +516,17 @@ Accepts `category` and optional `savePath`.
 When Sonarr or Radarr creates a category without `savePath`, CD211 derives deterministic defaults:
 
 ```text
-cloud path = <CLOUD_ROOT>/<NORMALIZED_UPPERCASE_CATEGORY>
-save path  = <LOCAL_ROOT>/<normalized-lowercase-category>
+cloud path = <cloud root>/<NORMALIZED_UPPERCASE_CATEGORY>
+save path  = <local root>/<normalized-lowercase-category>
 ```
 
 The Web UI can override both paths before downloads are submitted. A download freezes the resolved paths at add time.
 
 Category names are validated. They cannot contain path traversal, control characters, or absolute paths.
 
-CD211 resolves the evaluated canonical absolute `savePath` without changing the filesystem, then durably registers it as a disabled category before creating a missing directory through the local-root boundary. A destination conflict therefore returns before any filesystem side effect. Successful preparation enables the requested category; a filesystem failure leaves the disabled reservation in place for a safe retry. The resolved path must be a strict descendant of `LOCAL_ROOT`; symbolic-link escapes and the root itself are rejected.
+CD211 resolves the evaluated canonical absolute `savePath` without changing the filesystem, then durably registers it as a disabled category before creating a missing directory through the local-root boundary. A destination conflict therefore returns before any filesystem side effect. Successful preparation enables the requested category; a filesystem failure leaves the disabled reservation in place for a safe retry. The resolved path must be a strict descendant of the configured local root; symbolic-link escapes and the root itself are rejected.
 
-The cloud path is not created when the category is. CD211 creates it lazily on the first offline submission into that folder, because CloudDrive2 rejects both listing and adding offline files under a folder it does not have. Only the leaf is created: a missing parent means `CLOUD_ROOT` is misconfigured, and quietly building that tree on the cloud drive would hide the mistake. Creation is idempotent, so a folder that appears between the check and the create — a concurrent reconciler, or a retry — is adopted rather than reported as an error.
+The cloud path is not created when the category is. CD211 creates it lazily on the first offline submission into that folder, because CloudDrive2 rejects both listing and adding offline files under a folder it does not have. Only the leaf is created: a missing parent means the configured cloud root is wrong, and quietly building that tree on the cloud drive would hide the mistake. Creation is idempotent, so a folder that appears between the check and the create — a concurrent reconciler, or a retry — is adopted rather than reported as an error.
 
 #### `POST /api/v2/torrents/setCategory`
 
@@ -755,7 +795,7 @@ password_hash     text not null
 updated_at        timestamp not null
 ```
 
-This single-row table holds the PBKDF2-SHA256 hash of the operator password once it has been changed from the default. While the row is absent, the default password `adminadmin` is active. The hash record encodes its scheme, iteration count, and salt, so parameters can be raised later without a migration.
+This single-row table holds the PBKDF2-SHA256 hash of the operator password, written by the first-run setup wizard and updated on every password change. While the row is absent the service serves only the setup wizard and no credentials exist. The hash record encodes its scheme, iteration count, and salt, so parameters can be raised later without a migration.
 
 ## 13. Reconciliation and Crash Safety
 
@@ -840,13 +880,13 @@ Retrying an explicit offline or copy failure first removes or cancels the failed
 
 ## 16. Web UI
 
-The Web UI contains five server-rendered views: sign-in, downloads, download detail, categories, and change password. Visual design follows the pinned token sheet in `docs/ref/linear-design-tokens.md` (dark-first, Inter/monospace dual typeface, micro-radius geometry, hairline borders).
+The Web UI contains six server-rendered views: sign-in, downloads, download detail, categories, settings, and change password — preceded, on a fresh database, by the first-run setup wizard (Section 8.1). Visual design follows the pinned token sheet in `docs/ref/linear-design-tokens.md` (dark-first, Inter/monospace dual typeface, micro-radius geometry, hairline borders).
 
-All views share a slim sidebar shell with primary navigation, a change-password link, a language toggle (English and Simplified Chinese, stored in a preference cookie), and sign-out. Decorative content is excluded by design: no repeated route explainers, no marketing panels, no footer boilerplate.
+All views share a slim sidebar shell with primary navigation, a settings link, a change-password link, a language toggle (English and Simplified Chinese, stored in a preference cookie), and sign-out. Decorative content is excluded by design: no repeated route explainers, no marketing panels, no footer boilerplate.
 
 ### 16.0 Sign-in
 
-A single centered card. The page states the initial credentials (`admin` / `adminadmin`) and that the password can be changed after sign-in, so an operator in front of the login form needs no external documentation. The card also carries the language toggle.
+A single centered card with username and password fields. The username is fixed to `admin`; the password is the one chosen during first-run setup and can be changed after sign-in, so an operator in front of the login form needs no external documentation. The card also carries the language toggle.
 
 ### 16.1 Downloads
 
@@ -923,6 +963,8 @@ GET /healthz    process and SQLite liveness
 GET /readyz     migrations complete, database writable, local root available
 ```
 
+Before first-run setup completes, `/readyz` and every `/api/v2/*` route return HTTP 503 with a plain-text body and `/healthz` stays 200; only the wizard routes answer, so upstream connection tests fail until setup has finished (Section 8.1).
+
 CloudDrive2 availability is reported in the Web UI and readiness detail but does not make the HTTP service unavailable. Sonarr and Radarr must still be able to query durable state during a CloudDrive2 outage.
 
 Logs are structured and include:
@@ -949,8 +991,8 @@ CloudDrive2 access tokens
 
 ## 18. Security
 
-1. Every qBittorrent and Web UI route requires authentication except login and health checks.
-2. The operator username is fixed. The password defaults to `adminadmin` and, once changed, is stored in SQLite only as a salted PBKDF2-SHA256 hash; plaintext credentials are never persisted.
+1. Every qBittorrent and Web UI route requires authentication except login, health checks, and the setup wizard (which is reachable only before setup completes).
+2. The operator username is fixed. The password is chosen during first-run setup — no default exists — and is stored in SQLite only as a salted PBKDF2-SHA256 hash. The CloudDrive2 credential is stored plaintext in the `settings` table because the CloudDrive2 API authenticates with it directly (Section 8.1); no other plaintext credentials are persisted.
 3. Session cookies contain only a cryptographically random opaque SID and are `HttpOnly`, `SameSite=Lax`, `Secure` on HTTPS, and bounded by TTL. Session state exists only in memory and is invalidated on restart.
 4. Login failures are rate-limited by client address with bounded in-memory state and a temporary authentication ban.
 5. Native Web UI state-changing forms require a per-session CSRF token; authenticated browser mutations must also be same-origin.
