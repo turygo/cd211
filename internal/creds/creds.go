@@ -20,11 +20,6 @@ import (
 // Username is the fixed operator account name.
 const Username = "admin"
 
-// DefaultPassword is the initial operator password, following the qBittorrent
-// convention. It stays valid until the operator changes the password in the
-// Web UI.
-const DefaultPassword = "adminadmin"
-
 // ErrCurrentPasswordMismatch reports a password change whose current-password
 // proof failed.
 var ErrCurrentPasswordMismatch = errors.New("current password does not match")
@@ -39,7 +34,7 @@ const (
 
 // Store persists the single operator password hash.
 type Store interface {
-	// GetOperatorPasswordHash returns "" while the default password is active.
+	// GetOperatorPasswordHash returns "" while no password has been set.
 	GetOperatorPasswordHash(ctx context.Context) (string, error)
 	SetOperatorPasswordHash(ctx context.Context, hash string, now time.Time) error
 }
@@ -58,7 +53,8 @@ func New(store Store) (*Manager, error) {
 }
 
 // Verify reports whether the supplied credentials match the fixed username
-// and the currently active password.
+// and the currently active password. With no stored password hash,
+// verification fails.
 func (m *Manager) Verify(ctx context.Context, username, password string) (bool, error) {
 	usernameInput := sha256.Sum256([]byte(username))
 	usernameFixed := sha256.Sum256([]byte(Username))
@@ -69,11 +65,7 @@ func (m *Manager) Verify(ctx context.Context, username, password string) (bool, 
 		return false, err
 	}
 	var passwordMatch bool
-	if encoded == "" {
-		passwordInput := sha256.Sum256([]byte(password))
-		passwordDefault := sha256.Sum256([]byte(DefaultPassword))
-		passwordMatch = subtle.ConstantTimeCompare(passwordInput[:], passwordDefault[:]) == 1
-	} else {
+	if encoded != "" {
 		passwordMatch, err = verifyHash(encoded, password)
 		if err != nil {
 			return false, err
@@ -91,14 +83,15 @@ func (m *Manager) Change(ctx context.Context, current, next string, now time.Tim
 	if !ok {
 		return ErrCurrentPasswordMismatch
 	}
-	encoded, err := hashPassword(next)
+	encoded, err := HashPassword(next)
 	if err != nil {
 		return err
 	}
 	return m.store.SetOperatorPasswordHash(ctx, encoded, now)
 }
 
-func hashPassword(password string) (string, error) {
+// HashPassword derives an opaque PBKDF2-SHA256 hash record from a password.
+func HashPassword(password string) (string, error) {
 	salt := make([]byte, hashSaltLength)
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("generate password salt: %w", err)

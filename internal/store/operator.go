@@ -11,7 +11,7 @@ import (
 )
 
 // GetOperatorPasswordHash returns the persisted operator password hash, or ""
-// when the password has never been changed from its default.
+// when no password has been set.
 func (s *Store) GetOperatorPasswordHash(ctx context.Context) (string, error) {
 	hash, err := s.queries.GetOperatorPassword(ctx)
 	if errors.Is(err, sql.ErrNoRows) {

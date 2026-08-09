@@ -23,6 +23,7 @@ import (
 	"github.com/turygo/cd211/internal/creds"
 	"github.com/turygo/cd211/internal/domain"
 	"github.com/turygo/cd211/internal/session"
+	"github.com/turygo/cd211/internal/settings"
 	"github.com/turygo/cd211/internal/store"
 )
 
@@ -82,6 +83,24 @@ type Credentials interface {
 	Change(ctx context.Context, current, next string, now time.Time) error
 }
 
+// SettingsStore persists and re-reads the runtime settings table.
+type SettingsStore interface {
+	ListSettings(ctx context.Context) (map[string]string, error)
+	ReplaceSettings(ctx context.Context, values map[string]string, now time.Time) error
+}
+
+// SettingsDeps wires the authenticated settings page.
+type SettingsDeps struct {
+	Store SettingsStore
+	// Dial establishes CloudDrive2 test connections; nil uses the default
+	// *clouddrive.Client adapter.
+	Dial DialFunc
+	// Apply swaps the persisted configuration into the running process. It is
+	// invoked only after Store.ReplaceSettings succeeded; a nil Apply persists
+	// without activating (a restart applies the settings).
+	Apply func(ctx context.Context, cfg settings.Config) error
+}
+
 type handler struct {
 	config      Config
 	creds       Credentials
@@ -91,6 +110,7 @@ type handler struct {
 	waker       Waker
 	cloudStatus CloudStatus
 	filesystem  Filesystem
+	settings    SettingsDeps
 	templates   *template.Template
 }
 
@@ -102,10 +122,15 @@ type authenticatedSession struct {
 }
 
 // New constructs the server-rendered operator interface.
-func New(config Config, credentials Credentials, repo Repository, sessions *session.Store, clock Clock, waker Waker, cloudStatus CloudStatus, filesystem Filesystem) (http.Handler, error) {
-	if isNil(credentials) || isNil(repo) || sessions == nil || isNil(clock) || isNil(waker) || isNil(cloudStatus) || isNil(filesystem) {
+func New(config Config, credentials Credentials, repo Repository, sessions *session.Store, clock Clock, waker Waker, cloudStatus CloudStatus, filesystem Filesystem, settings SettingsDeps) (http.Handler, error) {
+	if isNil(credentials) || isNil(repo) || sessions == nil || isNil(clock) || isNil(waker) || isNil(cloudStatus) || isNil(filesystem) || isNil(settings.Store) {
 		return nil, errors.New("web dependency is nil")
 	}
+	dial := settings.Dial
+	if dial == nil {
+		dial = defaultDial
+	}
+	settings.Dial = dial
 	if !path.IsAbs(config.CloudRoot) || path.Clean(config.CloudRoot) != config.CloudRoot {
 		return nil, errors.New("cloud root must be an absolute clean POSIX path")
 	}
@@ -126,21 +151,25 @@ func New(config Config, credentials Credentials, repo Repository, sessions *sess
 		waker:       waker,
 		cloudStatus: cloudStatus,
 		filesystem:  filesystem,
+		settings:    settings,
 		templates:   templates,
 	}
 	mux := http.NewServeMux()
 	mux.Handle("GET /login", http.HandlerFunc(h.loginPage))
 	mux.Handle("POST /login", http.HandlerFunc(h.login))
-	mux.Handle("GET /lang", http.HandlerFunc(h.setLang))
-	mux.Handle("GET /static/app.css", http.HandlerFunc(h.staticCSS))
-	mux.Handle("GET /static/app.js", http.HandlerFunc(h.staticJS))
+	mux.Handle("GET /lang", http.HandlerFunc(setLang))
+	mux.Handle("GET /static/app.css", http.HandlerFunc(staticCSS))
+	mux.Handle("GET /static/app.js", http.HandlerFunc(staticJS))
 	mux.Handle("GET /", h.auth(h.downloads, false))
 	mux.Handle("GET /downloads/{hash}", h.auth(h.detail, false))
 	mux.Handle("GET /categories", h.auth(h.categories, false))
+	mux.Handle("GET /settings", h.auth(h.settingsPage, false))
 	mux.Handle("GET /password", h.auth(h.passwordPage, false))
 	mux.Handle("POST /password", h.auth(h.changePassword, true))
 	mux.Handle("POST /logout", h.auth(h.logout, true))
 	mux.Handle("POST /categories/save", h.auth(h.saveCategory, true))
+	mux.Handle("POST /settings/test", h.auth(h.settingsTest, true))
+	mux.Handle("POST /settings/save", h.auth(h.settingsSave, true))
 	mux.Handle("POST /downloads/{hash}/start", h.auth(h.start, true))
 	mux.Handle("POST /downloads/{hash}/retry", h.auth(h.retry, true))
 	mux.Handle("POST /downloads/{hash}/cancel", h.auth(h.cancel, true))
@@ -149,19 +178,19 @@ func New(config Config, credentials Credentials, repo Repository, sessions *sess
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		method, found := routeMethod(r.URL.Path, r.Method)
 		if !found {
-			h.htmlHeaders(w)
+			htmlHeaders(w)
 			plain(w, http.StatusNotFound, "Not Found\n")
 			return
 		}
 		if r.Method != method {
-			h.htmlHeaders(w)
+			htmlHeaders(w)
 			plain(w, http.StatusMethodNotAllowed, "Method Not Allowed\n")
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/static/") {
 			w.Header().Set("X-Content-Type-Options", "nosniff")
 		} else {
-			h.htmlHeaders(w)
+			htmlHeaders(w)
 		}
 		mux.ServeHTTP(w, r)
 	}), nil
@@ -174,9 +203,9 @@ func routeMethod(requestPath, requestMethod string) (string, bool) {
 			return http.MethodPost, true
 		}
 		return http.MethodGet, true
-	case "/", "/categories", "/lang", "/static/app.css", "/static/app.js":
+	case "/", "/categories", "/settings", "/lang", "/static/app.css", "/static/app.js":
 		return http.MethodGet, true
-	case "/logout", "/categories/save":
+	case "/logout", "/categories/save", "/settings/test", "/settings/save":
 		return http.MethodPost, true
 	}
 	parts := strings.Split(strings.TrimPrefix(requestPath, "/"), "/")
@@ -269,7 +298,7 @@ func (h *handler) redirectLogin(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
-func (h *handler) htmlHeaders(w http.ResponseWriter) {
+func htmlHeaders(w http.ResponseWriter) {
 	w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	// "same-origin" keeps referrers internal while still letting browsers send
@@ -279,15 +308,15 @@ func (h *handler) htmlHeaders(w http.ResponseWriter) {
 	w.Header().Set("Referrer-Policy", "same-origin")
 }
 
-func (h *handler) staticCSS(w http.ResponseWriter, _ *http.Request) {
-	h.static(w, "static/app.css", "text/css; charset=utf-8")
+func staticCSS(w http.ResponseWriter, _ *http.Request) {
+	static(w, "static/app.css", "text/css; charset=utf-8")
 }
 
-func (h *handler) staticJS(w http.ResponseWriter, _ *http.Request) {
-	h.static(w, "static/app.js", "text/javascript; charset=utf-8")
+func staticJS(w http.ResponseWriter, _ *http.Request) {
+	static(w, "static/app.js", "text/javascript; charset=utf-8")
 }
 
-func (h *handler) static(w http.ResponseWriter, name, contentType string) {
+func static(w http.ResponseWriter, name, contentType string) {
 	content, err := assets.ReadFile(name)
 	if err != nil {
 		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
@@ -305,7 +334,7 @@ func (h *handler) loginPage(w http.ResponseWriter, r *http.Request) {
 
 // setLang stores the display-language preference and returns to the page the
 // operator came from. The cookie carries no authority, so a GET is safe here.
-func (h *handler) setLang(w http.ResponseWriter, r *http.Request) {
+func setLang(w http.ResponseWriter, r *http.Request) {
 	lang := LangEN
 	if Lang(r.URL.Query().Get("to")) == LangZH {
 		lang = LangZH
@@ -470,6 +499,208 @@ func (h *handler) categories(w http.ResponseWriter, r *http.Request) {
 	page := buildCategoriesView(categories, h.authSession(r).CSRFToken, requestLang(r))
 	page.Path = r.URL.RequestURI()
 	h.render(w, http.StatusOK, "categories", page)
+}
+
+func (h *handler) settingsPage(w http.ResponseWriter, r *http.Request) {
+	values, err := h.settings.Store.ListSettings(r.Context())
+	if err != nil {
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+		return
+	}
+	str := tr(requestLang(r))
+	notice, success := "", false
+	if r.URL.Query().Get("saved") == "1" {
+		notice, success = str.SettingsSaved, true
+	}
+	view := SettingsView{
+		PageMeta: pageMeta(str.TitleSettings, "settings", h.authSession(r).CSRFToken, requestLang(r)),
+		Values:   settingsFormFromValues(values),
+		Notice:   notice,
+		Success:  success,
+	}
+	view.Path = "/settings"
+	h.render(w, http.StatusOK, "settings", view)
+}
+
+func (h *handler) settingsTest(w http.ResponseWriter, r *http.Request) {
+	form, errMsg, ok := parseSettingsForm(r)
+	if !ok {
+		plain(w, http.StatusBadRequest, "Bad Request\n")
+		return
+	}
+	str := tr(requestLang(r))
+	if errMsg != "" {
+		h.renderSettings(w, r, http.StatusBadRequest, form, errMsg, false)
+		return
+	}
+	cfg, err := h.mergedSettingsConfig(r, form)
+	if err != nil {
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+		return
+	}
+	if err := runFullTest(r.Context(), h.settings.Dial, cfg, str); err != nil {
+		h.renderSettings(w, r, http.StatusOK, form, err.Error(), false)
+		return
+	}
+	h.renderSettings(w, r, http.StatusOK, form, str.TestPassed, true)
+}
+
+func (h *handler) settingsSave(w http.ResponseWriter, r *http.Request) {
+	form, errMsg, ok := parseSettingsForm(r)
+	if !ok {
+		plain(w, http.StatusBadRequest, "Bad Request\n")
+		return
+	}
+	str := tr(requestLang(r))
+	if errMsg != "" {
+		h.renderSettings(w, r, http.StatusBadRequest, form, errMsg, false)
+		return
+	}
+	cfg, err := h.mergedSettingsConfig(r, form)
+	if err != nil {
+		h.renderSettings(w, r, http.StatusBadRequest, form, str.CD2PasswordRequired, false)
+		return
+	}
+	// Every check runs again server-side before anything is persisted.
+	if err := runFullTest(r.Context(), h.settings.Dial, cfg, str); err != nil {
+		h.renderSettings(w, r, http.StatusOK, form, err.Error(), false)
+		return
+	}
+	if err := h.settings.Store.ReplaceSettings(r.Context(), settings.Values(cfg), h.clock.Now().UTC()); err != nil {
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+		return
+	}
+	if h.settings.Apply != nil {
+		if err := h.settings.Apply(r.Context(), cfg); err != nil {
+			// The settings are durably persisted; only activation failed.
+			h.renderSettings(w, r, http.StatusOK, form, str.SettingsApplyFailed, false)
+			return
+		}
+	}
+	http.Redirect(w, r, "/settings?saved=1", http.StatusSeeOther)
+}
+
+// renderSettings re-renders the settings page with the submitted values and
+// a notice describing the outcome of the last action.
+func (h *handler) renderSettings(w http.ResponseWriter, r *http.Request, status int, form SettingsFormValues, notice string, success bool) {
+	view := SettingsView{
+		PageMeta: pageMeta(tr(requestLang(r)).TitleSettings, "settings", h.authSession(r).CSRFToken, requestLang(r)),
+		Values:   form,
+		Notice:   notice,
+		Success:  success,
+	}
+	view.Path = "/settings"
+	h.render(w, status, "settings", view)
+}
+
+// parseSettingsForm extracts and validates the settings form. An empty
+// CloudDrive2 password field means "keep the stored value", so it is not an
+// error here; mergedSettingsConfig resolves it.
+func parseSettingsForm(r *http.Request) (SettingsFormValues, string, bool) {
+	str := tr(requestLang(r))
+	var form SettingsFormValues
+	var ok bool
+	if form.CD2Address, ok = exactPostValue(r, "address"); !ok {
+		return form, "", false
+	}
+	if form.CD2Username, ok = exactPostValue(r, "username"); !ok {
+		return form, "", false
+	}
+	if form.CD2Password, ok = exactPostValue(r, "password"); !ok {
+		return form, "", false
+	}
+	if form.CloudRoot, ok = exactPostValue(r, "cloud_root"); !ok {
+		return form, "", false
+	}
+	if form.LocalRoot, ok = exactPostValue(r, "local_root"); !ok {
+		return form, "", false
+	}
+	if form.OfflineTimeout, ok = exactPostValue(r, "timeout_offline"); !ok {
+		return form, "", false
+	}
+	if form.CopyTimeout, ok = exactPostValue(r, "timeout_copy"); !ok {
+		return form, "", false
+	}
+	if form.VerifyTimeout, ok = exactPostValue(r, "timeout_verify"); !ok {
+		return form, "", false
+	}
+	form.CD2Insecure = r.PostForm.Get("insecure") == "true"
+	form.CD2Address = strings.TrimSpace(form.CD2Address)
+	form.CD2Username = strings.TrimSpace(form.CD2Username)
+	form.CloudRoot = strings.TrimSpace(form.CloudRoot)
+	form.LocalRoot = strings.TrimSpace(form.LocalRoot)
+	switch {
+	case form.CD2Address == "":
+		return form, str.AddressRequired, true
+	case settings.ValidateAddress(settings.KeyCD2Address, form.CD2Address, false) != nil:
+		return form, str.AddressInvalid, true
+	case form.CD2Username == "":
+		return form, str.UsernameRequired, true
+	case !validCloudRoot(form.CloudRoot):
+		return form, str.CloudRootInvalid, true
+	case !validLocalRoot(form.LocalRoot):
+		return form, str.LocalRootInvalid, true
+	}
+	if _, _, _, err := parseTimeouts(form.OfflineTimeout, form.CopyTimeout, form.VerifyTimeout); err != nil {
+		return form, str.TimeoutInvalid, true
+	}
+	return form, "", true
+}
+
+// mergedSettingsConfig builds the runtime configuration from the submitted
+// form, resolving an empty password field against the stored value.
+func (h *handler) mergedSettingsConfig(r *http.Request, form SettingsFormValues) (settings.Config, error) {
+	password := form.CD2Password
+	if password == "" {
+		stored, err := h.settings.Store.ListSettings(r.Context())
+		if err != nil {
+			return settings.Config{}, err
+		}
+		password = stored[settings.KeyCD2Password]
+	}
+	if password == "" {
+		return settings.Config{}, errors.New("cd2 password is required")
+	}
+	offline, copyTimeout, verify, err := parseTimeouts(form.OfflineTimeout, form.CopyTimeout, form.VerifyTimeout)
+	if err != nil {
+		return settings.Config{}, err
+	}
+	return settings.Config{
+		CD2Address:     form.CD2Address,
+		CD2Username:    form.CD2Username,
+		CD2Password:    password,
+		CD2Insecure:    form.CD2Insecure,
+		CloudRoot:      form.CloudRoot,
+		LocalRoot:      form.LocalRoot,
+		OfflineTimeout: offline,
+		CopyTimeout:    copyTimeout,
+		VerifyTimeout:  verify,
+	}, nil
+}
+
+// settingsFormFromValues prefills the settings form from persisted values,
+// falling back to the documented defaults for missing keys.
+func settingsFormFromValues(values map[string]string) SettingsFormValues {
+	form := SettingsFormValues{
+		CD2Address:  values[settings.KeyCD2Address],
+		CD2Username: values[settings.KeyCD2Username],
+		CD2Insecure: values[settings.KeyCD2Insecure] == "true",
+		CloudRoot:   values[settings.KeyCloudRoot],
+		LocalRoot:   values[settings.KeyLocalRoot],
+	}
+	form.OfflineTimeout = values[settings.KeyOfflineTimeout]
+	form.CopyTimeout = values[settings.KeyCopyTimeout]
+	form.VerifyTimeout = values[settings.KeyVerifyTimeout]
+	if form.OfflineTimeout == "" {
+		form.OfflineTimeout = defaultOfflineTimeout.String()
+	}
+	if form.CopyTimeout == "" {
+		form.CopyTimeout = defaultCopyTimeout.String()
+	}
+	if form.VerifyTimeout == "" {
+		form.VerifyTimeout = defaultVerifyTimeout.String()
+	}
+	return form
 }
 
 func (h *handler) passwordPage(w http.ResponseWriter, r *http.Request) {

@@ -173,6 +173,14 @@ func (c *Client) Check(ctx context.Context) error {
 	return nil
 }
 
+// Authenticate exercises the configured credentials by acquiring a token.
+// Unlike Check, it performs the login round-trip, so wrong credentials are
+// reported as ErrorUnauthorized (or the appropriate transport failure kind).
+func (c *Client) Authenticate(ctx context.Context) error {
+	_, err := c.tokenFor(ctx)
+	return err
+}
+
 func (c *Client) FindFile(ctx context.Context, fullPath string) (*pb.CloudDriveFile, error) {
 	fullPath, ok := cleanAbsolutePath(fullPath)
 	if !ok || fullPath == "/" {

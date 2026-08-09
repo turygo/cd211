@@ -127,6 +127,27 @@ type CategoriesView struct {
 	Rows []CategoryRow
 }
 
+type SettingsView struct {
+	PageMeta
+	Values  SettingsFormValues
+	Notice  string
+	Success bool
+}
+
+// SettingsFormValues carries the prefilled settings form fields. CD2Password
+// is always rendered empty; an empty submission keeps the stored password.
+type SettingsFormValues struct {
+	CD2Address     string
+	CD2Username    string
+	CD2Password    string
+	CD2Insecure    bool
+	CloudRoot      string
+	LocalRoot      string
+	OfflineTimeout string
+	CopyTimeout    string
+	VerifyTimeout  string
+}
+
 type CategoryRow struct {
 	Name      string
 	CloudPath string

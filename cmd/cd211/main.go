@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"flag"
 	"log/slog"
 	"net/http"
 	"os"
@@ -12,14 +13,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/turygo/cd211/internal/clouddrive"
 	"github.com/turygo/cd211/internal/config"
-	"github.com/turygo/cd211/internal/creds"
-	"github.com/turygo/cd211/internal/fsafe"
-	"github.com/turygo/cd211/internal/httpapi"
 	"github.com/turygo/cd211/internal/reconcile"
 	"github.com/turygo/cd211/internal/server"
 	"github.com/turygo/cd211/internal/session"
+	"github.com/turygo/cd211/internal/settings"
 	"github.com/turygo/cd211/internal/store"
 	"github.com/turygo/cd211/internal/torrentmeta"
 	"github.com/turygo/cd211/internal/web"
@@ -39,6 +37,18 @@ func main() {
 }
 
 func run() (result error) {
+	cfg, err := config.Parse(os.Args[1:])
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			// The flag package already printed the usage text; return before
+			// any runtime logging is armed.
+			return nil
+		}
+		logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+		logger.Error("invalid command line", "error", err)
+		return err
+	}
+
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	defer func() {
 		if result == nil {
@@ -48,12 +58,6 @@ func run() (result error) {
 
 	rootContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
-	cfg, err := config.Load()
-	if err != nil {
-		logger.Error("runtime startup failed", "error", err)
-		return err
-	}
 
 	st, err := store.Open(rootContext, cfg.DatabasePath)
 	if err != nil {
@@ -69,116 +73,85 @@ func run() (result error) {
 		}
 	}()
 
-	cloud, err := clouddrive.Dial(cfg.CD2Address, cfg.CD2Username, cfg.CD2Password, cloudRPCTimeout, cfg.CD2Insecure)
-	if err != nil {
-		logger.Error("runtime startup failed", "error", err)
-		return err
-	}
-	defer func() {
-		if err := cloud.Close(); err != nil {
-			logger.Error("clouddrive close failed", "error", err)
-			if result == nil {
-				result = err
-			}
-		}
-	}()
-
-	files, err := fsafe.New(cfg.LocalRoot)
-	if err != nil {
-		logger.Error("runtime startup failed", "error", err)
-		return err
-	}
-	cfg.LocalRoot = files.LocalRoot()
 	clock := reconcile.RealClock{}
 	sessions, err := session.New(clock, rand.Reader, sessionTTL, sessionCapacity)
 	if err != nil {
 		logger.Error("runtime startup failed", "error", err)
 		return err
 	}
-	coordinator, err := reconcile.New(reconcile.Config{
-		Owner:          workerOwner(),
-		LeaseDuration:  reconcileLeaseDuration,
-		PollInterval:   15 * time.Second,
-		OfflineTimeout: cfg.OfflineTimeout,
-		CopyTimeout:    cfg.CopyTimeout,
-		VerifyTimeout:  cfg.VerifyTimeout,
-		WorkerCount:    4,
-	}, st, cloud, files, clock, logger)
+
+	root := &switchHandler{}
+	runtimeManager := newManager(root, st, sessions, clock, logger)
+
+	settingsConfig, completed, err := settings.Load(rootContext, st)
 	if err != nil {
 		logger.Error("runtime startup failed", "error", err)
 		return err
+	}
+	if completed {
+		generation, err := runtimeManager.build(rootContext, settingsConfig)
+		if err != nil {
+			logger.Error("runtime startup failed", "error", err)
+			return err
+		}
+		runtimeManager.activate(generation)
+	} else {
+		setup, err := web.NewSetup(web.SetupConfig{
+			Store:    st,
+			Sessions: sessions,
+			Clock:    clock,
+			Dial:     nil,
+			Complete: runtimeManager.Apply,
+		})
+		if err != nil {
+			logger.Error("runtime startup failed", "error", err)
+			return err
+		}
+		root.Store(setupModeMux(setup))
+		logger.Info("setup mode active; waiting for the setup wizard")
 	}
 
-	credentials, err := creds.New(st)
-	if err != nil {
-		logger.Error("runtime startup failed", "error", err)
-		return err
-	}
-	limits := metadataLimits()
-	api, err := httpapi.New(httpapi.Config{
-		CloudRoot: cfg.CloudRoot, LocalRoot: cfg.LocalRoot,
-		TorrentLimits: limits, MaxRequestBytes: int64(limits.MaxInputBytes) + 64<<10,
-	}, credentials, st, sessions, clock, coordinator, files)
-	if err != nil {
-		logger.Error("runtime startup failed", "error", err)
-		return err
-	}
-	ui, err := web.New(web.Config{
-		CloudRoot: cfg.CloudRoot, LocalRoot: cfg.LocalRoot,
-	}, credentials, st, sessions, clock, coordinator, cloud, files)
-	if err != nil {
-		logger.Error("runtime startup failed", "error", err)
-		return err
-	}
-
-	health := server.NewHandler(
-		func(requestContext context.Context) error {
-			return st.PingContext(requestContext)
-		},
-		func(requestContext context.Context) error {
-			return st.Ready(requestContext, cfg.LocalRoot)
-		},
-		cloud.Check,
-	)
-	root := http.NewServeMux()
-	root.Handle("/healthz", health)
-	root.Handle("/readyz", health)
-	root.Handle("/api/v2/", api)
-	root.Handle("/", ui)
 	httpServer := server.NewHTTPServer(cfg.HTTPAddress, root)
-
 	serveResult := make(chan error, 1)
 	go func() {
 		serveResult <- httpServer.ListenAndServe()
 	}()
-	reconcileResult := make(chan error, 1)
-	go func() {
-		reconcileResult <- coordinator.Run(rootContext)
-	}()
 	logger.Info("runtime started", "address", cfg.HTTPAddress)
 
-	serveStopped, reconcileStopped := false, false
-	select {
-	case err := <-serveResult:
-		serveStopped = true
-		if !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("runtime server failed", "error", err)
+	serveStopped := false
+serveLoop:
+	for {
+		generation := runtimeManager.currentGeneration()
+		var generationDone <-chan struct{}
+		if generation != nil {
+			generationDone = generation.done
+		}
+		select {
+		case err := <-serveResult:
+			serveStopped = true
+			if !errors.Is(err, http.ErrServerClosed) {
+				logger.Error("runtime server failed", "error", err)
+				result = err
+			}
+			break serveLoop
+		case <-generationDone:
+			if runtimeManager.currentGeneration() != generation {
+				continue
+			}
+			err := generation.result
+			if err == nil {
+				err = errors.New("reconciler stopped unexpectedly")
+			}
+			logger.Error("runtime reconciler failed", "error", err)
 			result = err
+			break serveLoop
+		case <-rootContext.Done():
+			break serveLoop
 		}
-	case err := <-reconcileResult:
-		reconcileStopped = true
-		if err == nil && rootContext.Err() != nil {
-			break
-		}
-		if err == nil {
-			err = errors.New("reconciler stopped unexpectedly")
-		}
-		logger.Error("runtime reconciler failed", "error", err)
-		result = err
-	case <-rootContext.Done():
 	}
 
 	stop()
+	runtimeManager.shutdown()
 	shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	if err := httpServer.Shutdown(shutdownContext); err != nil {
 		logger.Error("runtime shutdown failed", "error", err)
@@ -190,14 +163,6 @@ func run() (result error) {
 	if !serveStopped {
 		if err := <-serveResult; !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("runtime server failed", "error", err)
-			if result == nil {
-				result = err
-			}
-		}
-	}
-	if !reconcileStopped {
-		if err := <-reconcileResult; err != nil {
-			logger.Error("runtime reconciler failed", "error", err)
 			if result == nil {
 				result = err
 			}

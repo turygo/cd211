@@ -116,6 +116,10 @@ type webFixture struct {
 }
 
 func newWebFixture(t *testing.T) *webFixture {
+	return newWebFixtureWithSettings(t, SettingsDeps{})
+}
+
+func newWebFixtureWithSettings(t *testing.T, settingsDeps SettingsDeps) *webFixture {
 	t.Helper()
 	clock := &fixedClock{now: time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)}
 	database, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "web.db"))
@@ -148,7 +152,19 @@ func newWebFixture(t *testing.T) *webFixture {
 	if err != nil {
 		t.Fatalf("creds.New(): %v", err)
 	}
-	handler, err := New(Config{CloudRoot: "/cloud", LocalRoot: localRoot}, credentials, repo, sessions, clock, waker, cloud, filesystem)
+	// The default password is gone; seed the classic test password so login
+	// and password-change flows behave as before.
+	initialHash, err := creds.HashPassword("adminadmin")
+	if err != nil {
+		t.Fatalf("creds.HashPassword(): %v", err)
+	}
+	if err := database.SetOperatorPasswordHash(context.Background(), initialHash, clock.now); err != nil {
+		t.Fatalf("SetOperatorPasswordHash(): %v", err)
+	}
+	if settingsDeps.Store == nil {
+		settingsDeps.Store = database
+	}
+	handler, err := New(Config{CloudRoot: "/cloud", LocalRoot: localRoot}, credentials, repo, sessions, clock, waker, cloud, filesystem, settingsDeps)
 	if err != nil {
 		t.Fatalf("New(): %v", err)
 	}
@@ -796,31 +812,33 @@ func TestConstructorValidation(t *testing.T) {
 	fixture := newWebFixture(t)
 	config := Config{CloudRoot: "/cloud", LocalRoot: t.TempDir()}
 	cases := []struct {
-		name   string
-		config Config
-		repo   Repository
-		clock  Clock
-		waker  Waker
-		cloud  CloudStatus
+		name     string
+		config   Config
+		repo     Repository
+		clock    Clock
+		waker    Waker
+		cloud    CloudStatus
+		settings SettingsDeps
 	}{
-		{"cloud root", Config{CloudRoot: "relative", LocalRoot: t.TempDir()}, fixture.repo, fixture.clock, fixture.waker, fixture.cloud},
-		{"local root", Config{CloudRoot: "/cloud", LocalRoot: "relative"}, fixture.repo, fixture.clock, fixture.waker, fixture.cloud},
-		{"repository", config, nil, fixture.clock, fixture.waker, fixture.cloud},
-		{"clock", config, fixture.repo, nil, fixture.waker, fixture.cloud},
-		{"waker", config, fixture.repo, fixture.clock, nil, fixture.cloud},
-		{"cloud status", config, fixture.repo, fixture.clock, fixture.waker, nil},
+		{"cloud root", Config{CloudRoot: "relative", LocalRoot: t.TempDir()}, fixture.repo, fixture.clock, fixture.waker, fixture.cloud, SettingsDeps{Store: fixture.store}},
+		{"local root", Config{CloudRoot: "/cloud", LocalRoot: "relative"}, fixture.repo, fixture.clock, fixture.waker, fixture.cloud, SettingsDeps{Store: fixture.store}},
+		{"repository", config, nil, fixture.clock, fixture.waker, fixture.cloud, SettingsDeps{Store: fixture.store}},
+		{"clock", config, fixture.repo, nil, fixture.waker, fixture.cloud, SettingsDeps{Store: fixture.store}},
+		{"waker", config, fixture.repo, fixture.clock, nil, fixture.cloud, SettingsDeps{Store: fixture.store}},
+		{"cloud status", config, fixture.repo, fixture.clock, fixture.waker, nil, SettingsDeps{Store: fixture.store}},
+		{"settings store", config, fixture.repo, fixture.clock, fixture.waker, fixture.cloud, SettingsDeps{}},
 	}
 	for _, item := range cases {
 		t.Run(item.name, func(t *testing.T) {
-			if handler, err := New(item.config, fixture.creds, item.repo, fixture.sessions, item.clock, item.waker, item.cloud, fixture.filesystem); err == nil || handler != nil {
+			if handler, err := New(item.config, fixture.creds, item.repo, fixture.sessions, item.clock, item.waker, item.cloud, fixture.filesystem, item.settings); err == nil || handler != nil {
 				t.Errorf("New() = (%v, %v), want validation error", handler, err)
 			}
 		})
 	}
-	if handler, err := New(config, fixture.creds, fixture.repo, fixture.sessions, fixture.clock, fixture.waker, fixture.cloud, nil); err == nil || handler != nil {
+	if handler, err := New(config, fixture.creds, fixture.repo, fixture.sessions, fixture.clock, fixture.waker, fixture.cloud, nil, SettingsDeps{Store: fixture.store}); err == nil || handler != nil {
 		t.Errorf("New(nil filesystem) = (%v, %v), want validation error", handler, err)
 	}
-	if handler, err := New(config, nil, fixture.repo, fixture.sessions, fixture.clock, fixture.waker, fixture.cloud, fixture.filesystem); err == nil || handler != nil {
+	if handler, err := New(config, nil, fixture.repo, fixture.sessions, fixture.clock, fixture.waker, fixture.cloud, fixture.filesystem, SettingsDeps{Store: fixture.store}); err == nil || handler != nil {
 		t.Errorf("New(nil credentials) = (%v, %v), want validation error", handler, err)
 	}
 }
@@ -860,7 +878,7 @@ func TestLanguagePreferenceRendersChinese(t *testing.T) {
 
 	login := fixture.requestLang(http.MethodGet, "/login", false, "zh")
 	requireStatus(t, login, http.StatusOK)
-	requireContains(t, login.Body.String(), `lang="zh"`, "用户名", "密码", "adminadmin")
+	requireContains(t, login.Body.String(), `lang="zh"`, "用户名", "密码", "初始设置")
 
 	downloads := fixture.requestLang(http.MethodGet, "/?view=all", true, "zh")
 	requireStatus(t, downloads, http.StatusOK)

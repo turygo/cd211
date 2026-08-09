@@ -640,6 +640,53 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
 .stack-form label { font-size: 12px; font-weight: 510; color: var(--text-tertiary); margin-top: 8px; }
 .stack-form .button { margin-top: 16px; }
 
+/* ---------- Setup wizard & settings page ---------- */
+
+.login-card-wide { max-width: 480px; }
+
+.form-hint {
+  margin: 2px 0 0;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-quaternary);
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 12px;
+  font-weight: 510;
+  color: var(--text-secondary);
+}
+
+.button-row { display: flex; gap: 8px; margin-top: 16px; }
+.button-row .button { margin-top: 0; }
+
+.review-list { margin: 0 0 16px; }
+.review-list div {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: 12px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+}
+.review-list dt { color: var(--text-tertiary); font-size: 12px; }
+.review-list dd { margin: 0; color: var(--text-secondary); overflow-wrap: anywhere; }
+
+.advanced {
+  margin: 0 0 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+}
+.advanced summary { cursor: pointer; font-size: 12px; font-weight: 510; color: var(--text-tertiary); }
+.advanced .stack-form { margin-top: 8px; }
+
+.settings-form .panel { margin-bottom: 16px; }
+.settings-form .form-field { margin-bottom: 10px; }
+
 /* ---------- Responsive ---------- */
 
 @media (max-width: 1100px) {

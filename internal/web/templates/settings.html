@@ -1,0 +1,47 @@
+{{define "settings"}}<!doctype html>
+<html lang="{{.Lang}}">
+{{template "head" .}}
+<body>
+  <div class="app-shell">
+    {{template "sidebar" .}}
+    <main class="content" id="main-content">
+      <header class="page-header">
+        <div class="page-title">
+          <h1>{{.Str.TitleSettings}}</h1>
+        </div>
+      </header>
+      <p class="page-lede">{{.Str.SettingsLede}}</p>
+
+      {{if .Notice}}<div class="notice {{if .Success}}notice-success{{else}}notice-error{{end}}" role="{{if .Success}}status{{else}}alert{{end}}">{{.Notice}}</div>{{end}}
+
+      <form action="/settings/save" method="post" class="settings-form">
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+        <section class="panel" aria-labelledby="cd2-title">
+          <h2 id="cd2-title">{{.Str.SettingsSectionCD2}}</h2>
+          <div class="form-field"><label for="set-address">{{.Str.CD2Address}}</label><input id="set-address" name="address" type="text" value="{{.Values.CD2Address}}" placeholder="host:port" required></div>
+          <div class="form-field"><label for="set-username">{{.Str.Username}}</label><input id="set-username" name="username" type="text" value="{{.Values.CD2Username}}" autocomplete="username" required></div>
+          <div class="form-field"><label for="set-password">{{.Str.Password}}</label><input id="set-password" name="password" type="password" autocomplete="new-password"><small>{{.Str.CD2PasswordKeep}}</small></div>
+          <label class="check-row"><input id="set-insecure" name="insecure" type="checkbox" value="true" {{if .Values.CD2Insecure}}checked{{end}}> {{.Str.CD2Insecure}}</label>
+        </section>
+        <section class="panel" aria-labelledby="paths-title">
+          <h2 id="paths-title">{{.Str.SettingsSectionPaths}}</h2>
+          <div class="form-field"><label for="set-cloud-root">{{.Str.CloudRootLabel}}</label><input id="set-cloud-root" name="cloud_root" type="text" value="{{.Values.CloudRoot}}" placeholder="/cloud" required></div>
+          <div class="form-field"><label for="set-local-root">{{.Str.LocalRootLabel}}</label><input id="set-local-root" name="local_root" type="text" value="{{.Values.LocalRoot}}" placeholder="/data/downloads" required></div>
+          <p class="panel-note">{{.Str.SettingsFrozenPathsNote}}</p>
+        </section>
+        <section class="panel" aria-labelledby="timeouts-title">
+          <h2 id="timeouts-title">{{.Str.SettingsSectionTimeouts}}</h2>
+          <div class="form-field"><label for="set-timeout-offline">{{.Str.OfflineTimeoutLabel}}</label><input id="set-timeout-offline" name="timeout_offline" type="text" value="{{.Values.OfflineTimeout}}" required></div>
+          <div class="form-field"><label for="set-timeout-copy">{{.Str.CopyTimeoutLabel}}</label><input id="set-timeout-copy" name="timeout_copy" type="text" value="{{.Values.CopyTimeout}}" required></div>
+          <div class="form-field"><label for="set-timeout-verify">{{.Str.VerifyTimeoutLabel}}</label><input id="set-timeout-verify" name="timeout_verify" type="text" value="{{.Values.VerifyTimeout}}" required></div>
+          <p class="form-hint">{{.Str.TimeoutFormatHint}}</p>
+        </section>
+        <div class="button-row">
+          <button class="button button-secondary" type="submit" formaction="/settings/test">{{.Str.TestButton}}</button>
+          <button class="button button-primary" type="submit">{{.Str.SettingsSaveButton}}</button>
+        </div>
+      </form>
+    </main>
+  </div>
+</body>
+</html>{{end}}

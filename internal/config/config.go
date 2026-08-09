@@ -1,176 +1,48 @@
-// Package config loads CD211 runtime configuration from the environment.
+// Package config loads the CD211 bootstrap configuration from command-line
+// flags. The binary reads no environment variables.
 package config
 
 import (
+	"flag"
 	"fmt"
-	"net"
 	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
-	"time"
+
+	"github.com/turygo/cd211/internal/settings"
 )
 
-const (
-	cd2AddressEnv     = "CD2_ADDRESS"
-	cd2UsernameEnv    = "CD2_USERNAME"
-	cd2PasswordEnv    = "CD2_PASSWORD"
-	cd2InsecureEnv    = "CD2_INSECURE"
-	httpAddressEnv    = "CD211_HTTP_ADDRESS"
-	databasePathEnv   = "DATABASE_PATH"
-	cloudRootEnv      = "CLOUD_ROOT"
-	localRootEnv      = "LOCAL_ROOT"
-	offlineTimeoutEnv = "CD211_OFFLINE_TIMEOUT"
-	copyTimeoutEnv    = "CD211_COPY_TIMEOUT"
-	verifyTimeoutEnv  = "CD211_VERIFY_TIMEOUT"
-)
-
-// Config is the validated runtime configuration.
+// Config is the validated bootstrap configuration.
 type Config struct {
-	CD2Address     string
-	CD2Username    string
-	CD2Password    string
-	CD2Insecure    bool
-	HTTPAddress    string
-	DatabasePath   string
-	CloudRoot      string
-	LocalRoot      string
-	OfflineTimeout time.Duration
-	CopyTimeout    time.Duration
-	VerifyTimeout  time.Duration
+	HTTPAddress  string
+	DatabasePath string
 }
 
-// Load reads and validates configuration from the process environment.
-func Load() (Config, error) {
-	return load(os.LookupEnv)
-}
+// Parse parses and validates the bootstrap configuration from command-line
+// arguments (excluding the program name). Unknown flags and trailing
+// positional arguments are errors; the FlagSet prints its usage to stderr
+// before returning. Passing -h or --help prints usage and returns
+// flag.ErrHelp.
+func Parse(args []string) (Config, error) {
+	flags := flag.NewFlagSet("cd211", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	httpAddress := flags.String("http-address", ":8080", "HTTP listen address as [host]:port")
+	databasePath := flags.String("database-path", "/data/cd211.sqlite", "SQLite database file on a host-local filesystem")
 
-func load(lookup func(string) (string, bool)) (Config, error) {
-	cd2Address, err := required(lookup, cd2AddressEnv)
-	if err != nil {
+	if err := flags.Parse(args); err != nil {
 		return Config{}, err
 	}
-	cd2Username, err := required(lookup, cd2UsernameEnv)
-	if err != nil {
-		return Config{}, err
-	}
-	cd2Password, err := required(lookup, cd2PasswordEnv)
-	if err != nil {
-		return Config{}, err
+	if flags.NArg() > 0 {
+		return Config{}, fmt.Errorf("unexpected positional argument %q", flags.Arg(0))
 	}
 
-	cd2Address = strings.TrimSpace(cd2Address)
-	if err := validateAddress(cd2AddressEnv, cd2Address, false); err != nil {
-		return Config{}, err
-	}
-	cd2Insecure, err := boolOrDefault(lookup, cd2InsecureEnv, false)
-	if err != nil {
+	address := *httpAddress
+	if err := settings.ValidateAddress("--http-address", address, true); err != nil {
 		return Config{}, err
 	}
 
-	httpAddress := valueOrDefault(lookup, httpAddressEnv, ":8080")
-	if err := validateAddress(httpAddressEnv, httpAddress, true); err != nil {
-		return Config{}, err
-	}
-
-	databasePath, err := absolutePath(databasePathEnv, valueOrDefault(lookup, databasePathEnv, "/data/cd211.sqlite"))
-	if err != nil {
-		return Config{}, err
-	}
-	cloudRoot, err := absolutePath(cloudRootEnv, valueOrDefault(lookup, cloudRootEnv, "/115open/云下载"))
-	if err != nil {
-		return Config{}, err
-	}
-	localRoot, err := absolutePath(localRootEnv, valueOrDefault(lookup, localRootEnv, "/downloads"))
-	if err != nil {
-		return Config{}, err
-	}
-	offlineTimeout, err := durationOrDefault(lookup, offlineTimeoutEnv, 24*time.Hour)
-	if err != nil {
-		return Config{}, err
-	}
-	copyTimeout, err := durationOrDefault(lookup, copyTimeoutEnv, 72*time.Hour)
-	if err != nil {
-		return Config{}, err
-	}
-	verifyTimeout, err := durationOrDefault(lookup, verifyTimeoutEnv, 10*time.Minute)
+	path, err := settings.AbsolutePath("--database-path", *databasePath)
 	if err != nil {
 		return Config{}, err
 	}
 
-	return Config{
-		CD2Address:     cd2Address,
-		CD2Username:    cd2Username,
-		CD2Password:    cd2Password,
-		CD2Insecure:    cd2Insecure,
-		HTTPAddress:    httpAddress,
-		DatabasePath:   databasePath,
-		CloudRoot:      cloudRoot,
-		LocalRoot:      localRoot,
-		OfflineTimeout: offlineTimeout,
-		CopyTimeout:    copyTimeout,
-		VerifyTimeout:  verifyTimeout,
-	}, nil
-}
-
-func required(lookup func(string) (string, bool), name string) (string, error) {
-	value, ok := lookup(name)
-	if !ok || strings.TrimSpace(value) == "" {
-		return "", fmt.Errorf("%s is required", name)
-	}
-	return value, nil
-}
-
-func valueOrDefault(lookup func(string) (string, bool), name, fallback string) string {
-	value, ok := lookup(name)
-	if !ok {
-		return fallback
-	}
-	return strings.TrimSpace(value)
-}
-
-func durationOrDefault(lookup func(string) (string, bool), name string, fallback time.Duration) (time.Duration, error) {
-	value, ok := lookup(name)
-	if !ok {
-		return fallback, nil
-	}
-	duration, err := time.ParseDuration(strings.TrimSpace(value))
-	if err != nil || duration <= 0 {
-		return 0, fmt.Errorf("%s must be a positive duration", name)
-	}
-	return duration, nil
-}
-
-func boolOrDefault(lookup func(string) (string, bool), name string, fallback bool) (bool, error) {
-	value, ok := lookup(name)
-	if !ok {
-		return fallback, nil
-	}
-	parsed, err := strconv.ParseBool(strings.TrimSpace(value))
-	if err != nil {
-		return false, fmt.Errorf("%s must be a boolean", name)
-	}
-	return parsed, nil
-}
-
-func validateAddress(name, address string, allowEmptyHost bool) error {
-	host, port, err := net.SplitHostPort(address)
-	if err != nil {
-		return fmt.Errorf("%s must be a host:port address", name)
-	}
-	if !allowEmptyHost && host == "" {
-		return fmt.Errorf("%s must include a host", name)
-	}
-	portNumber, err := strconv.Atoi(port)
-	if err != nil || portNumber < 1 || portNumber > 65535 {
-		return fmt.Errorf("%s must include a port from 1 to 65535", name)
-	}
-	return nil
-}
-
-func absolutePath(name, value string) (string, error) {
-	if !filepath.IsAbs(value) {
-		return "", fmt.Errorf("%s must be an absolute path", name)
-	}
-	return filepath.Clean(value), nil
+	return Config{HTTPAddress: address, DatabasePath: path}, nil
 }

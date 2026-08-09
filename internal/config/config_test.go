@@ -1,160 +1,97 @@
 package config
 
 import (
+	"errors"
+	"flag"
 	"strings"
 	"testing"
-	"time"
 )
 
-func TestLoad(t *testing.T) {
-	base := map[string]string{
-		cd2AddressEnv:  " cd2.example:443 ",
-		cd2UsernameEnv: " cd2-user ",
-		cd2PasswordEnv: " cd2-password ",
-	}
-
+func TestParse(t *testing.T) {
 	tests := []struct {
 		name    string
-		env     map[string]string
+		args    []string
 		want    Config
 		wantErr string
 	}{
 		{
-			name: "uses defaults and preserves CD2 credentials",
-			env:  base,
+			name: "uses defaults",
+			args: []string{},
 			want: Config{
-				CD2Address:     "cd2.example:443",
-				CD2Username:    " cd2-user ",
-				CD2Password:    " cd2-password ",
-				HTTPAddress:    ":8080",
-				DatabasePath:   "/data/cd211.sqlite",
-				CloudRoot:      "/115open/云下载",
-				LocalRoot:      "/downloads",
-				OfflineTimeout: 24 * time.Hour,
-				CopyTimeout:    72 * time.Hour,
-				VerifyTimeout:  10 * time.Minute,
+				HTTPAddress:  ":8080",
+				DatabasePath: "/data/cd211.sqlite",
 			},
 		},
 		{
-			name: "accepts IPv6 and cleans absolute paths",
-			env: mergeEnv(base, map[string]string{
-				cd2AddressEnv:     " [2001:db8::1]:443 ",
-				httpAddressEnv:    " [::1]:8080 ",
-				cd2InsecureEnv:    " true ",
-				databasePathEnv:   " /var/lib/cd211/../cd211.sqlite ",
-				cloudRootEnv:      " /115open/./云下载/ ",
-				localRootEnv:      " /downloads/complete/../ ",
-				offlineTimeoutEnv: " 2h ",
-				copyTimeoutEnv:    " 3h ",
-				verifyTimeoutEnv:  " 4m ",
-			}),
+			name: "accepts flags with equals form",
+			args: []string{
+				"--http-address=[::1]:8080",
+				"--database-path=/var/lib/cd211/../cd211.sqlite",
+			},
 			want: Config{
-				CD2Address:     "[2001:db8::1]:443",
-				CD2Username:    " cd2-user ",
-				CD2Insecure:    true,
-				CD2Password:    " cd2-password ",
-				HTTPAddress:    "[::1]:8080",
-				DatabasePath:   "/var/lib/cd211.sqlite",
-				CloudRoot:      "/115open/云下载",
-				LocalRoot:      "/downloads",
-				OfflineTimeout: 2 * time.Hour,
-				CopyTimeout:    3 * time.Hour,
-				VerifyTimeout:  4 * time.Minute,
+				HTTPAddress:  "[::1]:8080",
+				DatabasePath: "/var/lib/cd211.sqlite",
 			},
 		},
 		{
-			name: "rejects relative local root",
-			env: mergeEnv(base, map[string]string{
-				localRootEnv: "downloads",
-			}),
-			wantErr: localRootEnv,
+			name: "accepts flags with space-separated values",
+			args: []string{
+				"--http-address", "127.0.0.1:9090",
+				"--database-path", "/var/lib/cd211.sqlite",
+			},
+			want: Config{
+				HTTPAddress:  "127.0.0.1:9090",
+				DatabasePath: "/var/lib/cd211.sqlite",
+			},
 		},
 		{
-			name: "rejects invalid CD2 port",
-			env: mergeEnv(base, map[string]string{
-				cd2AddressEnv: "cd2.example:0",
-			}),
-			wantErr: cd2AddressEnv,
+			name:    "rejects invalid HTTP port",
+			args:    []string{"--http-address=:0"},
+			wantErr: "--http-address",
 		},
 		{
-			name: "rejects invalid phase timeout",
-			env: mergeEnv(base, map[string]string{
-				copyTimeoutEnv: "0s",
-			}),
-			wantErr: copyTimeoutEnv,
+			name:    "rejects address without port",
+			args:    []string{"--http-address=localhost"},
+			wantErr: "--http-address",
 		},
 		{
-			name: "rejects invalid insecure transport flag",
-			env: mergeEnv(base, map[string]string{
-				cd2InsecureEnv: "sometimes",
-			}),
-			wantErr: cd2InsecureEnv,
+			name:    "rejects relative database path",
+			args:    []string{"--database-path=state.sqlite"},
+			wantErr: "--database-path",
+		},
+		{
+			name:    "rejects unknown flag",
+			args:    []string{"--unknown"},
+			wantErr: "flag provided but not defined",
+		},
+		{
+			name:    "rejects positional argument",
+			args:    []string{"extra"},
+			wantErr: "unexpected positional argument",
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := load(mapLookup(test.env))
+			got, err := Parse(test.args)
 			if test.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
-					t.Fatalf("load() error = %v, want error containing %q", err, test.wantErr)
+					t.Fatalf("Parse(%q) error = %v, want error containing %q", test.args, err, test.wantErr)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("load() error = %v", err)
+				t.Fatalf("Parse(%q) error = %v", test.args, err)
 			}
 			if got != test.want {
-				t.Fatalf("load() = %#v, want %#v", got, test.want)
+				t.Fatalf("Parse(%q) = %#v, want %#v", test.args, got, test.want)
 			}
 		})
 	}
 }
 
-func TestLoadRejectsMissingCredentialsWithoutLeakingSecrets(t *testing.T) {
-	secrets := []string{
-		"cd2-username-secret",
-		"cd2-password-secret",
+func TestParseHelp(t *testing.T) {
+	if _, err := Parse([]string{"-h"}); !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("Parse(-h) error = %v, want flag.ErrHelp", err)
 	}
-	base := map[string]string{
-		cd2AddressEnv:  "cd2.example:443",
-		cd2UsernameEnv: secrets[0],
-		cd2PasswordEnv: secrets[1],
-	}
-
-	for _, missing := range []string{cd2AddressEnv, cd2UsernameEnv, cd2PasswordEnv} {
-		t.Run(missing, func(t *testing.T) {
-			env := mergeEnv(base, map[string]string{missing: " \t "})
-			_, err := load(mapLookup(env))
-			if err == nil {
-				t.Fatal("load() error = nil, want required-value error")
-			}
-			if !strings.Contains(err.Error(), missing) {
-				t.Fatalf("load() error = %q, want name %q", err, missing)
-			}
-			for _, secret := range secrets {
-				if strings.Contains(err.Error(), secret) {
-					t.Fatalf("load() error leaked secret %q: %q", secret, err)
-				}
-			}
-		})
-	}
-}
-
-func mapLookup(values map[string]string) func(string) (string, bool) {
-	return func(name string) (string, bool) {
-		value, ok := values[name]
-		return value, ok
-	}
-}
-
-func mergeEnv(base, overrides map[string]string) map[string]string {
-	result := make(map[string]string, len(base)+len(overrides))
-	for name, value := range base {
-		result[name] = value
-	}
-	for name, value := range overrides {
-		result[name] = value
-	}
-	return result
 }

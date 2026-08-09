@@ -144,6 +144,60 @@ type Strings struct {
 	PasswordTooShort     string
 	PasswordMismatch     string
 	PasswordWrongCurrent string
+
+	// Setup wizard
+	SetupTitle             string
+	SetupStepFormat        string // printf with the current step number
+	SetupPasswordLede      string
+	SetupConfirmPassword   string
+	SetupSetPassword       string
+	SetupAlreadyConfigured string
+	CD2Address             string
+	CD2Insecure            string
+	CD2InsecureHint        string
+	CloudRootLabel         string
+	LocalRootLabel         string
+	CloudRootHint          string
+	LocalRootHint          string
+	TestButton             string
+	ContinueButton         string
+	FinishButton           string
+	OfflineTimeoutLabel    string
+	CopyTimeoutLabel       string
+	VerifyTimeoutLabel     string
+	TimeoutFormatHint      string
+	AdvancedSettings       string
+
+	// Setup & settings validation and test results
+	TestPassed           string
+	TestUnreachable      string // printf with the CloudDrive2 address
+	TestTLS              string
+	TestAuth             string
+	TestOther            string
+	AddressRequired      string
+	AddressInvalid       string
+	UsernameRequired     string
+	CD2PasswordRequired  string
+	CloudRootInvalid     string
+	LocalRootInvalid     string
+	CloudRootUnverified  string
+	CloudRootNotDir      string
+	LocalRootNotWritable string
+	TimeoutInvalid       string
+	ActivationFailed     string
+
+	// Settings page
+	NavSettings             string
+	TitleSettings           string
+	SettingsLede            string
+	SettingsSectionCD2      string
+	SettingsSectionPaths    string
+	SettingsSectionTimeouts string
+	CD2PasswordKeep         string
+	SettingsSaveButton      string
+	SettingsSaved           string
+	SettingsApplyFailed     string
+	SettingsFrozenPathsNote string
 }
 
 var stringsEN = Strings{
@@ -153,7 +207,7 @@ var stringsEN = Strings{
 	SwitchLang:    "中文",
 
 	TitleSignIn: "Sign in",
-	LoginHint:   "Initial credentials are admin / adminadmin. The password can be changed after signing in.",
+	LoginHint:   "Sign in with the operator password set during initial setup.",
 	Username:    "Username",
 	Password:    "Password",
 	SignIn:      "Sign in",
@@ -264,6 +318,57 @@ var stringsEN = Strings{
 	PasswordTooShort:     "The new password must be at least 8 characters long.",
 	PasswordMismatch:     "The two new password entries do not match.",
 	PasswordWrongCurrent: "The current password is incorrect.",
+
+	SetupTitle:             "Initial setup",
+	SetupStepFormat:        "Step %d of 4",
+	SetupPasswordLede:      "The operator password is used to sign in to this interface and by Sonarr and Radarr.",
+	SetupConfirmPassword:   "Confirm password",
+	SetupSetPassword:       "Set password and continue",
+	SetupAlreadyConfigured: "Setup has already been completed. You can sign in with the operator password.",
+	CD2Address:             "CloudDrive2 address",
+	CD2Insecure:            "Allow insecure connection (plain HTTP)",
+	CD2InsecureHint:        "Enable when CloudDrive2 does not serve TLS.",
+	CloudRootLabel:         "Cloud root path",
+	LocalRootLabel:         "Local root path",
+	CloudRootHint:          "Absolute path of the cloud directory that holds the downloads, for example /cloud.",
+	LocalRootHint:          "Absolute local directory for staging, for example /data/downloads.",
+	TestButton:             "Test connection",
+	ContinueButton:         "Continue",
+	FinishButton:           "Finish setup",
+	OfflineTimeoutLabel:    "Offline download timeout",
+	CopyTimeoutLabel:       "Copy timeout",
+	VerifyTimeoutLabel:     "Local verify timeout",
+	TimeoutFormatHint:      "Go durations, for example 24h, 72h, 10m.",
+	AdvancedSettings:       "Advanced settings",
+
+	TestPassed:           "All checks passed.",
+	TestUnreachable:      "Could not reach CloudDrive2 at %s. Check the address and the network.",
+	TestTLS:              "The TLS connection to CloudDrive2 failed. If it serves plain HTTP, enable the insecure option.",
+	TestAuth:             "CloudDrive2 rejected the username or password.",
+	TestOther:            "The CloudDrive2 connection test failed.",
+	AddressRequired:      "The CloudDrive2 address is required.",
+	AddressInvalid:       "The CloudDrive2 address must be host:port with a port from 1 to 65535.",
+	UsernameRequired:     "The CloudDrive2 username is required.",
+	CD2PasswordRequired:  "The CloudDrive2 password is required.",
+	CloudRootInvalid:     "The cloud root must be an absolute clean path such as /cloud.",
+	LocalRootInvalid:     "The local root must be an absolute clean path such as /data/downloads.",
+	CloudRootUnverified:  "The cloud root directory could not be verified.",
+	CloudRootNotDir:      "The cloud root path is not a directory.",
+	LocalRootNotWritable: "The local root is not writable or does not exist.",
+	TimeoutInvalid:       "Timeouts must be positive durations such as 24h or 10m.",
+	ActivationFailed:     "The settings were saved, but activating them failed. Restart the service to apply them.",
+
+	NavSettings:             "Settings",
+	TitleSettings:           "Settings",
+	SettingsLede:            "Connection and path settings are tested before they are saved and take effect immediately.",
+	SettingsSectionCD2:      "CloudDrive2 connection",
+	SettingsSectionPaths:    "Paths",
+	SettingsSectionTimeouts: "Timeouts",
+	CD2PasswordKeep:         "Leave empty to keep the stored password.",
+	SettingsSaveButton:      "Save settings",
+	SettingsSaved:           "Settings saved and applied.",
+	SettingsApplyFailed:     "The settings were saved, but applying them failed. They will take effect after a restart.",
+	SettingsFrozenPathsNote: "Path changes never affect downloads that have already been accepted; those keep the paths recorded at accept time.",
 }
 
 var stringsZH = Strings{
@@ -273,7 +378,7 @@ var stringsZH = Strings{
 	SwitchLang:    "English",
 
 	TitleSignIn: "登录",
-	LoginHint:   "初始用户名为 admin，密码为 adminadmin；登录后可修改密码。",
+	LoginHint:   "请使用初始设置时设定的操作员密码登录。",
 	Username:    "用户名",
 	Password:    "密码",
 	SignIn:      "登录",
@@ -384,6 +489,57 @@ var stringsZH = Strings{
 	PasswordTooShort:     "新密码长度至少为 8 个字符。",
 	PasswordMismatch:     "两次输入的新密码不一致。",
 	PasswordWrongCurrent: "当前密码不正确。",
+
+	SetupTitle:             "初始设置",
+	SetupStepFormat:        "第 %d 步，共 4 步",
+	SetupPasswordLede:      "操作员密码用于登录本界面，Sonarr 和 Radarr 连接 CD211 时也使用此密码。",
+	SetupConfirmPassword:   "确认密码",
+	SetupSetPassword:       "设置密码并继续",
+	SetupAlreadyConfigured: "初始设置已完成，可以使用操作员密码登录。",
+	CD2Address:             "CloudDrive2 地址",
+	CD2Insecure:            "允许不安全连接（明文 HTTP）",
+	CD2InsecureHint:        "如果 CloudDrive2 使用明文 HTTP，请启用此选项。",
+	CloudRootLabel:         "云端根目录",
+	LocalRootLabel:         "本地根目录",
+	CloudRootHint:          "下载内容在云端的存放目录，须使用绝对路径，例如 /cloud。",
+	LocalRootHint:          "本地暂存目录的绝对路径，例如 /data/downloads。",
+	TestButton:             "测试连接",
+	ContinueButton:         "继续",
+	FinishButton:           "完成设置",
+	OfflineTimeoutLabel:    "离线下载超时",
+	CopyTimeoutLabel:       "复制超时",
+	VerifyTimeoutLabel:     "本地校验超时",
+	TimeoutFormatHint:      "请输入时长，例如 24h（24 小时）或 10m（10 分钟）。",
+	AdvancedSettings:       "高级设置",
+
+	TestPassed:           "所有检查均已通过。",
+	TestUnreachable:      "无法连接地址 %s 上的 CloudDrive2，请检查地址和网络。",
+	TestTLS:              "CloudDrive2 的 TLS 连接失败。如果 CloudDrive2 使用明文 HTTP，请启用“允许不安全连接”选项。",
+	TestAuth:             "CloudDrive2 拒绝了登录请求，请检查用户名和密码。",
+	TestOther:            "CloudDrive2 连接测试失败。",
+	AddressRequired:      "请填写 CloudDrive2 地址。",
+	AddressInvalid:       "CloudDrive2 地址格式应为“主机名:端口”，端口范围为 1–65535。",
+	UsernameRequired:     "请填写 CloudDrive2 用户名。",
+	CD2PasswordRequired:  "请填写 CloudDrive2 密码。",
+	CloudRootInvalid:     "云端根目录必须是规范的绝对路径，例如 /cloud。",
+	LocalRootInvalid:     "本地根目录必须是规范的绝对路径，例如 /data/downloads。",
+	CloudRootUnverified:  "无法确认云端根目录是否可用。",
+	CloudRootNotDir:      "指定的云端根目录不是目录。",
+	LocalRootNotWritable: "本地根目录不存在或不可写。",
+	TimeoutInvalid:       "超时时间必须大于 0，例如 24h 或 10m。",
+	ActivationFailed:     "设置已保存，但未能生效。请重启服务以应用设置。",
+
+	NavSettings:             "设置",
+	TitleSettings:           "设置",
+	SettingsLede:            "保存前会先测试连接和路径设置，保存后立即生效。",
+	SettingsSectionCD2:      "CloudDrive2 连接",
+	SettingsSectionPaths:    "路径",
+	SettingsSectionTimeouts: "超时",
+	CD2PasswordKeep:         "留空则保留当前密码。",
+	SettingsSaveButton:      "保存设置",
+	SettingsSaved:           "设置已保存并生效。",
+	SettingsApplyFailed:     "设置已保存，但未能立即生效；重启服务后将自动生效。",
+	SettingsFrozenPathsNote: "修改路径不会影响已有任务，这些任务将继续使用创建时记录的路径。",
 }
 
 // tr returns the string table for lang, defaulting to English.
