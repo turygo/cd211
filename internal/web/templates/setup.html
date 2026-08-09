@@ -19,18 +19,34 @@
         <ol class="setup-stepper">
           <li class="setup-step{{if lt 1 .Step}} is-complete{{else if eq 1 .Step}} is-current{{end}}" {{if eq .Step 1}}aria-current="step"{{end}}>
             <span class="setup-step-node" aria-hidden="true">01</span>
+            <span class="setup-step-copy">
+              <span class="setup-step-title">{{.Str.SetupStepPasswordTitle}}</span>
+              <span class="setup-step-detail">{{.Str.SetupStepPasswordDetail}}</span>
+            </span>
             <span class="visually-hidden">{{printf .Str.SetupStepFormat 1}}</span>
           </li>
           <li class="setup-step{{if lt 2 .Step}} is-complete{{else if eq 2 .Step}} is-current{{end}}" {{if eq .Step 2}}aria-current="step"{{end}}>
             <span class="setup-step-node" aria-hidden="true">02</span>
+            <span class="setup-step-copy">
+              <span class="setup-step-title">{{.Str.SetupStepCD2Title}}</span>
+              <span class="setup-step-detail">{{.Str.SetupStepCD2Detail}}</span>
+            </span>
             <span class="visually-hidden">{{printf .Str.SetupStepFormat 2}}</span>
           </li>
           <li class="setup-step{{if lt 3 .Step}} is-complete{{else if eq 3 .Step}} is-current{{end}}" {{if eq .Step 3}}aria-current="step"{{end}}>
             <span class="setup-step-node" aria-hidden="true">03</span>
+            <span class="setup-step-copy">
+              <span class="setup-step-title">{{.Str.SetupStepPathsTitle}}</span>
+              <span class="setup-step-detail">{{.Str.SetupStepPathsDetail}}</span>
+            </span>
             <span class="visually-hidden">{{printf .Str.SetupStepFormat 3}}</span>
           </li>
           <li class="setup-step{{if lt 4 .Step}} is-complete{{else if eq 4 .Step}} is-current{{end}}" {{if eq .Step 4}}aria-current="step"{{end}}>
             <span class="setup-step-node" aria-hidden="true">04</span>
+            <span class="setup-step-copy">
+              <span class="setup-step-title">{{.Str.SetupStepReviewTitle}}</span>
+              <span class="setup-step-detail">{{.Str.SetupStepReviewDetail}}</span>
+            </span>
             <span class="visually-hidden">{{printf .Str.SetupStepFormat 4}}</span>
           </li>
         </ol>
@@ -41,8 +57,10 @@
         {{if .AlreadyConfigured}}
         <p class="setup-configured">{{.Str.SetupAlreadyConfigured}}</p>
         {{else}}
-        {{if .Error}}<div class="notice notice-error" role="alert">{{.Error}}</div>{{end}}
-        {{if .Success}}<div class="notice notice-success" role="status">{{.Success}}</div>{{end}}
+        <div class="setup-feedback" aria-live="polite">
+          {{if .Error}}<div class="notice notice-error" role="alert">{{.Error}}</div>{{end}}
+          {{if .Success}}<div class="notice notice-success" role="status">{{.Success}}</div>{{end}}
+        </div>
 
         {{if eq .Step 1}}
         <form action="/setup/password" method="post" class="setup-form">
@@ -62,7 +80,7 @@
         {{end}}
 
         {{if eq .Step 2}}
-        <form action="/setup/cd2/test" method="post" class="setup-form">
+        <form action="/setup/cd2/test" method="post" class="setup-form" data-preserve-test-fields>
           <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
           <div class="setup-field">
             <label for="cd2-address">{{.Str.CD2Address}}</label>
@@ -88,17 +106,73 @@
         {{end}}
 
         {{if eq .Step 3}}
-        <form action="/setup/paths/test" method="post" class="setup-form">
+        <form action="/setup/paths/test" method="post" class="setup-form" data-preserve-test-fields>
           <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
           <div class="setup-field">
             <label for="cloud-root">{{.Str.CloudRootLabel}}</label>
-            <input id="cloud-root" name="cloud_root" type="text" value="{{.Values.CloudRoot}}" placeholder="/cloud" required autofocus>
-            <p class="form-hint">{{.Str.CloudRootHint}}</p>
+            <input id="cloud-root" name="cloud_root" type="text" value="{{.Values.CloudRoot}}" placeholder="{{.Str.CloudDirectoryNoneSelected}}" aria-describedby="cloud-root-hint" required readonly>
+            <p class="form-hint" id="cloud-root-hint">{{.Str.CloudRootHint}}</p>
+            <div class="cloud-picker"
+                 data-directory-picker
+                 data-input="#cloud-root"
+                 data-list-url="/setup/cloud-directories"
+                 data-create-url="/setup/cloud-directories"
+                 data-csrf="{{.CSRFToken}}"
+                 data-start-path="{{if .Values.CloudRoot}}{{.Values.CloudRoot}}{{else}}/{{end}}"
+                 data-loading="{{.Str.CloudDirectoryLoading}}"
+                 data-empty="{{.Str.CloudDirectoryEmpty}}"
+                 data-list-error="{{.Str.CloudDirectoryListFailed}}"
+                 data-create-error="{{.Str.CloudDirectoryCreateFailed}}">
+              <div class="cloud-picker-toolbar">
+                <button class="cloud-picker-up" type="button" data-directory-up>{{.Str.CloudDirectoryUp}}</button>
+                <span class="visually-hidden">{{.Str.CloudDirectoryCurrent}}</span>
+                <code data-directory-path>/</code>
+              </div>
+              <div class="cloud-picker-list" data-directory-list aria-live="polite">
+                <p class="cloud-picker-status">{{.Str.CloudDirectoryLoading}}</p>
+              </div>
+              <div class="cloud-picker-create">
+                <label for="cloud-new-folder">{{.Str.CloudDirectoryCreateLabel}}</label>
+                <div>
+                  <input id="cloud-new-folder" type="text" data-directory-name placeholder="{{.Str.CloudDirectoryCreatePlaceholder}}">
+                  <button class="button button-secondary" type="button" data-directory-create>{{.Str.CloudDirectoryCreateButton}}</button>
+                </div>
+              </div>
+              <button class="cloud-picker-select" type="button" data-directory-select>{{.Str.CloudDirectorySelect}}</button>
+            </div>
           </div>
           <div class="setup-field">
             <label for="local-root">{{.Str.LocalRootLabel}}</label>
-            <input id="local-root" name="local_root" type="text" value="{{.Values.LocalRoot}}" placeholder="/data/downloads" required>
-            <p class="form-hint">{{.Str.LocalRootHint}}</p>
+            <input id="local-root" name="local_root" type="text" value="{{.Values.LocalRoot}}" placeholder="{{.Str.CloudDirectoryNoneSelected}}" aria-describedby="local-root-hint" required readonly>
+            <p class="form-hint" id="local-root-hint">{{.Str.LocalRootHint}}</p>
+            <div class="cloud-picker"
+                 data-directory-picker
+                 data-input="#local-root"
+                 data-list-url="/setup/local-directories"
+                 data-create-url="/setup/local-directories"
+                 data-csrf="{{.CSRFToken}}"
+                 data-start-path="{{if .Values.LocalRoot}}{{.Values.LocalRoot}}{{else}}/{{end}}"
+                 data-loading="{{.Str.CloudDirectoryLoading}}"
+                 data-empty="{{.Str.CloudDirectoryEmpty}}"
+                 data-list-error="{{.Str.LocalDirectoryListFailed}}"
+                 data-create-error="{{.Str.LocalDirectoryCreateFailed}}">
+              <div class="cloud-picker-toolbar">
+                <button class="cloud-picker-up" type="button" data-directory-up>{{.Str.CloudDirectoryUp}}</button>
+                <span class="visually-hidden">{{.Str.CloudDirectoryCurrent}}</span>
+                <code data-directory-path>/</code>
+              </div>
+              <div class="cloud-picker-list" data-directory-list aria-live="polite">
+                <p class="cloud-picker-status">{{.Str.CloudDirectoryLoading}}</p>
+              </div>
+              <div class="cloud-picker-create">
+                <label for="local-new-folder">{{.Str.CloudDirectoryCreateLabel}}</label>
+                <div>
+                  <input id="local-new-folder" type="text" data-directory-name placeholder="{{.Str.CloudDirectoryCreatePlaceholder}}">
+                  <button class="button button-secondary" type="button" data-directory-create>{{.Str.CloudDirectoryCreateButton}}</button>
+                </div>
+              </div>
+              <button class="cloud-picker-select" type="button" data-directory-select>{{.Str.CloudDirectorySelect}}</button>
+            </div>
           </div>
           <div class="setup-actions">
             <button class="button button-secondary" type="submit" name="action" value="test">{{.Str.TestButton}}</button>

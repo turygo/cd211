@@ -146,27 +146,53 @@ type Strings struct {
 	PasswordWrongCurrent string
 
 	// Setup wizard
-	SetupTitle             string
-	SetupStepFormat        string // printf with the current step number
-	SetupPasswordLede      string
-	SetupConfirmPassword   string
-	SetupSetPassword       string
-	SetupAlreadyConfigured string
-	CD2Address             string
-	CD2Insecure            string
-	CD2InsecureHint        string
-	CloudRootLabel         string
-	LocalRootLabel         string
-	CloudRootHint          string
-	LocalRootHint          string
-	TestButton             string
-	ContinueButton         string
-	FinishButton           string
-	OfflineTimeoutLabel    string
-	CopyTimeoutLabel       string
-	VerifyTimeoutLabel     string
-	TimeoutFormatHint      string
-	AdvancedSettings       string
+	SetupTitle                       string
+	SetupStepFormat                  string // printf with the current step number
+	SetupStepPasswordTitle           string
+	SetupStepPasswordDetail          string
+	SetupStepCD2Title                string
+	SetupStepCD2Detail               string
+	SetupStepPathsTitle              string
+	SetupStepPathsDetail             string
+	SetupStepReviewTitle             string
+	SetupStepReviewDetail            string
+	SetupPasswordLede                string
+	SetupConfirmPassword             string
+	SetupSetPassword                 string
+	SetupAlreadyConfigured           string
+	CD2Address                       string
+	CD2Insecure                      string
+	CD2InsecureHint                  string
+	CloudRootLabel                   string
+	LocalRootLabel                   string
+	CloudRootHint                    string
+	LocalRootHint                    string
+	CloudDirectoryUp                 string
+	CloudDirectoryCurrent            string
+	CloudDirectorySelect             string
+	CloudDirectoryNoneSelected       string
+	CloudDirectoryCreateLabel        string
+	CloudDirectoryCreatePlaceholder  string
+	CloudDirectoryCreateButton       string
+	CloudDirectoryLoading            string
+	CloudDirectoryEmpty              string
+	CloudDirectoryListFailed         string
+	CloudDirectoryCreateFailed       string
+	CloudDirectoryPathInvalid        string
+	CloudDirectoryNameInvalid        string
+	CloudDirectoryConnectionRequired string
+	LocalDirectoryListFailed         string
+	LocalDirectoryCreateFailed       string
+	LocalDirectoryPathInvalid        string
+	SetupSessionExpired              string
+	TestButton                       string
+	ContinueButton                   string
+	FinishButton                     string
+	OfflineTimeoutLabel              string
+	CopyTimeoutLabel                 string
+	VerifyTimeoutLabel               string
+	TimeoutFormatHint                string
+	AdvancedSettings                 string
 
 	// Setup & settings validation and test results
 	TestPassed           string
@@ -319,27 +345,53 @@ var stringsEN = Strings{
 	PasswordMismatch:     "The two new password entries do not match.",
 	PasswordWrongCurrent: "The current password is incorrect.",
 
-	SetupTitle:             "Initial setup",
-	SetupStepFormat:        "Step %d of 4",
-	SetupPasswordLede:      "The operator password is used to sign in to this interface and by Sonarr and Radarr.",
-	SetupConfirmPassword:   "Confirm password",
-	SetupSetPassword:       "Set password and continue",
-	SetupAlreadyConfigured: "Setup has already been completed. You can sign in with the operator password.",
-	CD2Address:             "CloudDrive2 address",
-	CD2Insecure:            "Allow insecure connection (plain HTTP)",
-	CD2InsecureHint:        "Enable when CloudDrive2 does not serve TLS.",
-	CloudRootLabel:         "Cloud root path",
-	LocalRootLabel:         "Local root path",
-	CloudRootHint:          "Absolute path of the cloud directory that holds the downloads, for example /cloud.",
-	LocalRootHint:          "Absolute local directory for staging, for example /data/downloads.",
-	TestButton:             "Test connection",
-	ContinueButton:         "Continue",
-	FinishButton:           "Finish setup",
-	OfflineTimeoutLabel:    "Offline download timeout",
-	CopyTimeoutLabel:       "Copy timeout",
-	VerifyTimeoutLabel:     "Local verify timeout",
-	TimeoutFormatHint:      "Go durations, for example 24h, 72h, 10m.",
-	AdvancedSettings:       "Advanced settings",
+	SetupTitle:                       "Initial setup",
+	SetupStepFormat:                  "Step %d of 4",
+	SetupStepPasswordTitle:           "Operator password",
+	SetupStepPasswordDetail:          "Secure the interface and API.",
+	SetupStepCD2Title:                "CloudDrive2",
+	SetupStepCD2Detail:               "Connect and verify the service.",
+	SetupStepPathsTitle:              "Storage paths",
+	SetupStepPathsDetail:             "Map the cloud and local roots.",
+	SetupStepReviewTitle:             "Review",
+	SetupStepReviewDetail:            "Check settings and finish.",
+	SetupPasswordLede:                "The operator password is used to sign in to this interface and by Sonarr and Radarr.",
+	SetupConfirmPassword:             "Confirm password",
+	SetupSetPassword:                 "Set password and continue",
+	SetupAlreadyConfigured:           "Setup has already been completed. You can sign in with the operator password.",
+	CD2Address:                       "CloudDrive2 address",
+	CD2Insecure:                      "Allow insecure connection (plain HTTP)",
+	CD2InsecureHint:                  "Enable when CloudDrive2 does not serve TLS.",
+	CloudRootLabel:                   "CloudDrive2 download folder",
+	LocalRootLabel:                   "Local staging folder",
+	CloudRootHint:                    "CloudDrive2 saves offline downloads here before CD211 copies them to local staging.",
+	LocalRootHint:                    "CD211 stages files copied from CloudDrive2 here. Choose a folder that CD211 can access at the same path used by Sonarr and Radarr.",
+	CloudDirectoryUp:                 "Up one level",
+	CloudDirectoryCurrent:            "Browsing",
+	CloudDirectorySelect:             "Use this folder",
+	CloudDirectoryNoneSelected:       "No folder selected",
+	CloudDirectoryCreateLabel:        "Create a folder here",
+	CloudDirectoryCreatePlaceholder:  "Folder name",
+	CloudDirectoryCreateButton:       "Create",
+	CloudDirectoryLoading:            "Loading folders…",
+	CloudDirectoryEmpty:              "No subfolders here.",
+	CloudDirectoryListFailed:         "Could not load CloudDrive2 folders. Check the connection and try again.",
+	CloudDirectoryCreateFailed:       "Could not create the folder in CloudDrive2.",
+	CloudDirectoryPathInvalid:        "The CloudDrive2 folder path is invalid.",
+	CloudDirectoryNameInvalid:        "Enter a folder name without slashes.",
+	CloudDirectoryConnectionRequired: "Complete the CloudDrive2 connection step before choosing a download folder.",
+	LocalDirectoryListFailed:         "Could not read local folders. Check that CD211 has access to this path.",
+	LocalDirectoryCreateFailed:       "Could not create the local folder. Check the parent folder permissions.",
+	LocalDirectoryPathInvalid:        "The local folder path is invalid.",
+	SetupSessionExpired:              "The setup session expired. Return to setup and sign in again.",
+	TestButton:                       "Test connection",
+	ContinueButton:                   "Continue",
+	FinishButton:                     "Finish setup",
+	OfflineTimeoutLabel:              "Offline download timeout",
+	CopyTimeoutLabel:                 "Copy timeout",
+	VerifyTimeoutLabel:               "Local verify timeout",
+	TimeoutFormatHint:                "Go durations, for example 24h, 72h, 10m.",
+	AdvancedSettings:                 "Advanced settings",
 
 	TestPassed:           "All checks passed.",
 	TestUnreachable:      "Could not reach CloudDrive2 at %s. Check the address and the network.",
@@ -490,27 +542,53 @@ var stringsZH = Strings{
 	PasswordMismatch:     "两次输入的新密码不一致。",
 	PasswordWrongCurrent: "当前密码不正确。",
 
-	SetupTitle:             "初始设置",
-	SetupStepFormat:        "第 %d 步，共 4 步",
-	SetupPasswordLede:      "操作员密码用于登录本界面，Sonarr 和 Radarr 连接 CD211 时也使用此密码。",
-	SetupConfirmPassword:   "确认密码",
-	SetupSetPassword:       "设置密码并继续",
-	SetupAlreadyConfigured: "初始设置已完成，可以使用操作员密码登录。",
-	CD2Address:             "CloudDrive2 地址",
-	CD2Insecure:            "允许不安全连接（明文 HTTP）",
-	CD2InsecureHint:        "如果 CloudDrive2 使用明文 HTTP，请启用此选项。",
-	CloudRootLabel:         "云端根目录",
-	LocalRootLabel:         "本地根目录",
-	CloudRootHint:          "下载内容在云端的存放目录，须使用绝对路径，例如 /cloud。",
-	LocalRootHint:          "本地暂存目录的绝对路径，例如 /data/downloads。",
-	TestButton:             "测试连接",
-	ContinueButton:         "继续",
-	FinishButton:           "完成设置",
-	OfflineTimeoutLabel:    "离线下载超时",
-	CopyTimeoutLabel:       "复制超时",
-	VerifyTimeoutLabel:     "本地校验超时",
-	TimeoutFormatHint:      "请输入时长，例如 24h（24 小时）或 10m（10 分钟）。",
-	AdvancedSettings:       "高级设置",
+	SetupTitle:                       "初始设置",
+	SetupStepFormat:                  "第 %d 步，共 4 步",
+	SetupStepPasswordTitle:           "操作员密码",
+	SetupStepPasswordDetail:          "保护管理界面与 API",
+	SetupStepCD2Title:                "云盘连接",
+	SetupStepCD2Detail:               "配置并测试 CloudDrive2 连接",
+	SetupStepPathsTitle:              "存储路径",
+	SetupStepPathsDetail:             "设置云端与本地目录",
+	SetupStepReviewTitle:             "确认配置",
+	SetupStepReviewDetail:            "检查无误后完成设置",
+	SetupPasswordLede:                "操作员密码用于登录本界面，Sonarr 和 Radarr 连接 CD211 时也使用此密码。",
+	SetupConfirmPassword:             "确认密码",
+	SetupSetPassword:                 "设置密码并继续",
+	SetupAlreadyConfigured:           "初始设置已完成，可以使用操作员密码登录。",
+	CD2Address:                       "CloudDrive2 地址",
+	CD2Insecure:                      "允许不安全连接（明文 HTTP）",
+	CD2InsecureHint:                  "如果 CloudDrive2 使用明文 HTTP，请启用此选项。",
+	CloudRootLabel:                   "CloudDrive2 下载目录",
+	LocalRootLabel:                   "本地暂存目录",
+	CloudRootHint:                    "CloudDrive2 会先将离线下载的内容保存到此目录，再由 CD211 复制到本地暂存目录。",
+	LocalRootHint:                    "CD211 会将从 CloudDrive2 复制的内容暂存于此；请选择 CD211 可访问的目录，并在 Sonarr 和 Radarr 中使用相同的路径。",
+	CloudDirectoryUp:                 "返回上一级",
+	CloudDirectoryCurrent:            "正在浏览",
+	CloudDirectorySelect:             "使用此目录",
+	CloudDirectoryNoneSelected:       "尚未选择目录",
+	CloudDirectoryCreateLabel:        "在此新建目录",
+	CloudDirectoryCreatePlaceholder:  "目录名称",
+	CloudDirectoryCreateButton:       "新建",
+	CloudDirectoryLoading:            "正在加载目录…",
+	CloudDirectoryEmpty:              "此处没有子目录。",
+	CloudDirectoryListFailed:         "无法读取 CloudDrive2 目录，请检查连接后重试。",
+	CloudDirectoryCreateFailed:       "无法在 CloudDrive2 中新建目录。",
+	CloudDirectoryPathInvalid:        "CloudDrive2 目录路径无效。",
+	CloudDirectoryNameInvalid:        "请输入不含斜杠的目录名称。",
+	CloudDirectoryConnectionRequired: "请先完成 CloudDrive2 连接设置，再选择下载目录。",
+	LocalDirectoryListFailed:         "无法读取本地目录，请确认 CD211 有权访问此路径。",
+	LocalDirectoryCreateFailed:       "无法新建本地目录，请检查上级目录的权限。",
+	LocalDirectoryPathInvalid:        "本地目录路径无效。",
+	SetupSessionExpired:              "设置会话已过期，请返回初始设置页面并重新登录。",
+	TestButton:                       "测试连接",
+	ContinueButton:                   "继续",
+	FinishButton:                     "完成设置",
+	OfflineTimeoutLabel:              "离线下载超时",
+	CopyTimeoutLabel:                 "复制超时",
+	VerifyTimeoutLabel:               "本地校验超时",
+	TimeoutFormatHint:                "请输入时长，例如 24h（24 小时）或 10m（10 分钟）。",
+	AdvancedSettings:                 "高级设置",
 
 	TestPassed:           "所有检查均已通过。",
 	TestUnreachable:      "无法连接地址 %s 上的 CloudDrive2，请检查地址和网络。",

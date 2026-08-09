@@ -39,6 +39,10 @@ func (f *fakeRPC) GetToken(ctx context.Context, req *pb.GetTokenRequest, _ ...gr
 	return f.getToken(ctx, req)
 }
 
+func (f *fakeRPC) GetSubFiles(context.Context, *pb.ListSubFileRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[pb.SubFilesReply], error) {
+	return nil, status.Error(codes.Unimplemented, "not implemented")
+}
+
 // FindFileByPath and CreateFolder default to "the offline folder is already
 // there", so tests that predate the folder check keep their original meaning
 // and only folder-specific tests have to wire these up.

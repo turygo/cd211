@@ -2,10 +2,13 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path"
 	"slices"
 	"strings"
 	"sync"
@@ -100,6 +103,7 @@ type fakeTester struct {
 	statErr  error
 	statPath string
 	closed   int
+	dial     *fakeDial
 }
 
 func (t *fakeTester) Authenticate(ctx context.Context) error { return t.authErr }
@@ -111,6 +115,25 @@ func (t *fakeTester) StatDirectory(ctx context.Context, fullPath string) error {
 	return t.statErr
 }
 
+func (t *fakeTester) ListDirectories(ctx context.Context, fullPath string) ([]clouddrive.Directory, error) {
+	t.dial.mu.Lock()
+	defer t.dial.mu.Unlock()
+	if t.dial.listErr != nil {
+		return nil, t.dial.listErr
+	}
+	return slices.Clone(t.dial.directories), nil
+}
+
+func (t *fakeTester) CreateDirectory(ctx context.Context, parentPath, name string) (clouddrive.Directory, error) {
+	t.dial.mu.Lock()
+	defer t.dial.mu.Unlock()
+	t.dial.createCalls = append(t.dial.createCalls, fakeDirectoryCreateCall{parentPath: parentPath, name: name})
+	if t.dial.createErr != nil {
+		return clouddrive.Directory{}, t.dial.createErr
+	}
+	return clouddrive.Directory{Name: name, Path: path.Join(parentPath, name)}, nil
+}
+
 func (t *fakeTester) Close() error { t.closed++; return nil }
 
 type fakeDialCall struct {
@@ -119,13 +142,22 @@ type fakeDialCall struct {
 	insecure                    bool
 }
 
+type fakeDirectoryCreateCall struct {
+	parentPath string
+	name       string
+}
+
 type fakeDial struct {
-	mu       sync.Mutex
-	err      error
-	authErr  error
-	checkErr error
-	statErr  error
-	calls    []fakeDialCall
+	mu          sync.Mutex
+	err         error
+	authErr     error
+	checkErr    error
+	statErr     error
+	listErr     error
+	createErr   error
+	directories []clouddrive.Directory
+	calls       []fakeDialCall
+	createCalls []fakeDirectoryCreateCall
 }
 
 func (d *fakeDial) dial(address, username, password string, timeout time.Duration, insecure bool) (CloudTester, error) {
@@ -135,7 +167,7 @@ func (d *fakeDial) dial(address, username, password string, timeout time.Duratio
 	if d.err != nil {
 		return nil, d.err
 	}
-	return &fakeTester{authErr: d.authErr, checkErr: d.checkErr, statErr: d.statErr}, nil
+	return &fakeTester{authErr: d.authErr, checkErr: d.checkErr, statErr: d.statErr, dial: d}, nil
 }
 
 func (d *fakeDial) setAuthErr(err error) {
@@ -358,6 +390,96 @@ func TestSetupWizardHappyPath(t *testing.T) {
 	}
 }
 
+func TestSetupDirectoryPickers(t *testing.T) {
+	fixture := newSetupFixture(t)
+	fixture.dial.directories = []clouddrive.Directory{
+		{Name: "Downloads", Path: "/115/Downloads"},
+		{Name: "Media", Path: "/115/Media"},
+	}
+	sid, csrf := fixture.advancePassword()
+	advanced := fixture.post("/setup/cd2/test", sid, csrf, url.Values{
+		"action": {"continue"}, "address": {"cd2.example:443"}, "username": {"operator"},
+		"password": {"cd2-secret"},
+	})
+	requireStatus(t, advanced, http.StatusSeeOther)
+
+	page := fixture.get("/setup", sid)
+	requireStatus(t, page, http.StatusOK)
+	requireContains(t, page.Body.String(), "data-directory-picker", `readonly`, "/setup/cloud-directories", "/setup/local-directories")
+
+	listed := fixture.get("/setup/cloud-directories?path=%2F115", sid)
+	requireStatus(t, listed, http.StatusOK)
+	if contentType := listed.Header().Get("Content-Type"); contentType != "application/json; charset=utf-8" {
+		t.Errorf("Content-Type = %q, want JSON", contentType)
+	}
+	var listResponse cloudDirectoryResponse
+	if err := json.Unmarshal(listed.Body.Bytes(), &listResponse); err != nil {
+		t.Fatalf("decode list response: %v", err)
+	}
+	if listResponse.Path != "/115" || !slices.Equal(listResponse.Directories, fixture.dial.directories) {
+		t.Errorf("list response = %+v", listResponse)
+	}
+
+	created := fixture.post("/setup/cloud-directories", sid, csrf, url.Values{
+		"parent": {"/115"}, "name": {"CD211"},
+	})
+	requireStatus(t, created, http.StatusCreated)
+	var createResponse cloudDirectoryResponse
+	if err := json.Unmarshal(created.Body.Bytes(), &createResponse); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if createResponse.Directory == nil || *createResponse.Directory != (clouddrive.Directory{Name: "CD211", Path: "/115/CD211"}) {
+		t.Errorf("create response = %+v", createResponse)
+	}
+	fixture.dial.mu.Lock()
+	createCalls := slices.Clone(fixture.dial.createCalls)
+	fixture.dial.mu.Unlock()
+	if !slices.Equal(createCalls, []fakeDirectoryCreateCall{{parentPath: "/115", name: "CD211"}}) {
+		t.Errorf("create calls = %+v", createCalls)
+	}
+
+	localParent := t.TempDir()
+	existingPath := path.Join(localParent, "Existing")
+	if err := os.Mkdir(existingPath, 0o755); err != nil {
+		t.Fatalf("create existing local directory: %v", err)
+	}
+	if err := os.Mkdir(path.Join(localParent, ".hidden"), 0o755); err != nil {
+		t.Fatalf("create hidden local directory: %v", err)
+	}
+	linkPath := path.Join(localParent, "Linked")
+	if err := os.Symlink(existingPath, linkPath); err != nil {
+		t.Fatalf("create local directory symlink: %v", err)
+	}
+	localListed := fixture.get("/setup/local-directories?path="+url.QueryEscape(localParent), sid)
+	requireStatus(t, localListed, http.StatusOK)
+	var localListResponse cloudDirectoryResponse
+	if err := json.Unmarshal(localListed.Body.Bytes(), &localListResponse); err != nil {
+		t.Fatalf("decode local list response: %v", err)
+	}
+	wantLocalDirectories := []clouddrive.Directory{
+		{Name: "Existing", Path: existingPath},
+		{Name: "Linked", Path: linkPath},
+	}
+	if localListResponse.Path != localParent || !slices.Equal(localListResponse.Directories, wantLocalDirectories) {
+		t.Errorf("local list response = %+v, want path %q and %+v", localListResponse, localParent, wantLocalDirectories)
+	}
+
+	localCreated := fixture.post("/setup/local-directories", sid, csrf, url.Values{
+		"parent": {localParent}, "name": {"CD211"},
+	})
+	requireStatus(t, localCreated, http.StatusCreated)
+	createdPath := path.Join(localParent, "CD211")
+	info, err := os.Stat(createdPath)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("created local directory stat = (%v, %v)", info, err)
+	}
+
+	for _, target := range []string{"/setup/cloud-directories?path=%2F", "/setup/local-directories?path=%2F"} {
+		unauthorized := fixture.get(target, "")
+		requireStatus(t, unauthorized, http.StatusUnauthorized)
+	}
+}
+
 func TestSetupPasswordValidation(t *testing.T) {
 	fixture := newSetupFixture(t)
 
@@ -383,7 +505,7 @@ func TestSetupPasswordValidation(t *testing.T) {
 
 func TestSetupStepGatingWithoutSession(t *testing.T) {
 	fixture := newSetupFixture(t)
-	for _, target := range []string{"/setup/cd2/test", "/setup/paths/test", "/setup/finish"} {
+	for _, target := range []string{"/setup/cd2/test", "/setup/cloud-directories", "/setup/local-directories", "/setup/paths/test", "/setup/finish"} {
 		response := fixture.post(target, "", "", url.Values{"action": {"test"}, "address": {"cd2.example:443"}})
 		requireStatus(t, response, http.StatusSeeOther)
 		if location := response.Header().Get("Location"); location != "/setup" {
@@ -415,6 +537,14 @@ func TestSetupLaterStepsRequireCSRF(t *testing.T) {
 	sid, _ := fixture.advancePassword()
 	response := fixture.post("/setup/cd2/test", sid, "wrong-token", url.Values{
 		"action": {"test"}, "address": {"cd2.example:443"}, "username": {"operator"}, "password": {"cd2-secret"},
+	})
+	requireStatus(t, response, http.StatusForbidden)
+	response = fixture.post("/setup/cloud-directories", sid, "wrong-token", url.Values{
+		"parent": {"/115"}, "name": {"CD211"},
+	})
+	requireStatus(t, response, http.StatusForbidden)
+	response = fixture.post("/setup/local-directories", sid, "wrong-token", url.Values{
+		"parent": {t.TempDir()}, "name": {"CD211"},
 	})
 	requireStatus(t, response, http.StatusForbidden)
 }

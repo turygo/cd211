@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net"
+	"path"
+	"slices"
 	"testing"
 	"time"
 
@@ -27,6 +29,7 @@ type grpcContractServer struct {
 
 	statusCalls        int
 	tokenCalls         int
+	listDirectoryCalls int
 	findCalls          int
 	createFolderCalls  int
 	addOfflineCalls    int
@@ -63,6 +66,25 @@ func (s *grpcContractServer) GetToken(ctx context.Context, req *pb.GetTokenReque
 	}, nil
 }
 
+func (s *grpcContractServer) GetSubFiles(req *pb.ListSubFileRequest, stream grpc.ServerStreamingServer[pb.SubFilesReply]) error {
+	if err := requireContractAuthorization(stream.Context()); err != nil {
+		return err
+	}
+	if req.GetPath() != "/cloud" || req.GetForceRefresh() || req.CheckExpires != nil {
+		return status.Error(codes.InvalidArgument, "unexpected directory list request")
+	}
+	s.listDirectoryCalls++
+	if err := stream.Send(&pb.SubFilesReply{SubFiles: []*pb.CloudDriveFile{
+		{Name: "Zeta", FullPathName: "/cloud/Zeta", IsDirectory: true},
+		{Name: "movie.mkv", FullPathName: "/cloud/movie.mkv"},
+	}}); err != nil {
+		return err
+	}
+	return stream.Send(&pb.SubFilesReply{SubFiles: []*pb.CloudDriveFile{
+		{Name: "alpha", FullPathName: "/cloud/alpha", IsDirectory: true},
+	}})
+}
+
 func (s *grpcContractServer) FindFileByPath(ctx context.Context, req *pb.FindFileByPathRequest) (*pb.CloudDriveFile, error) {
 	if err := requireContractAuthorization(ctx); err != nil {
 		return nil, err
@@ -86,13 +108,16 @@ func (s *grpcContractServer) CreateFolder(ctx context.Context, req *pb.CreateFol
 	if err := requireContractAuthorization(ctx); err != nil {
 		return nil, err
 	}
-	if req.ParentPath != "/cloud" || req.FolderName != "folder" {
+	switch {
+	case req.ParentPath == "/cloud" && req.FolderName == "folder":
+		s.folderCreated = true
+	case req.ParentPath == "/cloud" && req.FolderName == "New":
+	default:
 		return nil, status.Error(codes.InvalidArgument, "unexpected create folder request")
 	}
 	s.createFolderCalls++
-	s.folderCreated = true
 	return &pb.CreateFolderResult{
-		FolderCreated: &pb.CloudDriveFile{Name: "folder", FullPathName: "/cloud/folder", IsDirectory: true},
+		FolderCreated: &pb.CloudDriveFile{Name: req.FolderName, FullPathName: path.Join(req.ParentPath, req.FolderName), IsDirectory: true},
 		Result:        &pb.FileOperationResult{Success: true},
 	}, nil
 }
@@ -245,6 +270,22 @@ func TestClientGRPCTransportContract(t *testing.T) {
 		t.Fatalf("FindFile response = %#v", file)
 	}
 
+	directories, err := client.ListDirectories(ctx, "/cloud")
+	if err != nil {
+		t.Fatalf("ListDirectories: %v", err)
+	}
+	wantDirectories := []Directory{{Name: "alpha", Path: "/cloud/alpha"}, {Name: "Zeta", Path: "/cloud/Zeta"}}
+	if !slices.Equal(directories, wantDirectories) {
+		t.Fatalf("ListDirectories = %#v, want %#v", directories, wantDirectories)
+	}
+	created, err := client.CreateDirectory(ctx, "/cloud", "New")
+	if err != nil {
+		t.Fatalf("CreateDirectory: %v", err)
+	}
+	if created != (Directory{Name: "New", Path: "/cloud/New"}) {
+		t.Fatalf("CreateDirectory = %#v", created)
+	}
+
 	offline, err := client.EnsureOffline(ctx, OfflineSpec{
 		SubmissionURI: "magnet:?xt=urn:btih:contract",
 		CloudFolder:   "/cloud//folder",
@@ -281,7 +322,7 @@ func TestClientGRPCTransportContract(t *testing.T) {
 		t.Fatalf("CancelCopy: %v", err)
 	}
 
-	if contract.statusCalls != 1 || contract.tokenCalls != 1 || contract.findCalls != 1 || contract.createFolderCalls != 1 || contract.addOfflineCalls != 1 || contract.removeOfflineCalls != 1 || contract.offlineListCalls != 3 || contract.copyFileCalls != 1 || contract.copyListCalls != 3 || contract.cancelCopyCalls != 1 {
-		t.Fatalf("RPC calls = status:%d token:%d find:%d createFolder:%d addOffline:%d removeOffline:%d listOffline:%d copy:%d listCopy:%d cancelCopy:%d", contract.statusCalls, contract.tokenCalls, contract.findCalls, contract.createFolderCalls, contract.addOfflineCalls, contract.removeOfflineCalls, contract.offlineListCalls, contract.copyFileCalls, contract.copyListCalls, contract.cancelCopyCalls)
+	if contract.statusCalls != 1 || contract.tokenCalls != 1 || contract.listDirectoryCalls != 1 || contract.findCalls != 1 || contract.createFolderCalls != 2 || contract.addOfflineCalls != 1 || contract.removeOfflineCalls != 1 || contract.offlineListCalls != 3 || contract.copyFileCalls != 1 || contract.copyListCalls != 3 || contract.cancelCopyCalls != 1 {
+		t.Fatalf("RPC calls = status:%d token:%d listDirectories:%d find:%d createFolder:%d addOffline:%d removeOffline:%d listOffline:%d copy:%d listCopy:%d cancelCopy:%d", contract.statusCalls, contract.tokenCalls, contract.listDirectoryCalls, contract.findCalls, contract.createFolderCalls, contract.addOfflineCalls, contract.removeOfflineCalls, contract.offlineListCalls, contract.copyFileCalls, contract.copyListCalls, contract.cancelCopyCalls)
 	}
 }

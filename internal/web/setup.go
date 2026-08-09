@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -46,6 +47,8 @@ type CloudTester interface {
 	Check(ctx context.Context) error
 	// StatDirectory returns nil iff fullPath exists and is a directory.
 	StatDirectory(ctx context.Context, fullPath string) error
+	ListDirectories(ctx context.Context, fullPath string) ([]clouddrive.Directory, error)
+	CreateDirectory(ctx context.Context, parentPath, name string) (clouddrive.Directory, error)
 	Close() error
 }
 
@@ -83,9 +86,18 @@ func (t *clouddriveTester) StatDirectory(ctx context.Context, fullPath string) e
 	return nil
 }
 
+func (t *clouddriveTester) ListDirectories(ctx context.Context, fullPath string) ([]clouddrive.Directory, error) {
+	return t.client.ListDirectories(ctx, fullPath)
+}
+
+func (t *clouddriveTester) CreateDirectory(ctx context.Context, parentPath, name string) (clouddrive.Directory, error) {
+	return t.client.CreateDirectory(ctx, parentPath, name)
+}
+
 func (t *clouddriveTester) Close() error { return t.client.Close() }
 
 var errNotDirectory = errors.New("path is not a directory")
+var errWizardCloudNotConfigured = errors.New("wizard CloudDrive2 connection is not configured")
 
 // SetupStore persists the completed wizard configuration.
 type SetupStore interface {
@@ -133,6 +145,10 @@ func NewSetup(cfg SetupConfig) (http.Handler, error) {
 	mux.Handle("GET /setup", http.HandlerFunc(h.setupPage))
 	mux.Handle("POST /setup/password", http.HandlerFunc(h.setupPassword))
 	mux.Handle("POST /setup/cd2/test", http.HandlerFunc(h.setupCD2Test))
+	mux.Handle("GET /setup/cloud-directories", http.HandlerFunc(h.setupCloudDirectories))
+	mux.Handle("POST /setup/cloud-directories", http.HandlerFunc(h.setupCloudDirectoryCreate))
+	mux.Handle("GET /setup/local-directories", http.HandlerFunc(h.setupLocalDirectories))
+	mux.Handle("POST /setup/local-directories", http.HandlerFunc(h.setupLocalDirectoryCreate))
 	mux.Handle("POST /setup/paths/test", http.HandlerFunc(h.setupPathsTest))
 	mux.Handle("POST /setup/finish", http.HandlerFunc(h.setupFinish))
 	mux.Handle("GET /lang", http.HandlerFunc(setLang))
@@ -163,6 +179,11 @@ func setupRouteMethod(requestPath, requestMethod string) (string, bool) {
 	switch requestPath {
 	case "/setup", "/lang", "/static/app.css", "/static/app.js":
 		return http.MethodGet, true
+	case "/setup/cloud-directories", "/setup/local-directories":
+		if requestMethod == http.MethodGet {
+			return http.MethodGet, true
+		}
+		return http.MethodPost, true
 	case "/setup/password", "/setup/cd2/test", "/setup/paths/test", "/setup/finish":
 		return http.MethodPost, true
 	}
@@ -382,6 +403,179 @@ func (h *setupHandler) setupCD2Test(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.renderSetupStep(w, r, 2, http.StatusOK, "", str.TestPassed)
+}
+
+type cloudDirectoryResponse struct {
+	Path        string                 `json:"path,omitempty"`
+	Directories []clouddrive.Directory `json:"directories"`
+	Directory   *clouddrive.Directory  `json:"directory,omitempty"`
+	Error       string                 `json:"error,omitempty"`
+}
+
+func (h *setupHandler) setupCloudDirectories(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.wizardSession(r); !ok {
+		writeSetupJSON(w, http.StatusUnauthorized, cloudDirectoryResponse{Error: tr(requestLang(r)).SetupSessionExpired})
+		return
+	}
+	parent, exact := exactlyOne(r.URL.Query()["path"])
+	parent = path.Clean(strings.TrimSpace(parent))
+	str := tr(requestLang(r))
+	if !exact || !validCloudRoot(parent) {
+		writeSetupJSON(w, http.StatusBadRequest, cloudDirectoryResponse{Error: str.CloudDirectoryPathInvalid})
+		return
+	}
+	tester, err := h.dialWizardCloud()
+	if errors.Is(err, errWizardCloudNotConfigured) {
+		writeSetupJSON(w, http.StatusConflict, cloudDirectoryResponse{Error: str.CloudDirectoryConnectionRequired})
+		return
+	}
+	if err != nil {
+		writeSetupJSON(w, http.StatusBadGateway, cloudDirectoryResponse{Error: cloudDirectoryFailureMessage(err, str, str.CloudDirectoryListFailed)})
+		return
+	}
+	defer func() { _ = tester.Close() }()
+	directories, err := tester.ListDirectories(r.Context(), parent)
+	if err != nil {
+		writeSetupJSON(w, http.StatusBadGateway, cloudDirectoryResponse{Error: cloudDirectoryFailureMessage(err, str, str.CloudDirectoryListFailed)})
+		return
+	}
+	writeSetupJSON(w, http.StatusOK, cloudDirectoryResponse{Path: parent, Directories: directories})
+}
+
+func (h *setupHandler) setupCloudDirectoryCreate(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireWizardPOST(w, r); !ok {
+		return
+	}
+	parent, parentOK := exactPostValue(r, "parent")
+	name, nameOK := exactPostValue(r, "name")
+	parent = path.Clean(strings.TrimSpace(parent))
+	name = strings.TrimSpace(name)
+	str := tr(requestLang(r))
+	if !parentOK || !validCloudRoot(parent) {
+		writeSetupJSON(w, http.StatusBadRequest, cloudDirectoryResponse{Error: str.CloudDirectoryPathInvalid})
+		return
+	}
+	if !nameOK || name == "" || name == "." || name == ".." || path.Base(name) != name {
+		writeSetupJSON(w, http.StatusBadRequest, cloudDirectoryResponse{Error: str.CloudDirectoryNameInvalid})
+		return
+	}
+	tester, err := h.dialWizardCloud()
+	if errors.Is(err, errWizardCloudNotConfigured) {
+		writeSetupJSON(w, http.StatusConflict, cloudDirectoryResponse{Error: str.CloudDirectoryConnectionRequired})
+		return
+	}
+	if err != nil {
+		writeSetupJSON(w, http.StatusBadGateway, cloudDirectoryResponse{Error: cloudDirectoryFailureMessage(err, str, str.CloudDirectoryCreateFailed)})
+		return
+	}
+	defer func() { _ = tester.Close() }()
+	directory, err := tester.CreateDirectory(r.Context(), parent, name)
+	if err != nil {
+		writeSetupJSON(w, http.StatusBadGateway, cloudDirectoryResponse{Error: cloudDirectoryFailureMessage(err, str, str.CloudDirectoryCreateFailed)})
+		return
+	}
+	writeSetupJSON(w, http.StatusCreated, cloudDirectoryResponse{Directory: &directory})
+}
+
+func (h *setupHandler) setupLocalDirectories(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.wizardSession(r); !ok {
+		writeSetupJSON(w, http.StatusUnauthorized, cloudDirectoryResponse{Error: tr(requestLang(r)).SetupSessionExpired})
+		return
+	}
+	if !h.wizardAtLeast(3) {
+		writeSetupJSON(w, http.StatusConflict, cloudDirectoryResponse{Error: tr(requestLang(r)).CloudDirectoryConnectionRequired})
+		return
+	}
+	parent, exact := exactlyOne(r.URL.Query()["path"])
+	parent = filepath.Clean(strings.TrimSpace(parent))
+	str := tr(requestLang(r))
+	if !exact || !validLocalRoot(parent) {
+		writeSetupJSON(w, http.StatusBadRequest, cloudDirectoryResponse{Error: str.LocalDirectoryPathInvalid})
+		return
+	}
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		writeSetupJSON(w, http.StatusBadGateway, cloudDirectoryResponse{Error: str.LocalDirectoryListFailed})
+		return
+	}
+	directories := make([]clouddrive.Directory, 0, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		fullPath := filepath.Join(parent, name)
+		isDirectory := entry.IsDir()
+		if !isDirectory && entry.Type()&os.ModeSymlink != 0 {
+			info, statErr := os.Stat(fullPath)
+			isDirectory = statErr == nil && info.IsDir()
+		}
+		if isDirectory {
+			directories = append(directories, clouddrive.Directory{Name: name, Path: fullPath})
+		}
+	}
+	writeSetupJSON(w, http.StatusOK, cloudDirectoryResponse{Path: parent, Directories: directories})
+}
+
+func (h *setupHandler) setupLocalDirectoryCreate(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireWizardPOST(w, r); !ok {
+		return
+	}
+	if !h.wizardAtLeast(3) {
+		writeSetupJSON(w, http.StatusConflict, cloudDirectoryResponse{Error: tr(requestLang(r)).CloudDirectoryConnectionRequired})
+		return
+	}
+	parent, parentOK := exactPostValue(r, "parent")
+	name, nameOK := exactPostValue(r, "name")
+	parent = filepath.Clean(strings.TrimSpace(parent))
+	name = strings.TrimSpace(name)
+	str := tr(requestLang(r))
+	if !parentOK || !validLocalRoot(parent) {
+		writeSetupJSON(w, http.StatusBadRequest, cloudDirectoryResponse{Error: str.LocalDirectoryPathInvalid})
+		return
+	}
+	if !nameOK || name == "" || name == "." || name == ".." || filepath.Base(name) != name {
+		writeSetupJSON(w, http.StatusBadRequest, cloudDirectoryResponse{Error: str.CloudDirectoryNameInvalid})
+		return
+	}
+	fullPath := filepath.Join(parent, name)
+	if err := os.Mkdir(fullPath, 0o755); err != nil {
+		if info, statErr := os.Stat(fullPath); statErr != nil || !info.IsDir() {
+			writeSetupJSON(w, http.StatusBadGateway, cloudDirectoryResponse{Error: str.LocalDirectoryCreateFailed})
+			return
+		}
+	}
+	directory := clouddrive.Directory{Name: name, Path: fullPath}
+	writeSetupJSON(w, http.StatusCreated, cloudDirectoryResponse{Directory: &directory})
+}
+
+func (h *setupHandler) wizardAtLeast(step int) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.state.step >= step
+}
+
+func (h *setupHandler) dialWizardCloud() (CloudTester, error) {
+	h.mu.Lock()
+	state := *h.state
+	h.mu.Unlock()
+	if state.step < 3 || state.cd2Address == "" || state.cd2Username == "" || state.cd2Password == "" {
+		return nil, errWizardCloudNotConfigured
+	}
+	return h.dial(state.cd2Address, state.cd2Username, state.cd2Password, setupTestTimeout, state.cd2Insecure)
+}
+
+func cloudDirectoryFailureMessage(err error, str *Strings, fallback string) string {
+	if classifyTestError(err) == failureAuth {
+		return str.TestAuth
+	}
+	return fallback
+}
+
+func writeSetupJSON(w http.ResponseWriter, status int, response cloudDirectoryResponse) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 func (h *setupHandler) setupPathsTest(w http.ResponseWriter, r *http.Request) {

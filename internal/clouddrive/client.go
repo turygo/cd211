@@ -10,6 +10,7 @@ import (
 	"math"
 	"net"
 	"path"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -81,12 +82,18 @@ type OfflineSpec struct {
 	SubmissionURI, CloudFolder, Hash string
 }
 
+type Directory struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
 type CopySpec struct {
 	SourcePath, DestinationPath string
 }
 
 type rpcClient interface {
 	GetToken(context.Context, *pb.GetTokenRequest, ...grpc.CallOption) (*pb.JWTToken, error)
+	GetSubFiles(context.Context, *pb.ListSubFileRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[pb.SubFilesReply], error)
 	FindFileByPath(context.Context, *pb.FindFileByPathRequest, ...grpc.CallOption) (*pb.CloudDriveFile, error)
 	CreateFolder(context.Context, *pb.CreateFolderRequest, ...grpc.CallOption) (*pb.CreateFolderResult, error)
 	AddOfflineFiles(context.Context, *pb.AddOfflineFileRequest, ...grpc.CallOption) (*pb.FileOperationResult, error)
@@ -205,6 +212,78 @@ func (c *Client) FindFile(ctx context.Context, fullPath string) (*pb.CloudDriveF
 		}
 	}
 	return file, nil
+}
+
+// ListDirectories returns the immediate child directories of fullPath.
+func (c *Client) ListDirectories(ctx context.Context, fullPath string) ([]Directory, error) {
+	fullPath, ok := cleanAbsolutePath(fullPath)
+	if !ok {
+		return nil, newError("list_directories", ErrorPermanent, nil)
+	}
+	callCtx, cancel, err := c.authorizedContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	stream, rpcErr := c.rpc.GetSubFiles(callCtx, &pb.ListSubFileRequest{Path: fullPath})
+	if rpcErr != nil {
+		return nil, c.rpcError("list_directories", rpcErr)
+	}
+
+	directories := make([]Directory, 0)
+	seen := make(map[string]struct{})
+	for {
+		reply, recvErr := stream.Recv()
+		if errors.Is(recvErr, io.EOF) {
+			break
+		}
+		if recvErr != nil {
+			return nil, c.rpcError("list_directories", recvErr)
+		}
+		if reply == nil {
+			return nil, newError("list_directories", ErrorInvalidResponse, nil)
+		}
+		for _, file := range reply.GetSubFiles() {
+			if file == nil || !file.GetIsDirectory() {
+				continue
+			}
+			childPath, valid := cleanAbsolutePath(file.GetFullPathName())
+			if !valid || childPath == fullPath || path.Dir(childPath) != fullPath {
+				return nil, newError("list_directories", ErrorInvalidResponse, nil)
+			}
+			if _, exists := seen[childPath]; exists {
+				continue
+			}
+			seen[childPath] = struct{}{}
+			directories = append(directories, Directory{Name: path.Base(childPath), Path: childPath})
+		}
+	}
+	sort.Slice(directories, func(i, j int) bool {
+		left, right := strings.ToLower(directories[i].Name), strings.ToLower(directories[j].Name)
+		if left == right {
+			return directories[i].Path < directories[j].Path
+		}
+		return left < right
+	})
+	return directories, nil
+}
+
+// CreateDirectory creates one immediate child directory under parentPath.
+// If the directory already exists, it is returned as a successful result.
+func (c *Client) CreateDirectory(ctx context.Context, parentPath, name string) (Directory, error) {
+	parentPath, parentOK := cleanAbsolutePath(parentPath)
+	name = strings.TrimSpace(name)
+	if !parentOK || name == "" || name == "." || name == ".." || path.Base(name) != name {
+		return Directory{}, newError("create_folder", ErrorPermanent, nil)
+	}
+	fullPath := path.Join(parentPath, name)
+	if fullPath == parentPath {
+		return Directory{}, newError("create_folder", ErrorPermanent, nil)
+	}
+	if err := c.ensureCloudFolder(ctx, fullPath); err != nil {
+		return Directory{}, err
+	}
+	return Directory{Name: name, Path: fullPath}, nil
 }
 
 func (c *Client) EnsureOffline(ctx context.Context, spec OfflineSpec) (OfflineTask, error) {
