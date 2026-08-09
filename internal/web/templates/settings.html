@@ -23,10 +23,48 @@
           <div class="form-field"><label for="set-password">{{.Str.Password}}</label><input id="set-password" name="password" type="password" autocomplete="new-password"><small>{{.Str.CD2PasswordKeep}}</small></div>
           <label class="check-row"><input id="set-insecure" name="insecure" type="checkbox" value="true" {{if .Values.CD2Insecure}}checked{{end}}> {{.Str.CD2Insecure}}</label>
         </section>
-        <section class="panel" aria-labelledby="paths-title">
+        <section class="panel path-flow settings-paths" aria-labelledby="paths-title" data-settings-remap>
           <h2 id="paths-title">{{.Str.SettingsSectionPaths}}</h2>
-          <div class="form-field"><label for="set-cloud-root">{{.Str.CloudRootLabel}}</label><input id="set-cloud-root" name="cloud_root" type="text" value="{{.Values.CloudRoot}}" placeholder="/cloud" required></div>
-          <div class="form-field"><label for="set-local-root">{{.Str.LocalRootLabel}}</label><input id="set-local-root" name="local_root" type="text" value="{{.Values.LocalRoot}}" placeholder="/data/downloads" required></div>
+          <div class="path-flow-track">
+            <div class="path-flow-stop">
+              <span class="path-flow-index">01</span>
+              <div class="form-field">
+                <label for="set-cloud-root">{{.Str.CloudRootLabel}}</label>
+                <input id="set-cloud-root" name="cloud_root" type="text" value="{{.Values.CloudRoot}}" placeholder="/115open/CD211" required data-settings-cloud-root>
+                <small>{{.Str.CloudRootHint}}</small>
+              </div>
+            </div>
+            <div class="path-flow-arrow" aria-label="{{.Str.PathFlowCopy}}"><span>→</span><small>{{.Str.PathFlowCopy}}</small></div>
+            <div class="path-flow-stop">
+              <span class="path-flow-index">02</span>
+              <div class="form-field">
+                <label for="set-local-root">{{.Str.LocalRootLabel}}</label>
+                <input id="set-local-root" name="local_root" type="text" value="{{.Values.LocalRoot}}" placeholder="/downloads" required data-settings-local-root>
+                <small>{{.Str.LocalRootHint}}</small>
+              </div>
+            </div>
+          </div>
+          <p class="panel-note">{{.Str.PathFlowSharedRequirement}}</p>
+          {{if .Categories}}
+          <div class="remap-preview">
+            <h3>{{.Str.SettingsRemapTitle}}</h3>
+            <p>{{.Str.SettingsRemapHint}}</p>
+            <div class="remap-list">
+              {{range .Categories}}
+              <div class="remap-row">
+                <strong>{{.Name}}</strong>
+                {{if .Valid}}
+                <code data-remap-cloud data-subpath="{{.CloudSubpath}}">{{$.Values.CloudRoot}}/{{.CloudSubpath}}</code>
+                <span aria-hidden="true">→</span>
+                <code data-remap-local data-subpath="{{.SaveSubpath}}">{{$.Values.LocalRoot}}/{{.SaveSubpath}}</code>
+                {{else}}
+                <span class="category-path-error">{{$.Str.CategoryPathDetached}}</span>
+                {{end}}
+              </div>
+              {{end}}
+            </div>
+          </div>
+          {{end}}
           <p class="panel-note">{{.Str.SettingsFrozenPathsNote}}</p>
         </section>
         <section class="panel" aria-labelledby="timeouts-title">

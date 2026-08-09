@@ -17,6 +17,7 @@ section using the release version and date.
 - Focused the README on operator setup and runtime configuration.
 - Added repository guidance for contributors and coding agents.
 - Made versioned `CHANGELOG.md` entries the source for GitHub release notes.
+- Made category paths relative to their storage roots, with automatic remapping when roots change and guided category setup after onboarding.
 
 ## [0.2.2] - 2026-08-09
 

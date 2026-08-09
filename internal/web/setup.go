@@ -698,7 +698,7 @@ func (h *setupHandler) setupFinish(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, "/categories?onboarding=1", http.StatusSeeOther)
 }
 
 // buildSetupView snapshots the wizard state for rendering. Values not yet

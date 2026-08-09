@@ -56,6 +56,12 @@ for (const picker of document.querySelectorAll("[data-directory-picker]")) {
       status.textContent = message;
       list.replaceChildren(status);
     };
+    const setLoading = (isLoading) => {
+      upButton.disabled = isLoading || currentPath === "/";
+      selectButton.disabled = isLoading;
+      nameInput.disabled = isLoading;
+      createButton.disabled = isLoading;
+    };
 
     const parentPath = (value) => {
       if (value === "/") {
@@ -67,6 +73,7 @@ for (const picker of document.querySelectorAll("[data-directory-picker]")) {
 
     const loadDirectories = async (target) => {
       list.setAttribute("aria-busy", "true");
+      setLoading(true);
       showStatus(loadingMessage || "");
       try {
         const response = await fetch(`${listURL}?path=${encodeURIComponent(target)}`, {
@@ -83,7 +90,6 @@ for (const picker of document.querySelectorAll("[data-directory-picker]")) {
 
         currentPath = payload.path;
         pathOutput.textContent = currentPath;
-        upButton.disabled = currentPath === "/";
         list.replaceChildren();
         if (payload.directories.length === 0) {
           showStatus(emptyMessage || "");
@@ -106,6 +112,7 @@ for (const picker of document.querySelectorAll("[data-directory-picker]")) {
       } catch (error) {
         showStatus(error instanceof Error ? error.message : listErrorMessage || "", true);
       } finally {
+        setLoading(false);
         list.removeAttribute("aria-busy");
       }
     };
@@ -217,4 +224,78 @@ for (const form of document.querySelectorAll("form[data-preserve-test-fields]"))
       submitter.disabled = false;
     }
   });
+}
+
+function joinPreviewPath(root, subpath) {
+  const cleanRoot = root === "/" ? "" : root.replace(/\/+$/, "");
+  const cleanSubpath = subpath.replace(/^\/+/, "");
+  return `${cleanRoot}/${cleanSubpath}`;
+}
+
+for (const form of document.querySelectorAll("form[data-category-path-form]")) {
+  const cloudInput = form.querySelector("[data-cloud-subpath]");
+  const saveInput = form.querySelector("[data-save-subpath]");
+  const cloudPreview = form.querySelector("[data-cloud-preview]");
+  const savePreview = form.querySelector("[data-save-preview]");
+  const nameInput = form.querySelector("[data-category-name]");
+  const cloudRoot = form.getAttribute("data-cloud-root") || "/";
+  const localRoot = form.getAttribute("data-local-root") || "/";
+
+  const renderPreview = () => {
+    if (cloudInput instanceof HTMLInputElement && cloudPreview && cloudInput.value) {
+      cloudPreview.textContent = joinPreviewPath(cloudRoot, cloudInput.value);
+    }
+    if (saveInput instanceof HTMLInputElement && savePreview && saveInput.value) {
+      savePreview.textContent = joinPreviewPath(localRoot, saveInput.value);
+    }
+  };
+
+  for (const input of [cloudInput, saveInput]) {
+    if (input instanceof HTMLInputElement) {
+      if (input.hasAttribute("data-auto-subpath")) {
+        input.dataset.autoSubpath = "true";
+      }
+      input.addEventListener("input", () => {
+        input.dataset.autoSubpath = "false";
+        renderPreview();
+      });
+    }
+  }
+
+  if (nameInput instanceof HTMLInputElement) {
+    nameInput.addEventListener("input", () => {
+      const suggested = nameInput.value.trim().toLowerCase();
+      for (const input of [cloudInput, saveInput]) {
+        if (input instanceof HTMLInputElement && input.dataset.autoSubpath === "true") {
+          input.value = suggested;
+        }
+      }
+      renderPreview();
+    });
+  }
+  renderPreview();
+}
+
+for (const preview of document.querySelectorAll("[data-settings-remap]")) {
+  const cloudRoot = preview.querySelector("[data-settings-cloud-root]");
+  const localRoot = preview.querySelector("[data-settings-local-root]");
+  const renderRemap = () => {
+    if (cloudRoot instanceof HTMLInputElement) {
+      for (const output of preview.querySelectorAll("[data-remap-cloud]")) {
+        output.textContent = joinPreviewPath(cloudRoot.value, output.getAttribute("data-subpath") || "");
+      }
+    }
+    if (localRoot instanceof HTMLInputElement) {
+      for (const output of preview.querySelectorAll("[data-remap-local]")) {
+        output.textContent = joinPreviewPath(localRoot.value, output.getAttribute("data-subpath") || "");
+      }
+    }
+  };
+  if (cloudRoot instanceof HTMLInputElement) {
+    cloudRoot.addEventListener("input", renderRemap);
+  }
+  if (localRoot instanceof HTMLInputElement) {
+    localRoot.addEventListener("input", renderRemap);
+  }
+  renderRemap();
 }

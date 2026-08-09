@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/turygo/cd211/internal/domain"
 	"github.com/turygo/cd211/internal/settings"
 	storedb "github.com/turygo/cd211/internal/store/sqlc"
 )
@@ -30,18 +31,50 @@ func (s *Store) ListSettings(ctx context.Context) (map[string]string, error) {
 // ReplaceSettings atomically upserts exactly the given settings in one
 // transaction, never touching setup.completed_at or operator_password.
 func (s *Store) ReplaceSettings(ctx context.Context, values map[string]string, now time.Time) error {
+	return s.ReplaceSettingsAndCategories(ctx, values, nil, now)
+}
+
+// ReplaceSettingsAndCategories atomically updates runtime settings together
+// with category paths remapped beneath new storage roots.
+func (s *Store) ReplaceSettingsAndCategories(ctx context.Context, values map[string]string, categories []domain.Category, now time.Time) error {
 	if now.IsZero() {
 		return errors.New("settings update time is required")
+	}
+	for _, category := range categories {
+		if err := validateCategory(category); err != nil {
+			return fmt.Errorf("replace settings category %q: %w", category.Name, err)
+		}
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin settings replace: %w", err)
 	}
 	queries := s.queries.WithTx(tx)
+	finish := func(cause error) error {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			return fmt.Errorf("rollback settings replace: %w", rollbackErr)
+		}
+		return cause
+	}
 	for key, value := range values {
 		if err := queries.UpsertSetting(ctx, storedb.UpsertSettingParams{Key: key, Value: value, UpdatedAt: now}); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("replace settings: %w", err)
+			return finish(fmt.Errorf("replace settings: %w", err))
+		}
+	}
+	for _, category := range categories {
+		enabled := int64(0)
+		if category.Enabled {
+			enabled = 1
+		}
+		_, err := queries.UpsertCategory(ctx, storedb.UpsertCategoryParams{
+			Name: category.Name, CloudPath: category.CloudPath, SavePath: category.SavePath,
+			Enabled: enabled, CreatedAt: category.CreatedAt, UpdatedAt: category.UpdatedAt,
+		})
+		if err != nil {
+			if destinationConstraint(err) {
+				return finish(ErrDestinationConflict)
+			}
+			return finish(fmt.Errorf("replace settings category %q: %w", category.Name, err))
 		}
 	}
 	if err := tx.Commit(); err != nil {

@@ -63,10 +63,10 @@ Open `http://<cd211-host>:8080`. The setup wizard asks for:
 
 1. An operator password for the fixed username `admin`. The password must contain at least 8 characters. There is no default password.
 2. The CloudDrive2 gRPC address, username, password, and TLS mode.
-3. A cloud root directory in 115 and the local staging root. With the supplied Compose file, the local root is normally `/downloads`.
+3. A 115 offline download root and a shared staging root. With the supplied Compose file, the shared staging root is normally `/downloads`.
 4. Offline, copy, and local verification timeouts.
 
-Complete the wizard before testing the download client in Sonarr or Radarr.
+Finishing the wizard opens **Categories**, where each Sonarr or Radarr category receives a child folder below both roots.
 
 ### 4. Register categories
 
@@ -77,11 +77,11 @@ Example:
 | Field | TV example | Movie example |
 |---|---|---|
 | Name | `tv` | `movies` |
-| Cloud path | `/115open/云下载/TV` | `/115open/云下载/Movies` |
-| Local save path | `/downloads/tv` | `/downloads/movies` |
+| 115 category subfolder | `TV` | `Movies` |
+| Shared staging subfolder | `tv` | `movies` |
 | Availability | Enabled | Enabled |
 
-The cloud path must be inside the configured cloud root. The local save path must be inside the configured local root. Category names must match the values configured in Sonarr and Radarr.
+CD211 combines each subfolder with its configured root and previews the full path. With a 115 root of `/115open/云下载` and a shared staging root of `/downloads`, the examples resolve to `/115open/云下载/TV` and `/downloads/tv`. Category names must match the values configured in Sonarr and Radarr.
 
 ### 5. Add CD211 to Sonarr and Radarr
 
@@ -141,15 +141,15 @@ Configure these values during first-run setup or later from **Settings** in the 
 | CloudDrive2 username | None | CloudDrive2 account username |
 | CloudDrive2 password | None | CloudDrive2 account password |
 | Insecure CloudDrive2 connection | Off | Enable when CloudDrive2 serves plaintext gRPC without TLS |
-| Cloud root | None | Existing 115 directory used for offline downloads |
-| Local root | None | Existing writable staging directory; normally `/downloads` with the supplied Compose file |
+| 115 offline download root | None | Existing 115 directory below which category download folders are created |
+| Shared staging root | None | Existing writable staging directory shared at the same absolute path by CloudDrive2, CD211, Sonarr, and Radarr; normally `/downloads` |
 | Offline timeout | `24h` | Maximum time allowed for a 115 offline download |
 | Copy timeout | `72h` | Maximum time allowed for a CloudDrive2 copy |
 | Verify timeout | `10m` | Maximum time allowed for local file verification |
 
 Timeouts use Go duration notation, for example `30m`, `24h`, or `72h`.
 
-Saving application settings rechecks the CloudDrive2 connection and both root directories. New root or category paths apply only to future submissions; existing downloads keep the paths assigned when they were added.
+Saving application settings rechecks the CloudDrive2 connection and both root directories. Changing a root preserves every category subfolder and remaps its full path for future submissions. Existing downloads keep their frozen paths, and CD211 never moves their files.
 
 ### Categories
 
@@ -158,8 +158,8 @@ Each category contains:
 | Setting | Description |
 |---|---|
 | Name | The value sent by Sonarr or Radarr, such as `tv` or `movies` |
-| Cloud path | The destination directory below the configured cloud root |
-| Local save path | The staging directory below the configured local root |
+| 115 category subfolder | The relative offline-download destination below the configured 115 root |
+| Shared staging subfolder | The relative copy destination below the configured shared staging root |
 | Availability | Disabled categories reject new submissions |
 
 Configure categories in the CD211 Web UI before using them in Sonarr or Radarr. If Sonarr or Radarr creates a category through the qBittorrent API, review its generated paths in CD211 before using it.

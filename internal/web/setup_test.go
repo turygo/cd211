@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/turygo/cd211/internal/clouddrive"
+	"github.com/turygo/cd211/internal/domain"
 	"github.com/turygo/cd211/internal/session"
 	"github.com/turygo/cd211/internal/settings"
 	"github.com/turygo/cd211/internal/store"
@@ -81,7 +82,7 @@ func (s *recordingSettingsStore) ListSettings(ctx context.Context) (map[string]s
 	return values, nil
 }
 
-func (s *recordingSettingsStore) ReplaceSettings(ctx context.Context, values map[string]string, now time.Time) error {
+func (s *recordingSettingsStore) ReplaceSettingsAndCategories(ctx context.Context, values map[string]string, categories []domain.Category, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.log != nil {
@@ -300,7 +301,8 @@ func TestSetupWizardHappyPath(t *testing.T) {
 	requireStatus(t, continued, http.StatusSeeOther)
 	pathsPage := fixture.get("/setup", sid)
 	requireStatus(t, pathsPage, http.StatusOK)
-	requireContains(t, pathsPage.Body.String(), `action="/setup/paths/test"`, "cloud_root", "local_root")
+	requireContains(t, pathsPage.Body.String(), `action="/setup/paths/test"`, "cloud_root", "local_root",
+		"Files pass through two locations", "115 offline download root", "Shared staging root")
 
 	localRoot := t.TempDir()
 	pathsTested := fixture.post("/setup/paths/test", sid, csrf, url.Values{
@@ -318,15 +320,16 @@ func TestSetupWizardHappyPath(t *testing.T) {
 	// documented timeout defaults.
 	review := fixture.get("/setup", sid)
 	requireStatus(t, review, http.StatusOK)
-	requireContains(t, review.Body.String(), `action="/setup/finish"`, "24h", "72h", "10m", "••••••••")
+	requireContains(t, review.Body.String(), `action="/setup/finish"`, "24h", "72h", "10m", "••••••••",
+		"115 offline download root", "Shared staging root", "Finish setup and configure categories")
 	requireAbsent(t, review.Body.String(), "cd2-secret")
 
 	finished := fixture.post("/setup/finish", sid, csrf, url.Values{
 		"timeout_offline": {"30h"}, "timeout_copy": {"80h"}, "timeout_verify": {"15m"},
 	})
 	requireStatus(t, finished, http.StatusSeeOther)
-	if location := finished.Header().Get("Location"); location != "/" {
-		t.Errorf("finish Location = %q, want /", location)
+	if location := finished.Header().Get("Location"); location != "/categories?onboarding=1" {
+		t.Errorf("finish Location = %q, want /categories?onboarding=1", location)
 	}
 
 	fixture.setupStore.mu.Lock()
@@ -405,7 +408,10 @@ func TestSetupDirectoryPickers(t *testing.T) {
 
 	page := fixture.get("/setup", sid)
 	requireStatus(t, page, http.StatusOK)
-	requireContains(t, page.Body.String(), "data-directory-picker", `readonly`, "/setup/cloud-directories", "/setup/local-directories")
+	requireContains(t, page.Body.String(),
+		"data-directory-picker", `readonly`, "/setup/cloud-directories", "/setup/local-directories",
+		"data-directory-up disabled", "data-directory-name", "data-directory-create disabled", "data-directory-select disabled",
+	)
 
 	listed := fixture.get("/setup/cloud-directories?path=%2F115", sid)
 	requireStatus(t, listed, http.StatusOK)

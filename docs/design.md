@@ -221,8 +221,8 @@ settings(key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TIMESTAMP NOT NUL
 | `cd2.username` | CloudDrive2 account |
 | `cd2.password` | CloudDrive2 password |
 | `cd2.insecure` | `"true"` \| `"false"`; opt-in for plaintext gRPC without TLS |
-| `paths.cloud_root` | 115 folder as seen by CloudDrive2; every category cloud path must live below it |
-| `paths.local_root` | Local staging root; every category save path must live below it |
+| `paths.cloud_root` | 115 offline-download root as seen by CloudDrive2; category cloud paths are descendants built from this root and a UI-managed relative subpath |
+| `paths.local_root` | Shared staging root visible at the same absolute path to CloudDrive2, CD211, Sonarr, and Radarr; category save paths are descendants built from this root and a UI-managed relative subpath |
 | `timeouts.offline` | Max time for one 115 offline task (default `24h`) |
 | `timeouts.copy` | Max time for one CloudDrive2 copy task (default `72h`) |
 | `timeouts.verify` | Max time for local verification (default `10m`) |
@@ -242,12 +242,12 @@ The CloudDrive2 password is stored plaintext in this table. The CloudDrive2 API 
 
 1. **Operator password** — the first visitor creates the `admin` password (minimum 8 characters). It is hashed immediately and held in memory, and a session is created; every later step requires that session.
 2. **CloudDrive2 connection** — address, username, password, and the insecure toggle, with an in-page connectivity test that distinguishes network unreachability/timeout, TLS failure (with a hint to try insecure), authentication failure, and other errors.
-3. **Cloud and local paths** — the cloud root is tested as an existing CloudDrive2 directory; the local root is validated through the local-root boundary and a probe-file create/delete round trip.
+3. **File flow** — the 115 offline-download root is tested as an existing CloudDrive2 directory; the shared staging root is validated through the local-root boundary and a probe-file create/delete round trip. The UI presents them as the source and destination of one copy flow rather than unrelated paths.
 4. **Timeouts** — optional offline, copy, and verify phase deadlines.
 
-`POST /setup/finish` re-runs every test server-side (never trusting the client's earlier results), then persists the password hash and all settings in one transaction with `setup.completed_at` written last, then builds and hot-swaps the full runtime and redirects to `/`.
+`POST /setup/finish` re-runs every test server-side (never trusting the client's earlier results), then persists the password hash and all settings in one transaction with `setup.completed_at` written last, builds and hot-swaps the full runtime, and redirects to `/categories?onboarding=1`.
 
-**Settings page** (authenticated, normal mode). `GET /settings` shows the current values; `POST /settings/test` re-runs the connectivity and path tests; `POST /settings/save` re-tests server-side, persists via `ReplaceSettings` (which never touches `setup.completed_at` or the operator password), then applies the new generation through the same hot-swap path. If the apply fails, the saved settings remain persisted and take effect on the next restart. A blank CloudDrive2 password field keeps the stored value. Changing the cloud or local roots never affects downloads whose paths were frozen at add time.
+**Settings page** (authenticated, normal mode). `GET /settings` shows the current values and previews each category under both roots; `POST /settings/test` re-runs the connectivity and path tests; `POST /settings/save` re-tests server-side, preserves each category's relative subpaths, prepares the remapped shared staging directories, and persists settings plus remapped full category paths atomically through `ReplaceSettingsAndCategories`. It then applies the new generation through the same hot-swap path. If the apply fails, the saved settings remain persisted and take effect on the next restart. A blank CloudDrive2 password field keeps the stored value. Existing downloads retain their frozen paths and no files are moved.
 
 ## 9. Download State Machine
 
@@ -732,9 +732,10 @@ updated_at        timestamp not null
 
 Constraints:
 
-- `cloud_path` must remain under the configured cloud root.
-- `save_path` must remain under the configured local root.
-- Path changes affect only future submissions.
+- `cloud_path` is persisted as a full path, but the Web UI exposes only its relative subpath below `paths.cloud_root`.
+- `save_path` is persisted as a full path, but the Web UI exposes only its relative subpath below `paths.local_root`.
+- Changing either root atomically rebuilds both full paths from the preserved subpaths for future submissions.
+- Download rows retain the full paths frozen at submission time; settings and category changes never move existing files.
 
 ### 12.3 `downloads`
 
@@ -946,9 +947,10 @@ Raw authenticated URLs and passkeys are never shown.
 Allows operators to:
 
 - create or disable categories;
-- configure cloud and local paths;
-- validate that paths remain under their allowed roots;
-- see that edits apply only to future submissions.
+- configure a 115 category subfolder and shared staging subfolder relative to visible roots;
+- preview both resulting full paths while editing;
+- identify legacy categories detached from the current roots;
+- see that edits and root remaps apply only to future submissions.
 
 ### 16.4 Change Password
 

@@ -313,7 +313,7 @@ func (fixture *webFixture) seedCategory(name string, enabled bool) domain.Catego
 	fixture.t.Helper()
 	created := fixture.clock.now.Add(-24 * time.Hour)
 	category, err := fixture.store.UpsertCategory(context.Background(), domain.Category{
-		Name: name, CloudPath: "/cloud/" + name, SavePath: filepath.Join(fixture.t.TempDir(), name),
+		Name: name, CloudPath: "/cloud/" + name, SavePath: filepath.Join(fixture.localRoot, name),
 		Enabled: enabled, CreatedAt: created, UpdatedAt: created,
 	})
 	if err != nil {
@@ -399,11 +399,11 @@ func TestAuthenticationRedirectLoginAndLogout(t *testing.T) {
 func TestAuthenticatedMutationBrowserOriginPolicy(t *testing.T) {
 	fixture := newWebFixture(t)
 	values := url.Values{
-		"csrf_token": {fixture.csrf},
-		"name":       {"blocked"},
-		"cloud_path": {"/cloud/blocked"},
-		"save_path":  {filepath.Join(fixture.localRoot, "blocked")},
-		"enabled":    {"true"},
+		"csrf_token":    {fixture.csrf},
+		"name":          {"blocked"},
+		"cloud_subpath": {"blocked"},
+		"save_subpath":  {"blocked"},
+		"enabled":       {"true"},
 	}
 	send := func(origin string) *httptest.ResponseRecorder {
 		t.Helper()
@@ -688,30 +688,37 @@ func TestCategoryCreateUpdateDisableAndContainment(t *testing.T) {
 	fixture := newWebFixture(t)
 	page := fixture.request(http.MethodGet, "/categories", nil, true)
 	requireStatus(t, page, http.StatusOK)
-	requireContains(t, page.Body.String(), "Category changes affect future submissions only", "Register a category")
+	requireContains(t, page.Body.String(), "115 category subfolder", "Shared staging subfolder", fixture.localRoot)
+	onboarding := fixture.request(http.MethodGet, "/categories?onboarding=1", nil, true)
+	requireStatus(t, onboarding, http.StatusOK)
+	requireContains(t, onboarding.Body.String(), "Last step: configure a Sonarr or Radarr category")
 
-	cloudPath := "/cloud/TV Shows"
+	cloudSubpath := "TV Shows"
 	configuredLocalRoot := fixture.localRoot
-	localCategoryPath := filepath.Join(configuredLocalRoot, "TV Shows")
 	canonicalLocalRoot, err := filepath.EvalSymlinks(configuredLocalRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
 	create := fixture.post("/categories/save", url.Values{
-		"name": {"  TV Shows  "}, "cloud_path": {cloudPath}, "save_path": {localCategoryPath}, "enabled": {"1"},
+		"name": {"  TV Shows  "}, "cloud_subpath": {cloudSubpath}, "save_subpath": {"TV Shows"}, "enabled": {"1"},
 	})
 	requireStatus(t, create, http.StatusSeeOther)
 	categories, err := fixture.store.ListCategories(context.Background())
-	if err != nil || len(categories) != 1 || categories[0].Name != "tv shows" || categories[0].SavePath != filepath.Join(canonicalLocalRoot, "TV Shows") || !categories[0].Enabled {
+	if err != nil || len(categories) != 1 || categories[0].Name != "tv shows" ||
+		categories[0].CloudPath != "/cloud/TV Shows" ||
+		categories[0].SavePath != filepath.Join(canonicalLocalRoot, "TV Shows") || !categories[0].Enabled {
 		t.Fatalf("categories after create = (%+v, %v)", categories, err)
 	}
 	createdAt := categories[0].CreatedAt
+	savedPage := fixture.request(http.MethodGet, "/categories", nil, true)
+	requireStatus(t, savedPage, http.StatusOK)
+	requireContains(t, savedPage.Body.String(), `name="cloud_subpath" type="text" value="TV Shows"`,
+		`name="save_subpath" type="text" value="TV Shows"`, "/cloud/TV Shows")
 
 	fixture.clock.now = fixture.clock.now.Add(30 * time.Minute)
 	updatedCloud := "/cloud/tv-updated"
-	updatedLocal := filepath.Join(configuredLocalRoot, "tv-updated")
 	update := fixture.post("/categories/save", url.Values{
-		"name": {"tv shows"}, "cloud_path": {updatedCloud}, "save_path": {updatedLocal}, "enabled": {"false"},
+		"name": {"tv shows"}, "cloud_subpath": {"tv-updated"}, "save_subpath": {"tv-updated"}, "enabled": {"false"},
 	})
 	requireStatus(t, update, http.StatusSeeOther)
 	categories, err = fixture.store.ListCategories(context.Background())
@@ -720,10 +727,10 @@ func TestCategoryCreateUpdateDisableAndContainment(t *testing.T) {
 	}
 
 	invalidPaths := []url.Values{
-		{"name": {"root-cloud"}, "cloud_path": {"/cloud"}, "save_path": {filepath.Join(configuredLocalRoot, "ok")}, "enabled": {"true"}},
-		{"name": {"escape-cloud"}, "cloud_path": {"/cloud/../escape"}, "save_path": {filepath.Join(configuredLocalRoot, "ok")}, "enabled": {"true"}},
-		{"name": {"root-local"}, "cloud_path": {"/cloud/ok"}, "save_path": {configuredLocalRoot}, "enabled": {"true"}},
-		{"name": {"escape-local"}, "cloud_path": {"/cloud/ok"}, "save_path": {filepath.Join(configuredLocalRoot, "..", "escape")}, "enabled": {"true"}},
+		{"name": {"root-cloud"}, "cloud_subpath": {""}, "save_subpath": {"ok"}, "enabled": {"true"}},
+		{"name": {"escape-cloud"}, "cloud_subpath": {"../escape"}, "save_subpath": {"ok"}, "enabled": {"true"}},
+		{"name": {"root-local"}, "cloud_subpath": {"ok"}, "save_subpath": {"."}, "enabled": {"true"}},
+		{"name": {"escape-local"}, "cloud_subpath": {"ok"}, "save_subpath": {"../escape"}, "enabled": {"true"}},
 	}
 	for _, form := range invalidPaths {
 		response := fixture.post("/categories/save", form)
@@ -732,6 +739,57 @@ func TestCategoryCreateUpdateDisableAndContainment(t *testing.T) {
 	categories, _ = fixture.store.ListCategories(context.Background())
 	if len(categories) != 1 {
 		t.Errorf("invalid paths mutated category registry: %+v", categories)
+	}
+}
+
+func TestSettingsRootChangeRemapsCategoriesButFreezesExistingDownloads(t *testing.T) {
+	fixture := newWebFixture(t)
+	dial := &fakeDial{}
+	handler, err := New(
+		Config{CloudRoot: "/cloud", LocalRoot: fixture.localRoot},
+		fixture.creds, fixture.repo, fixture.sessions, fixture.clock, fixture.waker, fixture.cloud, fixture.filesystem,
+		SettingsDeps{Store: fixture.store, Dial: dial.dial},
+	)
+	if err != nil {
+		t.Fatalf("New(): %v", err)
+	}
+	fixture.handler = handler
+
+	fixture.seedCategory("movies", true)
+	oldSavePath := filepath.Join(fixture.localRoot, "movies")
+	download := fixture.seedDownload("a", domain.StateAccepted, func(download *domain.Download) {
+		download.Category = "movies"
+		download.CloudFolder = "/cloud/movies"
+		download.SavePath = oldSavePath
+	})
+	newLocalRoot := t.TempDir()
+	response := fixture.post("/settings/save", url.Values{
+		"address": {"cd2.example:443"}, "username": {"operator"}, "password": {"cd2-secret"},
+		"cloud_root": {"/new-cloud"}, "local_root": {newLocalRoot},
+		"timeout_offline": {"24h"}, "timeout_copy": {"72h"}, "timeout_verify": {"10m"},
+	})
+	requireStatus(t, response, http.StatusSeeOther)
+
+	category, err := fixture.store.GetCategory(context.Background(), "movies")
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalNewRoot, err := filepath.EvalSymlinks(newLocalRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if category.CloudPath != "/new-cloud/movies" || category.SavePath != filepath.Join(canonicalNewRoot, "movies") {
+		t.Errorf("remapped category = %+v", category)
+	}
+	if info, err := os.Stat(category.SavePath); err != nil || !info.IsDir() {
+		t.Errorf("remapped staging directory = (%v, %v), want directory", info, err)
+	}
+	storedDownload, err := fixture.store.GetDownload(context.Background(), download.Hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedDownload.CloudFolder != "/cloud/movies" || storedDownload.SavePath != oldSavePath {
+		t.Errorf("existing download paths changed = %+v", storedDownload)
 	}
 }
 
@@ -747,7 +805,7 @@ func TestCategoryConflictDoesNotCreateReservedDestination(t *testing.T) {
 	})
 
 	response := fixture.post("/categories/save", url.Values{
-		"name": {"blocked"}, "cloud_path": {"/cloud/blocked"}, "save_path": {destinationPath}, "enabled": {"true"},
+		"name": {"blocked"}, "cloud_subpath": {"blocked"}, "save_subpath": {"blocked"}, "enabled": {"true"},
 	})
 	requireStatus(t, response, http.StatusConflict)
 	if _, err := os.Lstat(destinationPath); !errors.Is(err, fs.ErrNotExist) {

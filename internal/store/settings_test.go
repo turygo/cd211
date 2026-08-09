@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/turygo/cd211/internal/domain"
 	"github.com/turygo/cd211/internal/settings"
 )
 
@@ -153,6 +154,64 @@ func TestReplaceSettingsDoesNotTouchCompletionOrPassword(t *testing.T) {
 	hash, err := store.GetOperatorPasswordHash(ctx)
 	if err != nil || hash != "hash-1" {
 		t.Fatalf("GetOperatorPasswordHash() = (%q, %v) after ReplaceSettings, want hash-1", hash, err)
+	}
+}
+
+func TestReplaceSettingsAndCategoriesRollsBackTogether(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	if err := store.CompleteSetup(ctx, "hash-1", setupValues(), now); err != nil {
+		t.Fatal(err)
+	}
+	for _, category := range []domain.Category{
+		{Name: "movies", CloudPath: "/cloud/movies", SavePath: "/downloads/movies", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{Name: "tv", CloudPath: "/cloud/tv", SavePath: "/downloads/tv", Enabled: true, CreatedAt: now, UpdatedAt: now},
+	} {
+		if _, err := store.UpsertCategory(ctx, category); err != nil {
+			t.Fatal(err)
+		}
+	}
+	submission := testSubmission("a", now)
+	if _, inserted, err := store.CreateSubmission(ctx, submission); err != nil || !inserted {
+		t.Fatalf("CreateSubmission(): inserted=%t err=%v", inserted, err)
+	}
+	claim, err := store.ClaimDue(ctx, "worker", now, time.Minute)
+	if err != nil || claim == nil {
+		t.Fatalf("ClaimDue() = (%+v, %v)", claim, err)
+	}
+	reserved := claim.Download
+	reserved.Name = "library"
+	reserved.DestinationName = "library"
+	reserved.UpdatedAt = now.Add(time.Second)
+	if err := store.CommitClaim(ctx, *claim, reserved); err != nil {
+		t.Fatalf("CommitClaim(reservation): %v", err)
+	}
+
+	update := setupValues()
+	update[settings.KeyCloudRoot] = "/new-cloud"
+	remapped := []domain.Category{
+		{Name: "movies", CloudPath: "/new-cloud/movies", SavePath: "/new-downloads/movies", Enabled: true, CreatedAt: now, UpdatedAt: now.Add(time.Hour)},
+		{Name: "tv", CloudPath: "/new-cloud/tv", SavePath: "/downloads/library/tv", Enabled: true, CreatedAt: now, UpdatedAt: now.Add(time.Hour)},
+	}
+	if err := store.ReplaceSettingsAndCategories(ctx, update, remapped, now.Add(time.Hour)); !errors.Is(err, ErrDestinationConflict) {
+		t.Fatalf("ReplaceSettingsAndCategories() error = %v, want destination conflict", err)
+	}
+
+	values, err := store.ListSettings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values[settings.KeyCloudRoot] != "/cloud" {
+		t.Errorf("cloud root after rollback = %q, want /cloud", values[settings.KeyCloudRoot])
+	}
+	categories, err := store.ListCategories(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(categories) != 2 || categories[0].CloudPath != "/cloud/movies" || categories[0].SavePath != "/downloads/movies" ||
+		categories[1].CloudPath != "/cloud/tv" || categories[1].SavePath != "/downloads/tv" {
+		t.Errorf("categories after rollback = %+v", categories)
 	}
 }
 

@@ -22,6 +22,7 @@ import (
 
 	"github.com/turygo/cd211/internal/creds"
 	"github.com/turygo/cd211/internal/domain"
+	"github.com/turygo/cd211/internal/fsafe"
 	"github.com/turygo/cd211/internal/session"
 	"github.com/turygo/cd211/internal/settings"
 	"github.com/turygo/cd211/internal/store"
@@ -83,10 +84,10 @@ type Credentials interface {
 	Change(ctx context.Context, current, next string, now time.Time) error
 }
 
-// SettingsStore persists and re-reads the runtime settings table.
+// SettingsStore persists runtime settings and category path remaps.
 type SettingsStore interface {
 	ListSettings(ctx context.Context) (map[string]string, error)
-	ReplaceSettings(ctx context.Context, values map[string]string, now time.Time) error
+	ReplaceSettingsAndCategories(ctx context.Context, values map[string]string, categories []domain.Category, now time.Time) error
 }
 
 // SettingsDeps wires the authenticated settings page.
@@ -96,8 +97,8 @@ type SettingsDeps struct {
 	// *clouddrive.Client adapter.
 	Dial DialFunc
 	// Apply swaps the persisted configuration into the running process. It is
-	// invoked only after Store.ReplaceSettings succeeded; a nil Apply persists
-	// without activating (a restart applies the settings).
+	// invoked only after Store.ReplaceSettingsAndCategories succeeded; a nil
+	// Apply persists without activating (a restart applies the settings).
 	Apply func(ctx context.Context, cfg settings.Config) error
 }
 
@@ -496,7 +497,10 @@ func (h *handler) categories(w http.ResponseWriter, r *http.Request) {
 		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 		return
 	}
-	page := buildCategoriesView(categories, h.authSession(r).CSRFToken, requestLang(r))
+	page := buildCategoriesView(
+		categories, h.config.CloudRoot, h.config.LocalRoot, h.authSession(r).CSRFToken,
+		r.URL.Query().Get("onboarding") == "1", requestLang(r),
+	)
 	page.Path = r.URL.RequestURI()
 	h.render(w, http.StatusOK, "categories", page)
 }
@@ -507,16 +511,21 @@ func (h *handler) settingsPage(w http.ResponseWriter, r *http.Request) {
 		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 		return
 	}
+	categories, err := h.repo.ListCategories(r.Context())
+	if err != nil {
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+		return
+	}
 	str := tr(requestLang(r))
 	notice, success := "", false
 	if r.URL.Query().Get("saved") == "1" {
 		notice, success = str.SettingsSaved, true
 	}
 	view := SettingsView{
-		PageMeta: pageMeta(str.TitleSettings, "settings", h.authSession(r).CSRFToken, requestLang(r)),
-		Values:   settingsFormFromValues(values),
-		Notice:   notice,
-		Success:  success,
+		PageMeta:   pageMeta(str.TitleSettings, "settings", h.authSession(r).CSRFToken, requestLang(r)),
+		Values:     settingsFormFromValues(values),
+		Categories: buildSettingsCategoryPaths(categories, h.config.CloudRoot, h.config.LocalRoot),
+		Notice:     notice, Success: success,
 	}
 	view.Path = "/settings"
 	h.render(w, http.StatusOK, "settings", view)
@@ -566,13 +575,24 @@ func (h *handler) settingsSave(w http.ResponseWriter, r *http.Request) {
 		h.renderSettings(w, r, http.StatusOK, form, err.Error(), false)
 		return
 	}
-	if err := h.settings.Store.ReplaceSettings(r.Context(), settings.Values(cfg), h.clock.Now().UTC()); err != nil {
+	now := h.clock.Now().UTC()
+	categories, canonicalLocalRoot, err := h.remapCategories(r.Context(), cfg, now)
+	if err != nil {
+		h.renderSettings(w, r, http.StatusConflict, form, str.CategoryRemapFailed, false)
+		return
+	}
+	cfg.LocalRoot = canonicalLocalRoot
+	if err := h.settings.Store.ReplaceSettingsAndCategories(r.Context(), settings.Values(cfg), categories, now); err != nil {
+		if errors.Is(err, store.ErrDestinationConflict) {
+			h.renderSettings(w, r, http.StatusConflict, form, str.CategoryRemapFailed, false)
+			return
+		}
 		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 		return
 	}
 	if h.settings.Apply != nil {
 		if err := h.settings.Apply(r.Context(), cfg); err != nil {
-			// The settings are durably persisted; only activation failed.
+			// The settings are durable; only activation failed.
 			h.renderSettings(w, r, http.StatusOK, form, str.SettingsApplyFailed, false)
 			return
 		}
@@ -583,14 +603,49 @@ func (h *handler) settingsSave(w http.ResponseWriter, r *http.Request) {
 // renderSettings re-renders the settings page with the submitted values and
 // a notice describing the outcome of the last action.
 func (h *handler) renderSettings(w http.ResponseWriter, r *http.Request, status int, form SettingsFormValues, notice string, success bool) {
+	categories, err := h.repo.ListCategories(r.Context())
+	if err != nil {
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+		return
+	}
 	view := SettingsView{
 		PageMeta: pageMeta(tr(requestLang(r)).TitleSettings, "settings", h.authSession(r).CSRFToken, requestLang(r)),
-		Values:   form,
-		Notice:   notice,
-		Success:  success,
+		Values:   form, Categories: buildSettingsCategoryPaths(categories, h.config.CloudRoot, h.config.LocalRoot),
+		Notice: notice, Success: success,
 	}
 	view.Path = "/settings"
 	h.render(w, status, "settings", view)
+}
+
+func (h *handler) remapCategories(ctx context.Context, cfg settings.Config, now time.Time) ([]domain.Category, string, error) {
+	verifier, err := fsafe.New(cfg.LocalRoot)
+	if err != nil {
+		return nil, "", err
+	}
+	canonicalLocalRoot := verifier.LocalRoot()
+	if cfg.CloudRoot == h.config.CloudRoot && canonicalLocalRoot == h.config.LocalRoot {
+		return nil, canonicalLocalRoot, nil
+	}
+	categories, err := h.repo.ListCategories(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	for index := range categories {
+		cloudSubpath, cloudOK := relativeCloudSubpath(h.config.CloudRoot, categories[index].CloudPath)
+		saveSubpath, saveOK := relativeLocalSubpath(h.config.LocalRoot, categories[index].SavePath)
+		if !cloudOK || !saveOK {
+			return nil, "", errors.New("category path is outside the configured root")
+		}
+		categories[index].CloudPath = path.Join(cfg.CloudRoot, cloudSubpath)
+		savePath := filepath.Join(canonicalLocalRoot, filepath.FromSlash(saveSubpath))
+		prepared, err := verifier.PrepareSaveRoot(savePath)
+		if err != nil || prepared != savePath {
+			return nil, "", errors.New("prepare remapped category save path")
+		}
+		categories[index].SavePath = prepared
+		categories[index].UpdatedAt = now
+	}
+	return categories, canonicalLocalRoot, nil
 }
 
 // parseSettingsForm extracts and validates the settings form. An empty
@@ -744,27 +799,26 @@ func (h *handler) renderPasswordPage(w http.ResponseWriter, r *http.Request, sta
 }
 
 func (h *handler) saveCategory(w http.ResponseWriter, r *http.Request) {
-	name, ok := exactPostValue(r, "name")
-	if !ok {
-		plain(w, http.StatusBadRequest, "Bad Request\n")
-		return
-	}
-	name, ok = canonicalCategory(name)
-	if !ok {
-		plain(w, http.StatusBadRequest, "Bad Request\n")
-		return
-	}
-	cloudPath, cloudOK := exactPostValue(r, "cloud_path")
-	savePath, saveOK := exactPostValue(r, "save_path")
+	name, nameOK := exactPostValue(r, "name")
+	cloudSubpath, cloudOK := exactPostValue(r, "cloud_subpath")
+	saveSubpath, saveOK := exactPostValue(r, "save_subpath")
 	enabledValue, enabledOK := exactPostValue(r, "enabled")
 	enabled, validEnabled := parseEnabled(enabledValue)
-	if !cloudOK || !saveOK || !enabledOK || !validEnabled || !strictCloudDescendant(h.config.CloudRoot, cloudPath) {
-		plain(w, http.StatusBadRequest, "Bad Request\n")
+	name, validName := canonicalCategory(name)
+	if !nameOK || !cloudOK || !saveOK || !enabledOK || !validName || !validEnabled ||
+		!validCloudSubpath(cloudSubpath) || !validLocalSubpath(saveSubpath) {
+		h.renderCategoriesNotice(w, r, http.StatusBadRequest, tr(requestLang(r)).CategorySubpathInvalid)
 		return
 	}
+	cloudPath := path.Join(h.config.CloudRoot, cloudSubpath)
+	if !strictCloudDescendant(h.config.CloudRoot, cloudPath) {
+		h.renderCategoriesNotice(w, r, http.StatusBadRequest, tr(requestLang(r)).CategorySubpathInvalid)
+		return
+	}
+	savePath := filepath.Join(h.config.LocalRoot, filepath.FromSlash(saveSubpath))
 	resolvedSavePath, _, err := h.filesystem.ResolveSaveRoot(savePath)
 	if err != nil {
-		plain(w, http.StatusBadRequest, "Bad Request\n")
+		h.renderCategoriesNotice(w, r, http.StatusBadRequest, tr(requestLang(r)).CategorySubpathInvalid)
 		return
 	}
 	categories, err := h.repo.ListCategories(r.Context())
@@ -789,7 +843,7 @@ func (h *handler) saveCategory(w http.ResponseWriter, r *http.Request) {
 	}
 	preparedSavePath, err := h.filesystem.PrepareSaveRoot(resolvedSavePath)
 	if err != nil || preparedSavePath != resolvedSavePath {
-		plain(w, http.StatusBadRequest, "Bad Request\n")
+		h.renderCategoriesNotice(w, r, http.StatusConflict, tr(requestLang(r)).CategoryPrepareFailed)
 		return
 	}
 	category.Enabled = enabled
@@ -798,6 +852,20 @@ func (h *handler) saveCategory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/categories", http.StatusSeeOther)
+}
+
+func (h *handler) renderCategoriesNotice(w http.ResponseWriter, r *http.Request, status int, notice string) {
+	categories, err := h.repo.ListCategories(r.Context())
+	if err != nil {
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+		return
+	}
+	page := buildCategoriesView(
+		categories, h.config.CloudRoot, h.config.LocalRoot, h.authSession(r).CSRFToken, false, requestLang(r),
+	)
+	page.Notice = notice
+	page.Path = "/categories"
+	h.render(w, status, "categories", page)
 }
 
 func (h *handler) start(w http.ResponseWriter, r *http.Request) {
@@ -957,6 +1025,25 @@ func strictCloudDescendant(root, candidate string) bool {
 		prefix += "/"
 	}
 	return strings.HasPrefix(candidate, prefix)
+}
+
+func validCloudSubpath(value string) bool {
+	if value == "" || value == "." || value == ".." || path.IsAbs(value) || path.Clean(value) != value {
+		return false
+	}
+	return validSubpathCharacters(value)
+}
+
+func validLocalSubpath(value string) bool {
+	if value == "" || value == "." || value == ".." || filepath.IsAbs(value) {
+		return false
+	}
+	cleaned := filepath.ToSlash(filepath.Clean(filepath.FromSlash(value)))
+	return cleaned == value && validSubpathCharacters(value)
+}
+
+func validSubpathCharacters(value string) bool {
+	return utf8.ValidString(value) && !strings.ContainsAny(value, "\\\x00") && !strings.ContainsFunc(value, unicode.IsControl)
 }
 
 func repositoryError(w http.ResponseWriter, err error) {

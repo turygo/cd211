@@ -104,26 +104,34 @@ type Strings struct {
 	NoFiles            string
 
 	// Categories
-	TitleCategories   string
-	CategoriesLede    string
-	SectionRegistered string
-	ThCloudPath       string
-	ThSavePath        string
-	ThAvailability    string
-	UpdatedAtFormat   string // printf with RFC3339 time
-	Save              string
-	NoCategories      string
-	SectionRegister   string
-	FieldName         string
-	FieldCloudPath    string
-	FieldSavePath     string
-	FieldAvailability string
-	HintName          string
-	HintCloud         string
-	HintSave          string
-	Enabled           string
-	Disabled          string
-	RegisterButton    string
+	TitleCategories         string
+	CategoriesLede          string
+	SectionRegistered       string
+	ThCloudPath             string
+	ThSavePath              string
+	ThAvailability          string
+	UpdatedAtFormat         string // printf with RFC3339 time
+	Save                    string
+	NoCategories            string
+	SectionRegister         string
+	FieldName               string
+	FieldCloudPath          string
+	FieldSavePath           string
+	FieldAvailability       string
+	HintName                string
+	HintCloud               string
+	HintSave                string
+	Enabled                 string
+	Disabled                string
+	RegisterButton          string
+	CategoryRootLede        string
+	CategoryOnboardingTitle string
+	CategoryOnboardingBody  string
+	FullPathLabel           string
+	CategoryPathDetached    string
+	CategorySubpathInvalid  string
+	CategoryPrepareFailed   string
+	CategoryRemapFailed     string
 
 	// Values produced by view builders
 	NotRecorded   string
@@ -193,6 +201,9 @@ type Strings struct {
 	VerifyTimeoutLabel               string
 	TimeoutFormatHint                string
 	AdvancedSettings                 string
+	PathFlowTitle                    string
+	PathFlowCopy                     string
+	PathFlowSharedRequirement        string
 
 	// Setup & settings validation and test results
 	TestPassed           string
@@ -224,6 +235,8 @@ type Strings struct {
 	SettingsSaved           string
 	SettingsApplyFailed     string
 	SettingsFrozenPathsNote string
+	SettingsRemapTitle      string
+	SettingsRemapHint       string
 }
 
 var stringsEN = Strings{
@@ -276,12 +289,12 @@ var stringsEN = Strings{
 	SectionChronology:  "Chronology",
 	SectionActions:     "Actions",
 	SectionFiles:       "Files",
-	CloudFolder:        "Cloud folder",
-	CloudSource:        "Cloud source",
-	SavePathLabel:      "Save path",
-	LocalContent:       "Local content",
+	CloudFolder:        "115 category folder",
+	CloudSource:        "115 download result",
+	SavePathLabel:      "Shared staging folder",
+	LocalContent:       "Verified content path",
 	CategoryLabel:      "Category",
-	FrozenNote:         "Paths were frozen when the download was accepted. Later category edits do not move existing data.",
+	FrozenNote:         "These paths were frozen when the download was accepted. Later root or category changes do not move existing data.",
 	ProgressLabel:      "Progress",
 	ProgressSummary:    "%s overall · offline %s · copy %s",
 	ProjectedState:     "Projected state",
@@ -306,26 +319,34 @@ var stringsEN = Strings{
 	ThSize:             "Size",
 	NoFiles:            "No file entries were recorded for this transfer.",
 
-	TitleCategories:   "Categories",
-	CategoriesLede:    "Each category maps a 115 cloud folder to a local staging directory. Category changes affect future submissions only; existing downloads keep their frozen paths.",
-	SectionRegistered: "Registered categories",
-	ThCloudPath:       "Cloud path",
-	ThSavePath:        "Local save path",
-	ThAvailability:    "Availability",
-	UpdatedAtFormat:   "updated %s",
-	Save:              "Save",
-	NoCategories:      "No categories are registered yet. Add the first one below.",
-	SectionRegister:   "Register a category",
-	FieldName:         "Name",
-	FieldCloudPath:    "Cloud path",
-	FieldSavePath:     "Local save path",
-	FieldAvailability: "Availability",
-	HintName:          "Trimmed and stored in lowercase.",
-	HintCloud:         "Must be below the configured cloud root.",
-	HintSave:          "Must be below the configured local root.",
-	Enabled:           "Enabled",
-	Disabled:          "Disabled",
-	RegisterButton:    "Register category",
+	TitleCategories:         "Categories",
+	CategoriesLede:          "A category chooses one child folder below each configured root. New downloads go to 115 first, then CloudDrive2 copies them to shared staging for Sonarr or Radarr to import.",
+	SectionRegistered:       "Registered categories",
+	ThCloudPath:             "115 category subfolder",
+	ThSavePath:              "Shared staging subfolder",
+	ThAvailability:          "Availability",
+	UpdatedAtFormat:         "updated %s",
+	Save:                    "Save",
+	NoCategories:            "No categories yet. Add one matching the category configured in Sonarr or Radarr.",
+	SectionRegister:         "Add a category",
+	FieldName:               "Category name",
+	FieldCloudPath:          "115 category subfolder",
+	FieldSavePath:           "Shared staging subfolder",
+	FieldAvailability:       "Availability",
+	HintName:                "Use the same value in Sonarr or Radarr. Stored in lowercase.",
+	HintCloud:               "Relative to the 115 offline download root. Do not start with /.",
+	HintSave:                "Relative to the shared staging root. Do not start with /.",
+	Enabled:                 "Enabled",
+	Disabled:                "Disabled",
+	RegisterButton:          "Add category",
+	CategoryRootLede:        "Every category path is built from the configured root plus the subfolder below.",
+	CategoryOnboardingTitle: "Last step: configure a Sonarr or Radarr category",
+	CategoryOnboardingBody:  "Use the same category name in CD211 and the qBittorrent download client entry. Common examples are movies for Radarr and tv for Sonarr.",
+	FullPathLabel:           "Full path",
+	CategoryPathDetached:    "This category is outside the configured roots. Choose both subfolders before enabling it.",
+	CategorySubpathInvalid:  "Enter clean relative subfolders without a leading slash, backslash, or parent-directory segment.",
+	CategoryPrepareFailed:   "The shared staging subfolder could not be prepared. Check the root path and permissions.",
+	CategoryRemapFailed:     "The roots were not changed because one or more category paths could not be safely remapped.",
 
 	NotRecorded:   "Not recorded",
 	NotScheduled:  "Not scheduled",
@@ -351,10 +372,10 @@ var stringsEN = Strings{
 	SetupStepPasswordDetail:          "Secure the interface and API.",
 	SetupStepCD2Title:                "CloudDrive2",
 	SetupStepCD2Detail:               "Connect and verify the service.",
-	SetupStepPathsTitle:              "Storage paths",
-	SetupStepPathsDetail:             "Map the cloud and local roots.",
+	SetupStepPathsTitle:              "File flow",
+	SetupStepPathsDetail:             "Choose the 115 and shared staging roots.",
 	SetupStepReviewTitle:             "Review",
-	SetupStepReviewDetail:            "Check settings and finish.",
+	SetupStepReviewDetail:            "Check the complete file flow.",
 	SetupPasswordLede:                "The operator password is used to sign in to this interface and by Sonarr and Radarr.",
 	SetupConfirmPassword:             "Confirm password",
 	SetupSetPassword:                 "Set password and continue",
@@ -362,10 +383,10 @@ var stringsEN = Strings{
 	CD2Address:                       "CloudDrive2 address",
 	CD2Insecure:                      "Allow insecure connection (plain HTTP)",
 	CD2InsecureHint:                  "Enable when CloudDrive2 does not serve TLS.",
-	CloudRootLabel:                   "CloudDrive2 download folder",
-	LocalRootLabel:                   "Local staging folder",
-	CloudRootHint:                    "CloudDrive2 saves offline downloads here before CD211 copies them to local staging.",
-	LocalRootHint:                    "CD211 stages files copied from CloudDrive2 here. Choose a folder that CD211 can access at the same path used by Sonarr and Radarr.",
+	CloudRootLabel:                   "115 offline download root",
+	LocalRootLabel:                   "Shared staging root",
+	CloudRootHint:                    "115 saves offline downloads in category subfolders below this root.",
+	LocalRootHint:                    "CloudDrive2 writes here, CD211 verifies here, and Sonarr or Radarr imports from here. This is staging, not the final media library.",
 	CloudDirectoryUp:                 "Up one level",
 	CloudDirectoryCurrent:            "Browsing",
 	CloudDirectorySelect:             "Use this folder",
@@ -386,12 +407,15 @@ var stringsEN = Strings{
 	SetupSessionExpired:              "The setup session expired. Return to setup and sign in again.",
 	TestButton:                       "Test connection",
 	ContinueButton:                   "Continue",
-	FinishButton:                     "Finish setup",
+	FinishButton:                     "Finish setup and configure categories",
 	OfflineTimeoutLabel:              "Offline download timeout",
 	CopyTimeoutLabel:                 "Copy timeout",
 	VerifyTimeoutLabel:               "Local verify timeout",
 	TimeoutFormatHint:                "Go durations, for example 24h, 72h, 10m.",
 	AdvancedSettings:                 "Advanced settings",
+	PathFlowTitle:                    "Files pass through two locations",
+	PathFlowCopy:                     "CloudDrive2 copies completed downloads",
+	PathFlowSharedRequirement:        "CloudDrive2, CD211, Sonarr, and Radarr must all use the same absolute path for shared staging.",
 
 	TestPassed:           "All checks passed.",
 	TestUnreachable:      "Could not reach CloudDrive2 at %s. Check the address and the network.",
@@ -402,8 +426,8 @@ var stringsEN = Strings{
 	AddressInvalid:       "The CloudDrive2 address must be host:port with a port from 1 to 65535.",
 	UsernameRequired:     "The CloudDrive2 username is required.",
 	CD2PasswordRequired:  "The CloudDrive2 password is required.",
-	CloudRootInvalid:     "The cloud root must be an absolute clean path such as /cloud.",
-	LocalRootInvalid:     "The local root must be an absolute clean path such as /data/downloads.",
+	CloudRootInvalid:     "The 115 offline download root must be an absolute clean path such as /115open/CD211.",
+	LocalRootInvalid:     "The shared staging root must be an absolute clean path such as /downloads.",
 	CloudRootUnverified:  "The cloud root directory could not be verified.",
 	CloudRootNotDir:      "The cloud root path is not a directory.",
 	LocalRootNotWritable: "The local root is not writable or does not exist.",
@@ -412,15 +436,17 @@ var stringsEN = Strings{
 
 	NavSettings:             "Settings",
 	TitleSettings:           "Settings",
-	SettingsLede:            "Connection and path settings are tested before they are saved and take effect immediately.",
+	SettingsLede:            "Connections and roots are tested before saving. Root changes remap category subfolders for future downloads.",
 	SettingsSectionCD2:      "CloudDrive2 connection",
-	SettingsSectionPaths:    "Paths",
+	SettingsSectionPaths:    "Roots and file flow",
 	SettingsSectionTimeouts: "Timeouts",
 	CD2PasswordKeep:         "Leave empty to keep the stored password.",
 	SettingsSaveButton:      "Save settings",
 	SettingsSaved:           "Settings saved and applied.",
 	SettingsApplyFailed:     "The settings were saved, but applying them failed. They will take effect after a restart.",
-	SettingsFrozenPathsNote: "Path changes never affect downloads that have already been accepted; those keep the paths recorded at accept time.",
+	SettingsFrozenPathsNote: "Existing downloads keep their recorded paths and files are never moved. Only future downloads use remapped category paths.",
+	SettingsRemapTitle:      "Category path changes",
+	SettingsRemapHint:       "Changing either root keeps every category subfolder and previews its new full path below.",
 }
 
 var stringsZH = Strings{
@@ -472,13 +498,12 @@ var stringsZH = Strings{
 	SectionPaths:       "路径",
 	SectionChronology:  "时间线",
 	SectionActions:     "操作",
-	SectionFiles:       "文件",
-	CloudFolder:        "云端目录",
-	CloudSource:        "云端源路径",
-	SavePathLabel:      "保存路径",
-	LocalContent:       "本地内容",
+	CloudFolder:        "115 分类目录",
+	CloudSource:        "115 下载结果",
+	SavePathLabel:      "共享暂存目录",
+	LocalContent:       "已校验内容路径",
 	CategoryLabel:      "分类",
-	FrozenNote:         "任务创建后，相关路径即固定不变；之后修改分类不会移动已有数据。",
+	FrozenNote:         "任务提交后，这些路径不会再变；之后修改根目录或分类也不会移动已有数据。",
 	ProgressLabel:      "进度",
 	ProgressSummary:    "总进度 %s · 离线 %s · 复制 %s",
 	ProjectedState:     "qBittorrent 状态",
@@ -503,26 +528,34 @@ var stringsZH = Strings{
 	ThSize:             "大小",
 	NoFiles:            "该任务暂无文件记录。",
 
-	TitleCategories:   "分类管理",
-	CategoriesLede:    "每个分类都将 115 云端目录映射到本地暂存目录。分类修改仅影响后续提交的任务，已有任务仍使用原路径。",
-	SectionRegistered: "已有分类",
-	ThCloudPath:       "云端路径",
-	ThSavePath:        "本地保存路径",
-	ThAvailability:    "启用状态",
-	UpdatedAtFormat:   "更新于 %s",
-	Save:              "保存",
-	NoCategories:      "暂无分类，请在下方添加。",
-	SectionRegister:   "添加分类",
-	FieldName:         "名称",
-	FieldCloudPath:    "云端路径",
-	FieldSavePath:     "本地保存路径",
-	FieldAvailability: "启用状态",
-	HintName:          "自动去除首尾空格并转为小写。",
-	HintCloud:         "必须位于已配置的云端根目录下。",
-	HintSave:          "必须位于已配置的本地根目录下。",
-	Enabled:           "启用",
-	Disabled:          "停用",
-	RegisterButton:    "添加分类",
+	TitleCategories:         "分类管理",
+	CategoriesLede:          "每个分类只需指定两个根目录下的子目录。任务先下载到 115，再由 CloudDrive2 复制到共享暂存目录，供 Sonarr 或 Radarr 导入。",
+	SectionRegistered:       "已有分类",
+	ThCloudPath:             "115 分类子目录",
+	ThSavePath:              "共享暂存子目录",
+	ThAvailability:          "启用状态",
+	UpdatedAtFormat:         "更新于 %s",
+	Save:                    "保存",
+	NoCategories:            "尚未配置分类。请添加一个与 Sonarr 或 Radarr 设置一致的分类。",
+	SectionRegister:         "添加分类",
+	FieldName:               "分类名称",
+	FieldCloudPath:          "115 分类子目录",
+	FieldSavePath:           "共享暂存子目录",
+	FieldAvailability:       "启用状态",
+	HintName:                "请与 Sonarr 或 Radarr 中的分类保持一致；保存时转为小写。",
+	HintCloud:               "相对于 115 离线下载根目录，请勿以 / 开头。",
+	HintSave:                "相对于共享暂存根目录，请勿以 / 开头。",
+	Enabled:                 "启用",
+	Disabled:                "停用",
+	RegisterButton:          "添加分类",
+	CategoryRootLede:        "每条分类路径都由已配置的根目录与下方填写的子目录拼接而成。",
+	CategoryOnboardingTitle: "最后一步：配置 Sonarr 或 Radarr 分类",
+	CategoryOnboardingBody:  "CD211 与 qBittorrent 下载客户端配置必须使用相同分类名。Radarr 通常使用 movies，Sonarr 通常使用 tv。",
+	FullPathLabel:           "完整路径",
+	CategoryPathDetached:    "此分类已脱离当前根目录，请重新填写两个子目录后再启用。",
+	CategorySubpathInvalid:  "请输入有效的相对子目录路径；路径不能以斜杠开头，也不能包含反斜杠或上级目录。",
+	CategoryPrepareFailed:   "无法准备共享暂存子目录，请检查根目录和目录权限。",
+	CategoryRemapFailed:     "一个或多个分类路径无法安全映射，因此没有修改根目录。",
 
 	NotRecorded:   "未记录",
 	NotScheduled:  "未调度",
@@ -548,10 +581,10 @@ var stringsZH = Strings{
 	SetupStepPasswordDetail:          "保护管理界面与 API",
 	SetupStepCD2Title:                "云盘连接",
 	SetupStepCD2Detail:               "配置并测试 CloudDrive2 连接",
-	SetupStepPathsTitle:              "存储路径",
-	SetupStepPathsDetail:             "设置云端与本地目录",
+	SetupStepPathsTitle:              "文件流向",
+	SetupStepPathsDetail:             "选择 115 与共享暂存根目录",
 	SetupStepReviewTitle:             "确认配置",
-	SetupStepReviewDetail:            "检查无误后完成设置",
+	SetupStepReviewDetail:            "检查完整文件流向",
 	SetupPasswordLede:                "操作员密码用于登录本界面，Sonarr 和 Radarr 连接 CD211 时也使用此密码。",
 	SetupConfirmPassword:             "确认密码",
 	SetupSetPassword:                 "设置密码并继续",
@@ -559,10 +592,10 @@ var stringsZH = Strings{
 	CD2Address:                       "CloudDrive2 地址",
 	CD2Insecure:                      "允许不安全连接（明文 HTTP）",
 	CD2InsecureHint:                  "如果 CloudDrive2 使用明文 HTTP，请启用此选项。",
-	CloudRootLabel:                   "CloudDrive2 下载目录",
-	LocalRootLabel:                   "本地暂存目录",
-	CloudRootHint:                    "CloudDrive2 会先将离线下载的内容保存到此目录，再由 CD211 复制到本地暂存目录。",
-	LocalRootHint:                    "CD211 会将从 CloudDrive2 复制的内容暂存于此；请选择 CD211 可访问的目录，并在 Sonarr 和 Radarr 中使用相同的路径。",
+	CloudRootLabel:                   "115 离线下载根目录",
+	LocalRootLabel:                   "共享暂存根目录",
+	CloudRootHint:                    "115 会将离线任务下载到此根目录下对应的分类子目录。",
+	LocalRootHint:                    "CloudDrive2 写入、CD211 校验、Sonarr 或 Radarr 从这里导入。这里是中转区，不是最终媒体库。",
 	CloudDirectoryUp:                 "返回上一级",
 	CloudDirectoryCurrent:            "正在浏览",
 	CloudDirectorySelect:             "使用此目录",
@@ -583,12 +616,15 @@ var stringsZH = Strings{
 	SetupSessionExpired:              "设置会话已过期，请返回初始设置页面并重新登录。",
 	TestButton:                       "测试连接",
 	ContinueButton:                   "继续",
-	FinishButton:                     "完成设置",
+	FinishButton:                     "完成设置并配置分类",
 	OfflineTimeoutLabel:              "离线下载超时",
 	CopyTimeoutLabel:                 "复制超时",
 	VerifyTimeoutLabel:               "本地校验超时",
 	TimeoutFormatHint:                "请输入时长，例如 24h（24 小时）或 10m（10 分钟）。",
 	AdvancedSettings:                 "高级设置",
+	PathFlowTitle:                    "文件会依次经过两个位置",
+	PathFlowCopy:                     "下载完成后由 CloudDrive2 复制到共享暂存目录",
+	PathFlowSharedRequirement:        "CloudDrive2、CD211、Sonarr 和 Radarr 必须使用同一个绝对路径访问共享暂存目录。",
 
 	TestPassed:           "所有检查均已通过。",
 	TestUnreachable:      "无法连接地址 %s 上的 CloudDrive2，请检查地址和网络。",
@@ -599,8 +635,8 @@ var stringsZH = Strings{
 	AddressInvalid:       "CloudDrive2 地址格式应为“主机名:端口”，端口范围为 1–65535。",
 	UsernameRequired:     "请填写 CloudDrive2 用户名。",
 	CD2PasswordRequired:  "请填写 CloudDrive2 密码。",
-	CloudRootInvalid:     "云端根目录必须是规范的绝对路径，例如 /cloud。",
-	LocalRootInvalid:     "本地根目录必须是规范的绝对路径，例如 /data/downloads。",
+	CloudRootInvalid:     "115 离线下载根目录必须是规范的绝对路径，例如 /115open/CD211。",
+	LocalRootInvalid:     "共享暂存根目录必须是规范的绝对路径，例如 /downloads。",
 	CloudRootUnverified:  "无法确认云端根目录是否可用。",
 	CloudRootNotDir:      "指定的云端根目录不是目录。",
 	LocalRootNotWritable: "本地根目录不存在或不可写。",
@@ -609,15 +645,17 @@ var stringsZH = Strings{
 
 	NavSettings:             "设置",
 	TitleSettings:           "设置",
-	SettingsLede:            "保存前会先测试连接和路径设置，保存后立即生效。",
+	SettingsLede:            "保存前会测试连接和根目录。修改根目录时，分类子目录会自动映射到新位置并用于后续任务。",
 	SettingsSectionCD2:      "CloudDrive2 连接",
-	SettingsSectionPaths:    "路径",
+	SettingsSectionPaths:    "根目录与文件流向",
 	SettingsSectionTimeouts: "超时",
 	CD2PasswordKeep:         "留空则保留当前密码。",
 	SettingsSaveButton:      "保存设置",
 	SettingsSaved:           "设置已保存并生效。",
 	SettingsApplyFailed:     "设置已保存，但未能立即生效；重启服务后将自动生效。",
-	SettingsFrozenPathsNote: "修改路径不会影响已有任务，这些任务将继续使用创建时记录的路径。",
+	SettingsFrozenPathsNote: "已有任务仍使用提交时记录的路径，文件不会移动；重新映射后的分类路径仅用于后续任务。",
+	SettingsRemapTitle:      "分类路径变化",
+	SettingsRemapHint:       "修改任一根目录时会保留每个分类的子目录；下方会预览新的完整路径。",
 }
 
 // tr returns the string table for lang, defaulting to English.

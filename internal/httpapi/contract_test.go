@@ -510,7 +510,7 @@ func TestCategoryPreparationFailureKeepsDisabledReservation(t *testing.T) {
 		t.Fatalf("failed preparation = %d %q", response.Code, response.Body.String())
 	}
 	category, err := harness.repository.GetCategory(context.Background(), "pending")
-	if err != nil || category.Enabled || category.SavePath != "/local/pending" {
+	if err != nil || category.Enabled || category.CloudPath != "/cloud/pending" || category.SavePath != "/local/pending" {
 		t.Fatalf("disabled reservation = (%+v, %v)", category, err)
 	}
 }

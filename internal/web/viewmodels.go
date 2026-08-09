@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -124,14 +126,19 @@ type FileView struct {
 
 type CategoriesView struct {
 	PageMeta
-	Rows []CategoryRow
+	Rows       []CategoryRow
+	CloudRoot  string
+	LocalRoot  string
+	Onboarding bool
+	Notice     string
 }
 
 type SettingsView struct {
 	PageMeta
-	Values  SettingsFormValues
-	Notice  string
-	Success bool
+	Values     SettingsFormValues
+	Categories []SettingsCategoryPath
+	Notice     string
+	Success    bool
 }
 
 // SettingsFormValues carries the prefilled settings form fields. CD2Password
@@ -148,13 +155,23 @@ type SettingsFormValues struct {
 	VerifyTimeout  string
 }
 
+type SettingsCategoryPath struct {
+	Name         string
+	CloudSubpath string
+	SaveSubpath  string
+	Valid        bool
+}
+
 type CategoryRow struct {
-	Name      string
-	CloudPath string
-	SavePath  string
-	Enabled   bool
-	CreatedAt string
-	UpdatedAt string
+	Name          string
+	CloudSubpath  string
+	SaveSubpath   string
+	CloudFullPath string
+	SaveFullPath  string
+	Enabled       bool
+	PathValid     bool
+	CreatedAt     string
+	UpdatedAt     string
 }
 
 func buildDownloadsView(downloads []domain.Download, categories []domain.Category, selectedView, selectedCategory, csrfToken string, now time.Time, cloudOnline bool, lang Lang) (DownloadsView, error) {
@@ -262,16 +279,52 @@ func buildDetailView(download domain.Download, files []domain.DownloadFile, csrf
 	return page, nil
 }
 
-func buildCategoriesView(categories []domain.Category, csrfToken string, lang Lang) CategoriesView {
+func buildCategoriesView(categories []domain.Category, cloudRoot, localRoot, csrfToken string, onboarding bool, lang Lang) CategoriesView {
 	str := tr(lang)
-	page := CategoriesView{PageMeta: pageMeta(str.TitleCategories, "categories", csrfToken, lang)}
+	page := CategoriesView{
+		PageMeta:  pageMeta(str.TitleCategories, "categories", csrfToken, lang),
+		CloudRoot: cloudRoot, LocalRoot: localRoot, Onboarding: onboarding,
+	}
 	for _, category := range categories {
+		cloudSubpath, cloudOK := relativeCloudSubpath(cloudRoot, category.CloudPath)
+		saveSubpath, saveOK := relativeLocalSubpath(localRoot, category.SavePath)
 		page.Rows = append(page.Rows, CategoryRow{
-			Name: category.Name, CloudPath: category.CloudPath, SavePath: category.SavePath, Enabled: category.Enabled,
+			Name: category.Name, CloudSubpath: cloudSubpath, SaveSubpath: saveSubpath,
+			CloudFullPath: category.CloudPath, SaveFullPath: category.SavePath,
+			Enabled: category.Enabled, PathValid: cloudOK && saveOK,
 			CreatedAt: displayTime(category.CreatedAt, str), UpdatedAt: displayTime(category.UpdatedAt, str),
 		})
 	}
 	return page
+}
+
+func buildSettingsCategoryPaths(categories []domain.Category, cloudRoot, localRoot string) []SettingsCategoryPath {
+	rows := make([]SettingsCategoryPath, 0, len(categories))
+	for _, category := range categories {
+		cloudSubpath, cloudOK := relativeCloudSubpath(cloudRoot, category.CloudPath)
+		saveSubpath, saveOK := relativeLocalSubpath(localRoot, category.SavePath)
+		rows = append(rows, SettingsCategoryPath{
+			Name: category.Name, CloudSubpath: cloudSubpath, SaveSubpath: saveSubpath, Valid: cloudOK && saveOK,
+		})
+	}
+	return rows
+}
+
+func relativeCloudSubpath(root, fullPath string) (string, bool) {
+	if !strictCloudDescendant(root, fullPath) {
+		return "", false
+	}
+	relative := strings.TrimPrefix(fullPath, root)
+	relative = strings.TrimPrefix(relative, "/")
+	return relative, relative != "" && path.Clean(relative) == relative
+}
+
+func relativeLocalSubpath(root, fullPath string) (string, bool) {
+	relative, err := filepath.Rel(filepath.Clean(root), filepath.Clean(fullPath))
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return filepath.ToSlash(relative), true
 }
 
 func pageMeta(title, activeNav, csrfToken string, lang Lang) PageMeta {

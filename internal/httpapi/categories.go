@@ -53,7 +53,7 @@ func (h *handler) createCategory(w http.ResponseWriter, r *http.Request) {
 	}
 	now := h.now()
 	category := domain.Category{
-		Name: name, CloudPath: path.Join(h.config.CloudRoot, strings.ToUpper(name)), SavePath: resolvedSavePath,
+		Name: name, CloudPath: path.Join(h.config.CloudRoot, name), SavePath: resolvedSavePath,
 		Enabled: false, CreatedAt: now, UpdatedAt: now,
 	}
 	if _, err = h.repo.UpsertCategory(r.Context(), category); err != nil {
