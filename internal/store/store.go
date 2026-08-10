@@ -55,9 +55,6 @@ func Open(ctx context.Context, databasePath string) (*Store, error) {
 	if err := applyMigrations(ctx, db); err != nil {
 		return fail(err)
 	}
-	if err := restrictDatabaseFiles(databasePath); err != nil {
-		return fail(err)
-	}
 
 	return &Store{
 		db:      db,
