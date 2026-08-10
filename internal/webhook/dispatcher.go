@@ -174,7 +174,7 @@ func (d *Dispatcher) worker(ctx context.Context) {
 			return
 		}
 		if err != nil {
-			d.logger.Warn("webhook repository error", "operation", "step", "result", "error")
+			d.logger.Warn("webhook repository error", "operation", "step", "error", err)
 			d.wait(ctx, d.config.MaxIdleWait)
 			continue
 		}
@@ -188,7 +188,7 @@ func (d *Dispatcher) worker(ctx context.Context) {
 			return
 		}
 		if dueErr != nil {
-			d.logger.Warn("webhook repository error", "operation", "next_due", "result", "error")
+			d.logger.Warn("webhook repository error", "operation", "next_due", "error", dueErr)
 			d.wait(ctx, d.config.MaxIdleWait)
 			continue
 		}

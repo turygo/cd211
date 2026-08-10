@@ -88,6 +88,8 @@ type fakeRepository struct {
 	mu         sync.Mutex
 	rows       []*fakeDelivery
 	nextID     int64
+	claimErr   error
+	nextDueErr error
 	commitErrs []error
 	commits    []outbox.Result
 	pruned     []int64
@@ -207,6 +209,9 @@ func (r *fakeRepository) byID(id int64) *fakeDelivery {
 func (r *fakeRepository) ClaimWebhookDue(_ context.Context, owner string, now time.Time, lease time.Duration) (*outbox.Claim, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.claimErr != nil {
+		return nil, r.claimErr
+	}
 	for _, row := range r.rows {
 		if !r.claimable(row, now) || r.orderingBlocked(row) {
 			continue
@@ -245,6 +250,9 @@ func (r *fakeRepository) ClaimWebhookDue(_ context.Context, owner string, now ti
 func (r *fakeRepository) NextWebhookDue(_ context.Context, now time.Time) (*time.Time, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.nextDueErr != nil {
+		return nil, r.nextDueErr
+	}
 	var earliest *time.Time
 	for _, row := range r.rows {
 		if !row.endpointEnabled || row.endpointDeleted {
@@ -343,6 +351,23 @@ func (r *fakeRepository) disableEndpoint(id int64) {
 
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+type lockedBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(payload []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(payload)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
 }
 
 func newTestDispatcher(repo Repository, client HTTPClient, clock Clock, version string) *Dispatcher {
@@ -1119,6 +1144,65 @@ func TestWorkerSleepsUntilDueWhenSoon(t *testing.T) {
 	duration := clock.timerDurations()[0]
 	if duration != 150*time.Millisecond {
 		t.Fatalf("idle wait = %v, want 150ms (until due)", duration)
+	}
+}
+
+func TestWorkerLogsRepositoryErrors(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		operation string
+		configure func(*fakeRepository)
+	}{
+		{
+			name:      "claim",
+			operation: "step",
+			configure: func(repo *fakeRepository) {
+				repo.claimErr = errors.New("claim repository failure")
+			},
+		},
+		{
+			name:      "next due",
+			operation: "next_due",
+			configure: func(repo *fakeRepository) {
+				repo.nextDueErr = errors.New("next due repository failure")
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+			clock := &fakeClock{now: now}
+			repo := &fakeRepository{}
+			test.configure(repo)
+			logs := &lockedBuffer{}
+			dispatcher := newTestDispatcher(repo, NewHTTPClient(time.Second), clock, "unknown")
+			dispatcher.logger = slog.New(slog.NewJSONHandler(logs, nil))
+
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan struct{})
+			go func() {
+				dispatcher.worker(ctx)
+				close(done)
+			}()
+
+			wantOperation := fmt.Sprintf("%q:%q", "operation", test.operation)
+			wantError := fmt.Sprintf("%q:%q", "error", test.name+" repository failure")
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				output := logs.String()
+				if strings.Contains(output, wantOperation) && strings.Contains(output, wantError) {
+					if strings.Contains(output, `"result":"error"`) {
+						t.Errorf("repository log retained literal result error: %s", output)
+					}
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("repository error was not logged with operation and cause: %s", output)
+				}
+				time.Sleep(time.Millisecond)
+			}
+			cancel()
+			<-done
+		})
 	}
 }
 

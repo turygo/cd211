@@ -814,12 +814,26 @@ func TestEnqueueTestDelivery(t *testing.T) {
 	}
 
 	// The test delivery travels the normal outbox path.
-	claim, err := store.ClaimWebhookDue(ctx, "worker", now.Add(2*time.Minute), 30*time.Second)
+	claimedAt := now.Add(2 * time.Minute)
+	leaseDuration := 30 * time.Second
+	claim, err := store.ClaimWebhookDue(ctx, "worker", claimedAt, leaseDuration)
 	if err != nil || claim == nil || claim.EventType != outbox.EventTypeTest {
 		t.Fatalf("test claim = (%+v, %v), want webhook.test delivery", claim, err)
 	}
+	if claim.Owner != "worker" || claim.AttemptCount != 1 || claim.FirstAttemptAt == nil || !claim.FirstAttemptAt.Equal(claimedAt) {
+		t.Errorf("test claim = %+v, want first attempt and worker lease identity", claim)
+	}
 	if string(claim.Payload) != string(event.Payload) {
 		t.Error("claimed payload differs from persisted event payload")
+	}
+	claimedDelivery, err := store.GetWebhookDelivery(ctx, delivery.ID)
+	if err != nil {
+		t.Fatalf("GetWebhookDelivery(claimed test) error = %v", err)
+	}
+	if claimedDelivery.Status != outbox.StatusDelivering || claimedDelivery.AttemptCount != 1 ||
+		claimedDelivery.LeaseOwner != "worker" || claimedDelivery.LeaseUntil == nil ||
+		!claimedDelivery.LeaseUntil.Equal(claimedAt.Add(leaseDuration)) {
+		t.Errorf("claimed test delivery = %+v, want persisted delivering lease", claimedDelivery)
 	}
 	if err := store.CommitWebhookClaim(ctx, *claim, successAt(now.Add(3*time.Minute)), now.Add(3*time.Minute)); err != nil {
 		t.Fatalf("commit test delivery: %v", err)

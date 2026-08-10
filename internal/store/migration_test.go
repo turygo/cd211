@@ -1,0 +1,303 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"io/fs"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/pressly/goose/v3"
+	"github.com/turygo/cd211/internal/outbox"
+	storedb "github.com/turygo/cd211/internal/store/sqlc"
+	_ "modernc.org/sqlite"
+)
+
+func TestOpenMigratesLegacyDomainEventsSequence(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "legacy.sqlite")
+	db := openDatabaseAtMigration(t, databasePath, 5)
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	payload := []byte(`{"id":"evt_legacy","type":"webhook.test"}`)
+
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO domain_events (
+			id, type, aggregate_type, aggregate_id, aggregate_version, payload, occurred_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, "evt_legacy", outbox.EventTypeTest, outbox.AggregateWebhookEndpoint, "7", 3, payload, now); err != nil {
+		t.Fatalf("insert legacy event fixture: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO webhook_endpoints (
+			id, name, url, hmac_secret, bearer_token, enabled, created_at, updated_at, row_version
+		) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
+	`, 7, "legacy-endpoint", "https://example.invalid/webhook", "fixture-secret", "fixture-token", now, now, 3); err != nil {
+		t.Fatalf("insert endpoint fixture: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO webhook_deliveries (
+			id, event_id, endpoint_id, endpoint_name, event_type, aggregate_type,
+			aggregate_id, status, attempt_count, next_attempt_at, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+	`, 11, "evt_legacy", 7, "legacy-endpoint", outbox.EventTypeTest, outbox.AggregateWebhookEndpoint, "7", now, now, now); err != nil {
+		t.Fatalf("insert delivery fixture: %v", err)
+	}
+
+	rebuildDomainEventsAsLegacy(t, db)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy fixture database: %v", err)
+	}
+
+	store, err := Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("Open(legacy database) error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
+
+	assertDomainEventsSequenceSchema(t, store.db)
+
+	event, err := store.queries.GetEvent(ctx, "evt_legacy")
+	if err != nil {
+		t.Fatalf("GetEvent() error = %v", err)
+	}
+	if event.Sequence != 1 || event.Type != outbox.EventTypeTest || event.AggregateType != outbox.AggregateWebhookEndpoint ||
+		event.AggregateID != "7" || event.AggregateVersion != 3 || string(event.Payload) != string(payload) || !event.OccurredAt.Equal(now) {
+		t.Errorf("migrated event = %+v, want preserved legacy event with sequence 1", event)
+	}
+
+	assertWebhookEventForeignKey(t, store.db)
+
+	leaseDuration := 30 * time.Second
+	claimedAt := now.Add(time.Minute)
+	claim, err := store.ClaimWebhookDue(ctx, "migration-worker", claimedAt, leaseDuration)
+	if err != nil {
+		t.Fatalf("ClaimWebhookDue() error = %v", err)
+	}
+	if claim == nil {
+		t.Fatal("ClaimWebhookDue() = nil, want legacy pending delivery")
+	}
+	if claim.DeliveryID != 11 || claim.EventID != "evt_legacy" || claim.EventType != outbox.EventTypeTest ||
+		claim.Owner != "migration-worker" || claim.AttemptCount != 1 || claim.FirstAttemptAt == nil ||
+		!claim.FirstAttemptAt.Equal(claimedAt) || string(claim.Payload) != string(payload) {
+		t.Errorf("claim = %+v, want first claim with preserved event payload", claim)
+	}
+	delivery, err := store.GetWebhookDelivery(ctx, 11)
+	if err != nil {
+		t.Fatalf("GetWebhookDelivery() error = %v", err)
+	}
+	if delivery.Status != outbox.StatusDelivering || delivery.AttemptCount != 1 || delivery.LeaseOwner != "migration-worker" ||
+		delivery.FirstAttemptAt == nil || !delivery.FirstAttemptAt.Equal(claimedAt) || delivery.LeaseUntil == nil ||
+		!delivery.LeaseUntil.Equal(claimedAt.Add(leaseDuration)) {
+		t.Errorf("claimed delivery = %+v, want persisted lease state", delivery)
+	}
+}
+
+func TestDomainEventsSequenceMigrationPreservesCanonicalCursor(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "canonical.sqlite")
+	db := openDatabaseAtMigration(t, databasePath, 5)
+	now := time.Date(2026, 8, 10, 13, 0, 0, 0, time.UTC)
+
+	for _, fixture := range []struct {
+		sequence int64
+		id       string
+	}{
+		{sequence: 17, id: "evt_keep"},
+		{sequence: 29, id: "evt_deleted"},
+	} {
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO domain_events (
+				sequence, id, type, aggregate_type, aggregate_id, aggregate_version, payload, occurred_at
+			) VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+		`, fixture.sequence, fixture.id, outbox.EventTypeCompleted, "download", fixture.id, []byte(`{"fixture":true}`), now); err != nil {
+			t.Fatalf("insert canonical event %q: %v", fixture.id, err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, "DELETE FROM domain_events WHERE id = ?", "evt_deleted"); err != nil {
+		t.Fatalf("delete high-water event fixture: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close canonical fixture database: %v", err)
+	}
+
+	store, err := Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("Open(canonical database) error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
+
+	assertDomainEventsSequenceSchema(t, store.db)
+	event, err := store.queries.GetEvent(ctx, "evt_keep")
+	if err != nil {
+		t.Fatalf("GetEvent(evt_keep) error = %v", err)
+	}
+	if event.Sequence != 17 {
+		t.Errorf("evt_keep sequence = %d, want 17", event.Sequence)
+	}
+	var watermark int64
+	if err := store.db.QueryRowContext(ctx, "SELECT seq FROM sqlite_sequence WHERE name = 'domain_events'").Scan(&watermark); err != nil {
+		t.Fatalf("read domain_events sqlite_sequence: %v", err)
+	}
+	if watermark != 29 {
+		t.Errorf("domain_events sqlite_sequence = %d, want deleted high-water 29", watermark)
+	}
+
+	if err := store.queries.InsertEvent(ctx, storedb.InsertEventParams{
+		ID:               "evt_after_migration",
+		Type:             outbox.EventTypeCompleted,
+		AggregateType:    "download",
+		AggregateID:      "after",
+		AggregateVersion: 0,
+		Payload:          []byte(`{"after":true}`),
+		OccurredAt:       now.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("InsertEvent(after migration) error = %v", err)
+	}
+	inserted, err := store.queries.GetEvent(ctx, "evt_after_migration")
+	if err != nil {
+		t.Fatalf("GetEvent(after migration) error = %v", err)
+	}
+	if inserted.Sequence != 30 {
+		t.Errorf("post-migration sequence = %d, want 30", inserted.Sequence)
+	}
+}
+
+func openDatabaseAtMigration(t *testing.T, databasePath string, version int64) *sql.DB {
+	t.Helper()
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatalf("open fixture database: %v", err)
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	if err := configureDatabase(ctx, db); err != nil {
+		_ = db.Close()
+		t.Fatalf("configure fixture database: %v", err)
+	}
+	migrations, err := fs.Sub(embeddedMigrations, "migrations")
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("load fixture migrations: %v", err)
+	}
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrations)
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("create fixture migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(ctx, version); err != nil {
+		_ = db.Close()
+		t.Fatalf("migrate fixture database to %d: %v", version, err)
+	}
+	return db
+}
+
+func rebuildDomainEventsAsLegacy(t *testing.T, db *sql.DB) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := db.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+		t.Fatalf("disable foreign keys for legacy fixture: %v", err)
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin legacy schema fixture: %v", err)
+	}
+	statements := []string{
+		`CREATE TABLE domain_events_legacy (
+			id TEXT PRIMARY KEY,
+			type TEXT NOT NULL,
+			aggregate_type TEXT NOT NULL,
+			aggregate_id TEXT NOT NULL,
+			aggregate_version INTEGER NOT NULL CHECK (aggregate_version >= 0),
+			payload BLOB NOT NULL,
+			occurred_at TIMESTAMP NOT NULL
+		)`,
+		`INSERT INTO domain_events_legacy (
+			id, type, aggregate_type, aggregate_id, aggregate_version, payload, occurred_at
+		) SELECT id, type, aggregate_type, aggregate_id, aggregate_version, payload, occurred_at
+		FROM domain_events ORDER BY sequence`,
+		"DROP TABLE domain_events",
+		"ALTER TABLE domain_events_legacy RENAME TO domain_events",
+		"CREATE INDEX idx_domain_events_aggregate ON domain_events (aggregate_type, aggregate_id, occurred_at, id)",
+	}
+	for _, statement := range statements {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("build legacy domain_events schema: %v", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit legacy schema fixture: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
+		t.Fatalf("enable foreign keys after legacy fixture: %v", err)
+	}
+}
+
+func assertDomainEventsSequenceSchema(t *testing.T, db *sql.DB) {
+	t.Helper()
+	var columns int
+	if err := db.QueryRow(`
+		SELECT COUNT(*) FROM pragma_table_info('domain_events')
+		WHERE name = 'sequence' AND type = 'INTEGER' AND pk = 1
+	`).Scan(&columns); err != nil {
+		t.Fatalf("inspect domain_events sequence column: %v", err)
+	}
+	if columns != 1 {
+		t.Errorf("domain_events sequence primary-key columns = %d, want 1", columns)
+	}
+	for _, index := range []string{
+		"idx_domain_events_feed_type_sequence",
+		"idx_domain_events_feed_aggregate_type_sequence",
+	} {
+		var count int
+		if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?", index).Scan(&count); err != nil {
+			t.Fatalf("inspect index %q: %v", index, err)
+		}
+		if count != 1 {
+			t.Errorf("index %q count = %d, want 1", index, count)
+		}
+	}
+}
+
+func assertWebhookEventForeignKey(t *testing.T, db *sql.DB) {
+	t.Helper()
+	var table, from, to string
+	if err := db.QueryRow(`
+		SELECT "table", "from", "to"
+		FROM pragma_foreign_key_list('webhook_deliveries')
+		WHERE "from" = 'event_id'
+	`).Scan(&table, &from, &to); err != nil {
+		t.Fatalf("inspect webhook event foreign key: %v", err)
+	}
+	if table != "domain_events" || from != "event_id" || to != "id" {
+		t.Errorf("webhook event foreign key = (%q, %q, %q), want (domain_events, event_id, id)", table, from, to)
+	}
+	rows, err := db.Query("PRAGMA foreign_key_check")
+	if err != nil {
+		t.Fatalf("PRAGMA foreign_key_check: %v", err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		var child string
+		var rowID int64
+		var parent string
+		var constraint int64
+		if err := rows.Scan(&child, &rowID, &parent, &constraint); err != nil {
+			t.Fatalf("scan foreign key violation: %v", err)
+		}
+		t.Errorf("foreign key violation: child=%s rowid=%d parent=%s constraint=%d", child, rowID, parent, constraint)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate foreign key check: %v", err)
+	}
+}
