@@ -8,6 +8,8 @@ section using the release version and date.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-10
+
 ### Added
 
 - Added CloudDrive2 and local directory pickers to the first-run setup flow, including directory creation.
@@ -19,6 +21,12 @@ section using the release version and date.
 - Added repository guidance for contributors and coding agents.
 - Made versioned `CHANGELOG.md` entries the source for GitHub release notes.
 - Made category paths relative to their storage roots, with automatic remapping when roots change and guided category setup after onboarding.
+
+### Fixed
+
+- Made the download dashboard default to all qBittorrent-visible tasks and show localized state labels.
+- Prevented startup permission hardening from invalidating SQLite WAL locks.
+- Included CloudDrive2's rejection message in failed NAS copy diagnostics.
 
 ## [0.2.2] - 2026-08-09
 
