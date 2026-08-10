@@ -276,44 +276,53 @@ type Strings struct {
 	APITokenSecretDone      string
 
 	// Webhook endpoints
-	NavWebhooks           string
-	TitleWebhooks         string
-	WebhooksLede          string
-	SectionEndpoints      string
-	NoEndpoints           string
-	AddEndpoint           string
-	EditEndpoint          string
-	CancelButton          string
-	EndpointName          string
-	FieldURL              string
-	HintURL               string
-	FieldBearerToken      string
-	BearerKeepHint        string
-	ClearBearerToken      string
-	SubscriptionsLabel    string
-	SubscriptionCompleted string
-	SubscriptionFailed    string
-	CreateEndpointButton  string
-	EndpointSaved         string
-	URLQueryRedacted      string
-	EndpointNameInvalid   string
-	EndpointURLInvalid    string
-	SubscriptionRequired  string
-	BearerTooLong         string
-	RotateSecret          string
-	RotateSecretConfirm   string
-	DeleteEndpoint        string
-	DeleteEndpointConfirm string
-	SendTest              string
-	SendTestConfirm       string
-	DisableEndpoint       string
-	EnableEndpoint        string
-	SecretSetMasked       string
-	SecretTitle           string
-	SecretLede            string
-	SecretLabel           string
-	SecretDone            string
-	TestEnqueued          string
+	NavWebhooks            string
+	TitleWebhooks          string
+	WebhooksLede           string
+	SectionEndpoints       string
+	NoEndpoints            string
+	AddEndpoint            string
+	EditEndpoint           string
+	CancelButton           string
+	EndpointName           string
+	FieldURL               string
+	HintURL                string
+	FieldBearerToken       string
+	OptionalAuthentication string
+	BearerCreateHint       string
+	BearerEditHint         string
+	ClearBearerToken       string
+	SubscriptionsLabel     string
+	SubscriptionCompleted  string
+	SubscriptionFailed     string
+	EventExampleSummary    string
+	EventDeliveryHint      string
+	CreateEndpointButton   string
+	EndpointSaved          string
+	URLQueryRedacted       string
+	EndpointNameInvalid    string
+	EndpointURLInvalid     string
+	SubscriptionRequired   string
+	BearerTooLong          string
+	RotateSecret           string
+	RotateSecretConfirm    string
+	DeleteEndpoint         string
+	DeleteEndpointConfirm  string
+	SendTest               string
+	SendTestConfirm        string
+	TestWebhookTitle       string
+	TestAfterSaveHint      string
+	TestWebhookLede        string
+	TestPausedHint         string
+	ViewDeliveries         string
+	DisableEndpoint        string
+	EnableEndpoint         string
+	SecretSetMasked        string
+	SecretTitle            string
+	SecretLede             string
+	SecretLabel            string
+	SecretDone             string
+	TestEnqueued           string
 
 	// Webhook delivery history
 	TitleDeliveries    string
@@ -585,44 +594,53 @@ var stringsEN = Strings{
 	APITokenSecretLabel:     "Bearer token",
 	APITokenSecretDone:      "Done",
 
-	NavWebhooks:           "Webhooks",
-	TitleWebhooks:         "Webhook endpoints",
-	WebhooksLede:          "Deliver download completion and failure events to your own services with HMAC-signed HTTP requests.",
-	SectionEndpoints:      "Endpoints",
-	NoEndpoints:           "No endpoints yet. Add one to start receiving download events.",
-	AddEndpoint:           "Add endpoint",
-	EditEndpoint:          "Edit endpoint",
-	CancelButton:          "Cancel",
-	EndpointName:          "Name",
-	FieldURL:              "Endpoint URL",
-	HintURL:               "Absolute http or https URL without a username, password, or fragment.",
-	FieldBearerToken:      "Bearer token",
-	BearerKeepHint:        "Leave empty to keep the current token.",
-	ClearBearerToken:      "Clear bearer token",
-	SubscriptionsLabel:    "Events to deliver",
-	SubscriptionCompleted: "Download completed",
-	SubscriptionFailed:    "Download failed",
-	CreateEndpointButton:  "Create endpoint",
-	EndpointSaved:         "Endpoint updated.",
-	URLQueryRedacted:      "Query strings are never shown; they are stored for delivery and displayed as ?….",
-	EndpointNameInvalid:   "The name is required and must be 1–64 characters without control characters.",
-	EndpointURLInvalid:    "The URL must be an absolute http or https URL without a username, password, or fragment.",
-	SubscriptionRequired:  "Choose at least one event to deliver.",
-	BearerTooLong:         "The bearer token must be at most 4096 bytes.",
-	RotateSecret:          "Rotate secret",
-	RotateSecretConfirm:   "Rotate the signing secret? The old secret stops working immediately.",
-	DeleteEndpoint:        "Delete",
-	DeleteEndpointConfirm: "Delete this endpoint? Pending deliveries are cancelled; history is retained.",
-	SendTest:              "Send test",
-	SendTestConfirm:       "Send a test delivery to this endpoint?",
-	DisableEndpoint:       "Disable",
-	EnableEndpoint:        "Enable",
-	SecretSetMasked:       "A signing secret is set. Rotate it to generate a new one.",
-	SecretTitle:           "Webhook signing secret",
-	SecretLede:            "Copy this secret now. It is shown only once and cannot be recovered later.",
-	SecretLabel:           "HMAC-SHA256 signing secret",
-	SecretDone:            "Done",
-	TestEnqueued:          "Test delivery enqueued.",
+	NavWebhooks:            "Webhooks",
+	TitleWebhooks:          "Webhook endpoints",
+	WebhooksLede:           "Deliver download completion and failure events to your own services with HMAC-signed HTTP requests.",
+	SectionEndpoints:       "Endpoints",
+	NoEndpoints:            "No endpoints yet. Add one to start receiving download events.",
+	AddEndpoint:            "Add endpoint",
+	EditEndpoint:           "Edit endpoint",
+	CancelButton:           "Cancel",
+	EndpointName:           "Name",
+	FieldURL:               "Endpoint URL",
+	HintURL:                "Absolute http or https URL without a username, password, or fragment.",
+	FieldBearerToken:       "Bearer token for the receiving service (optional)",
+	OptionalAuthentication: "Optional authentication",
+	BearerCreateHint:       "Only enter a token when the receiving service requires Bearer authentication. Use the token issued by that service; it will not be shown again after saving.",
+	BearerEditHint:         "The current token is never shown. Leave this empty to keep it, or enter a replacement token.",
+	ClearBearerToken:       "Clear bearer token",
+	SubscriptionsLabel:     "Delivery triggers",
+	SubscriptionCompleted:  "Download completed",
+	SubscriptionFailed:     "Download failed",
+	EventExampleSummary:    "View JSON request example",
+	EventDeliveryHint:      "CD211 sends JSON with POST. X-CD211-Event identifies the event type, and X-CD211-Signature carries the HMAC-SHA256 signature.",
+	CreateEndpointButton:   "Save receiver",
+	EndpointSaved:          "Receiver settings updated.",
+	URLQueryRedacted:       "Query strings are never shown; they are stored for delivery and displayed as ?….",
+	EndpointNameInvalid:    "The name is required and must be 1–64 characters without control characters.",
+	EndpointURLInvalid:     "The URL must be an absolute http or https URL without a username, password, or fragment.",
+	SubscriptionRequired:   "Choose at least one delivery trigger.",
+	BearerTooLong:          "The bearer token must be at most 4096 bytes.",
+	RotateSecret:           "Rotate secret",
+	RotateSecretConfirm:    "Rotate the signing secret? The old secret stops working immediately.",
+	DeleteEndpoint:         "Delete",
+	DeleteEndpointConfirm:  "Delete this receiver? Pending deliveries are cancelled; history is retained.",
+	SendTest:               "Send test request",
+	SendTestConfirm:        "Send a test request to this receiver?",
+	TestWebhookTitle:       "Test this webhook",
+	TestWebhookLede:        "Send a webhook.test request using the saved URL, authentication token, and signing secret through the same queue and retry path as real notifications.",
+	TestAfterSaveHint:      "After saving, continue to the receiver settings to send a test request.",
+	TestPausedHint:         "This receiver is disabled. The test request will stay queued until it is enabled.",
+	ViewDeliveries:         "View delivery history",
+	DisableEndpoint:        "Disable",
+	EnableEndpoint:         "Enable",
+	SecretSetMasked:        "A signing secret is set. Rotate it to generate a new one.",
+	SecretTitle:            "Webhook signing secret",
+	SecretLede:             "Copy this secret now. It is shown only once and cannot be recovered later.",
+	SecretLabel:            "HMAC-SHA256 signing secret",
+	SecretDone:             "Continue to settings and test",
+	TestEnqueued:           "Test request enqueued.",
 
 	TitleDeliveries:    "Webhook deliveries",
 	DeliveriesLede:     "Delivery history for every webhook event, including retries and dead letters.",
@@ -892,54 +910,63 @@ var stringsZH = Strings{
 	APITokenSecretLabel:     "Bearer 令牌",
 	APITokenSecretDone:      "完成",
 
-	NavWebhooks:           "Webhook 管理",
-	TitleWebhooks:         "Webhook 端点",
-	WebhooksLede:          "通过带 HMAC 签名的 HTTP 请求，将下载完成和失败事件推送到自有服务。",
-	SectionEndpoints:      "端点列表",
-	NoEndpoints:           "还没有端点。添加一个即可开始接收下载事件。",
-	AddEndpoint:           "添加端点",
-	EditEndpoint:          "编辑端点",
-	CancelButton:          "取消",
-	EndpointName:          "名称",
-	FieldURL:              "端点地址",
-	HintURL:               "请填写绝对 HTTP 或 HTTPS URL，且不能包含用户名、密码或片段标识符（fragment）。",
-	FieldBearerToken:      "Bearer 令牌",
-	BearerKeepHint:        "留空则保留当前令牌。",
-	ClearBearerToken:      "清除 Bearer 令牌",
-	SubscriptionsLabel:    "要推送的事件",
-	SubscriptionCompleted: "下载完成",
-	SubscriptionFailed:    "下载失败",
-	CreateEndpointButton:  "创建端点",
-	EndpointSaved:         "端点已更新。",
-	URLQueryRedacted:      "查询字符串仅用于投递；界面一律显示为“?…”，不会展示原始内容。",
-	EndpointNameInvalid:   "名称不能为空，长度须为 1–64 个字符且不能包含控制字符。",
-	EndpointURLInvalid:    "地址必须是绝对 HTTP 或 HTTPS URL，且不能包含用户名、密码或片段标识符。",
-	SubscriptionRequired:  "请至少选择一种要推送的事件。",
-	BearerTooLong:         "Bearer 令牌不能超过 4096 字节。",
-	RotateSecret:          "轮换密钥",
-	RotateSecretConfirm:   "确定轮换签名密钥吗？旧密钥将立即失效。",
-	DeleteEndpoint:        "删除",
-	DeleteEndpointConfirm: "确定删除此端点吗？删除后将取消待投递的请求，但保留历史记录。",
-	SendTest:              "发送测试投递",
-	SendTestConfirm:       "确定要向此端点发送一次测试投递吗？",
-	DisableEndpoint:       "停用",
-	EnableEndpoint:        "启用",
-	SecretSetMasked:       "已设置签名密钥。需要更换时请点击“轮换密钥”。",
-	SecretTitle:           "Webhook 签名密钥",
-	SecretLede:            "请立即复制并妥善保存此密钥。此密钥仅显示一次，之后无法查看。",
-	SecretLabel:           "HMAC-SHA256 签名密钥",
-	SecretDone:            "完成",
-	TestEnqueued:          "测试投递已加入队列。",
+	NavWebhooks:            "Webhook 通知",
+	TitleWebhooks:          "Webhook 通知",
+	WebhooksLede:           "下载完成或失败时，向指定的 HTTP 服务发送带 HMAC 签名的请求。",
+	SectionEndpoints:       "接收方",
+	NoEndpoints:            "还没有接收方。添加一个即可开始接收下载通知。",
+	AddEndpoint:            "添加接收方",
+	EditEndpoint:           "编辑接收方",
+	CancelButton:           "取消",
+	EndpointName:           "名称",
+	FieldURL:               "接收地址",
+	HintURL:                "请填写绝对 HTTP 或 HTTPS URL，且不能包含用户名、密码或片段标识符（fragment）。",
+	FieldBearerToken:       "接收服务的 Bearer 令牌（可选）",
+	OptionalAuthentication: "可选鉴权",
+	BearerCreateHint:       "仅当接收服务要求 Bearer 鉴权时填写。请使用该服务提供的令牌；保存后不会再次显示。",
+	BearerEditHint:         "当前令牌不会显示。留空保持不变；填写新令牌将覆盖原值。",
+	ClearBearerToken:       "清除 Bearer 令牌",
+	SubscriptionsLabel:     "触发条件",
+	SubscriptionCompleted:  "下载完成",
+	SubscriptionFailed:     "下载失败",
+	EventExampleSummary:    "查看 JSON 请求示例",
+	EventDeliveryHint:      "CD211 会以 POST 请求发送 JSON。X-CD211-Event 标识事件类型，X-CD211-Signature 提供 HMAC-SHA256 签名。",
+	CreateEndpointButton:   "保存接收方",
+	EndpointSaved:          "接收方设置已更新。",
+	URLQueryRedacted:       "查询字符串仅用于投递；界面一律显示为“?…”，不会展示原始内容。",
+	EndpointNameInvalid:    "名称不能为空，长度须为 1–64 个字符且不能包含控制字符。",
+	EndpointURLInvalid:     "接收地址必须是绝对 HTTP 或 HTTPS URL，且不能包含用户名、密码或片段标识符。",
+	SubscriptionRequired:   "请至少选择一种触发条件。",
+	BearerTooLong:          "Bearer 令牌不能超过 4096 字节。",
+	RotateSecret:           "轮换密钥",
+	RotateSecretConfirm:    "确定轮换签名密钥吗？旧密钥将立即失效。",
+	DeleteEndpoint:         "删除",
+	DeleteEndpointConfirm:  "确定删除这个接收方吗？删除后将取消待投递的请求，但保留历史记录。",
+	SendTest:               "发送测试请求",
+	SendTestConfirm:        "确定向这个接收方发送一次测试请求吗？",
+	TestWebhookTitle:       "测试 Webhook",
+	TestWebhookLede:        "使用当前保存的地址、鉴权令牌和签名密钥发送一条 webhook.test 请求，并经过与真实通知相同的队列和重试流程。",
+	TestPausedHint:         "这个接收方当前已停用。测试请求会先排队，启用后再发送。",
+	TestAfterSaveHint:      "保存后可继续进入接收方设置，发送测试请求。",
+	ViewDeliveries:         "查看投递记录",
+	DisableEndpoint:        "停用",
+	EnableEndpoint:         "启用",
+	SecretSetMasked:        "已设置签名密钥。需要更换时请点击“轮换密钥”。",
+	SecretTitle:            "Webhook 签名密钥",
+	SecretLede:             "请立即复制并妥善保存此密钥。此密钥仅显示一次，之后无法查看。",
+	SecretLabel:            "HMAC-SHA256 签名密钥",
+	SecretDone:             "继续配置与测试",
+	TestEnqueued:           "测试请求已加入队列。",
 
 	TitleDeliveries:    "Webhook 投递记录",
-	DeliveriesLede:     "查看每个 Webhook 事件的投递历史，包括重试与死信记录。",
-	FilterEndpoint:     "端点",
+	DeliveriesLede:     "查看每条 Webhook 通知的投递历史，包括重试与死信记录。",
+	FilterEndpoint:     "接收方",
 	FilterEvent:        "事件",
 	FilterStatus:       "状态",
-	AllEndpoints:       "全部端点",
+	AllEndpoints:       "全部接收方",
 	AllEvents:          "全部事件",
 	AllStatuses:        "全部状态",
-	ThEndpoint:         "端点",
+	ThEndpoint:         "接收方",
 	ThEvent:            "事件",
 	ThStatus:           "状态",
 	ThHTTPStatus:       "HTTP",

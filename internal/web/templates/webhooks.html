@@ -9,7 +9,10 @@
         <div class="page-title">
           <h1>{{.Str.TitleWebhooks}}</h1>
         </div>
-        <a class="button button-primary" href="/webhooks/new">{{.Str.AddEndpoint}}</a>
+        <div class="button-row">
+          <a class="button button-secondary" href="/webhook-deliveries">{{.Str.ViewDeliveries}}</a>
+          <a class="button button-primary" href="/webhooks/new">{{.Str.AddEndpoint}}</a>
+        </div>
       </header>
       <p class="page-lede">{{.Str.WebhooksLede}}</p>
 
@@ -23,7 +26,7 @@
             <th scope="col">{{.Str.EndpointName}}</th>
             <th scope="col">{{.Str.SubscriptionsLabel}}</th>
             <th scope="col">{{.Str.ThStatus}}</th>
-            <th scope="col" class="cell-action">{{.Str.ThEvent}}</th>
+            <th scope="col" class="cell-action">{{.Str.SectionActions}}</th>
           </tr></thead>
           <tbody>
           {{range $index, $row := .Rows}}

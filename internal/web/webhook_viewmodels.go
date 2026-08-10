@@ -1,11 +1,15 @@
 package web
 
 import (
+	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/turygo/cd211/internal/domain"
 	"github.com/turygo/cd211/internal/outbox"
 )
 
@@ -40,12 +44,14 @@ type WebhookRow struct {
 // WebhookFormView renders the create or edit endpoint form.
 type WebhookFormView struct {
 	PageMeta
-	Values     WebhookFormValues
-	Editing    bool
-	EndpointID int64
-	StoredURL  string
-	Error      string
-	Notice     string
+	Values           WebhookFormValues
+	Editing          bool
+	EndpointID       int64
+	StoredURL        string
+	CompletedExample string
+	FailedExample    string
+	Error            string
+	Notice           string
 }
 
 // WebhookFormValues carries the prefilled endpoint form fields. Bearer is
@@ -65,6 +71,7 @@ type WebhookFormValues struct {
 // only be served with Cache-Control: no-store and never linked or redirected.
 type WebhookSecretView struct {
 	PageMeta
+	EndpointID   int64
 	EndpointName string
 	Secret       string
 }
@@ -99,6 +106,52 @@ type WebhookDeliveryRow struct {
 	DeliveredAt    string
 	UpdatedAt      string
 	CanReplay      bool
+}
+
+var (
+	completedWebhookExample = buildWebhookPayloadExample(outbox.EventTypeCompleted)
+	failedWebhookExample    = buildWebhookPayloadExample(outbox.EventTypeFailed)
+)
+
+// buildWebhookPayloadExample uses the production serializer so examples shown
+// to operators cannot drift from the actual outbound JSON contract.
+func buildWebhookPayloadExample(eventType string) string {
+	updatedAt := time.Date(2026, 8, 10, 12, 34, 56, 0, time.UTC)
+	download := domain.Download{
+		Hash:         "0123456789abcdef0123456789abcdef01234567",
+		Name:         "Example.Movie.2026",
+		Category:     "movies",
+		TotalSize:    7516192768,
+		QbitProgress: 0.62,
+		CreatedAt:    updatedAt.Add(-2 * time.Hour),
+		UpdatedAt:    updatedAt,
+		RowVersion:   8,
+	}
+	previousState := domain.StateWaitingCopy
+	switch eventType {
+	case outbox.EventTypeCompleted:
+		download.State = domain.StateCompleted
+		download.ContentPath = "/downloads/movies/Example.Movie.2026"
+		download.OfflineProgress = 1
+		download.CopyProgress = 1
+		download.QbitProgress = 1
+		download.CompletedAt = &updatedAt
+		previousState = domain.StateVerifyingLocal
+	case outbox.EventTypeFailed:
+		download.State = domain.StateFailed
+		download.LastError = "copy task failed"
+	default:
+		panic("unsupported webhook payload example event type")
+	}
+	payload, err := outbox.BuildDownloadPayload("evt_0123456789abcdef0123456789abcdef", eventType, previousState, download)
+	if err != nil {
+		panic(fmt.Sprintf("build webhook payload example: %v", err))
+	}
+	var formatted bytes.Buffer
+	if err := json.Indent(&formatted, payload, "", "  "); err != nil {
+		panic(fmt.Sprintf("format webhook payload example: %v", err))
+	}
+	return formatted.String()
 }
 
 // deliveryFilterOptions builds the event-type filter choices. Only the three
@@ -169,11 +222,13 @@ func buildWebhookFormView(endpointID int64, values WebhookFormValues, csrfToken 
 		title = str.EditEndpoint
 	}
 	page := WebhookFormView{
-		PageMeta:   pageMeta(title, "webhooks", csrfToken, lang),
-		Values:     values,
-		Editing:    editing,
-		EndpointID: endpointID,
-		Error:      errorText,
+		PageMeta:         pageMeta(title, "webhooks", csrfToken, lang),
+		Values:           values,
+		Editing:          editing,
+		EndpointID:       endpointID,
+		CompletedExample: completedWebhookExample,
+		FailedExample:    failedWebhookExample,
+		Error:            errorText,
 	}
 	page.Path = "/webhooks"
 	return page
@@ -202,6 +257,7 @@ func buildWebhookSecretView(endpoint outbox.Endpoint, csrfToken string, lang Lan
 	str := tr(lang)
 	page := WebhookSecretView{
 		PageMeta:     pageMeta(str.SecretTitle, "webhooks", csrfToken, lang),
+		EndpointID:   endpoint.ID,
 		EndpointName: endpoint.Name,
 		Secret:       endpoint.HMACSecret,
 	}

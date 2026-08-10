@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"html"
 	"net/http"
 	"net/url"
 	"sort"
@@ -349,7 +350,7 @@ func TestWebhookAuthenticationAndMethodBoundaries(t *testing.T) {
 
 	create := fixture.request(http.MethodGet, "/webhooks/new", nil, true)
 	requireStatus(t, create, http.StatusOK)
-	requireContains(t, create.Body.String(), "Add endpoint", "Create endpoint")
+	requireContains(t, create.Body.String(), "Add endpoint", "Save receiver")
 
 	for _, method := range []string{http.MethodPut, http.MethodDelete, http.MethodPatch} {
 		response := fixture.request(method, "/webhooks", nil, true)
@@ -373,6 +374,43 @@ func TestWebhookAuthenticationAndMethodBoundaries(t *testing.T) {
 		t.Fatal("CSRF failures mutated the store")
 	}
 }
+func TestWebhookFormExplainsAuthenticationPayloadsAndTesting(t *testing.T) {
+	fixture := newWebFixture(t)
+
+	create := fixture.requestLang(http.MethodGet, "/webhooks/new", true, "zh")
+	requireStatus(t, create, http.StatusOK)
+	createBody := html.UnescapeString(create.Body.String())
+	requireContains(t, createBody,
+		"添加接收方",
+		"接收地址",
+		"可选鉴权",
+		"仅当接收服务要求 Bearer 鉴权时填写",
+		`type="password"`,
+		"触发条件",
+		"download.completed",
+		"download.failed",
+		`"schema_version": 1`,
+		`"content_path": "/downloads/movies/Example.Movie.2026"`,
+		`"error": "copy task failed"`,
+		"保存后可继续进入接收方设置，发送测试请求",
+	)
+	requireAbsent(t, createBody, "留空则保留当前令牌", "端点")
+
+	fixture.seedWebhookEndpoint(1, "receiver-a", "https://example.test/hook", true, true, true)
+	edit := fixture.requestLang(http.MethodGet, "/webhooks/1/edit", true, "zh")
+	requireStatus(t, edit, http.StatusOK)
+	editBody := html.UnescapeString(edit.Body.String())
+	requireContains(t, editBody,
+		"编辑接收方",
+		"当前令牌不会显示。留空保持不变",
+		"测试 Webhook",
+		`action="/webhooks/1/test?from=edit"`,
+		"发送测试请求",
+		`href="/webhook-deliveries?endpoint=1"`,
+		"查看投递记录",
+	)
+	requireAbsent(t, editBody, "仅当接收服务要求 Bearer 鉴权时填写", "端点")
+}
 
 func TestWebhookCreateValidationAndSecretReveal(t *testing.T) {
 	fixture := newWebFixture(t)
@@ -389,7 +427,7 @@ func TestWebhookCreateValidationAndSecretReveal(t *testing.T) {
 		t.Errorf("reveal Cache-Control = %q, want no-store", cache)
 	}
 	body := reveal.Body.String()
-	requireContains(t, body, "Webhook signing secret", "receiver-a")
+	requireContains(t, body, "Webhook signing secret", "receiver-a", `href="/webhooks/1/edit"`, "Continue to settings and test")
 	if !strings.Contains(body, fixture.webhooks.secret) {
 		t.Errorf("reveal page does not contain the generated secret")
 	}
@@ -417,7 +455,7 @@ func TestWebhookCreateValidationAndSecretReveal(t *testing.T) {
 		{"invalid URL", url.Values{"name": {"b"}, "url": {"ftp://example.test/hook"}, "enabled": {"true"}, "completed": {"true"}}, "The URL must be an absolute http or https URL"},
 		{"userinfo URL", url.Values{"name": {"c"}, "url": {"https://user:pass@example.test/hook"}, "enabled": {"true"}, "completed": {"true"}}, "The URL must be an absolute http or https URL"},
 		{"fragment URL", url.Values{"name": {"d"}, "url": {"https://example.test/hook#frag"}, "enabled": {"true"}, "completed": {"true"}}, "The URL must be an absolute http or https URL"},
-		{"no subscription", url.Values{"name": {"e"}, "url": {"https://example.test/hook"}, "enabled": {"true"}}, "Choose at least one event"},
+		{"no subscription", url.Values{"name": {"e"}, "url": {"https://example.test/hook"}, "enabled": {"true"}}, "Choose at least one delivery trigger"},
 		{"bearer too long", url.Values{"name": {"f"}, "url": {"https://example.test/hook"}, "enabled": {"true"}, "completed": {"true"}, "bearer": {strings.Repeat("t", 4097)}}, "at most 4096 bytes"},
 	}
 	for _, item := range validationCases {
@@ -553,7 +591,24 @@ func TestWebhookLifecycleActions(t *testing.T) {
 		t.Fatalf("tests = %+v", fixture.webhooks.tested)
 	}
 	noticed := fixture.request(http.MethodGet, "/webhooks?test=1", nil, true)
-	requireContains(t, noticed.Body.String(), "Test delivery enqueued.")
+	requireContains(t, noticed.Body.String(), "Test request enqueued.")
+	editTest := fixture.post("/webhooks/1/test?from=edit", nil)
+	requireStatus(t, editTest, http.StatusSeeOther)
+	if location := editTest.Header().Get("Location"); location != "/webhooks/1/edit?test=1" {
+		t.Errorf("edit test Location = %q, want /webhooks/1/edit?test=1", location)
+	}
+	editNotice := fixture.request(http.MethodGet, "/webhooks/1/edit?test=1", nil, true)
+	requireStatus(t, editNotice, http.StatusOK)
+	requireContains(t, editNotice.Body.String(), "Test request enqueued.")
+	if len(fixture.webhooks.tested) != 2 {
+		t.Fatalf("edit test count = %d, want 2", len(fixture.webhooks.tested))
+	}
+
+	invalidReturn := fixture.post("/webhooks/1/test?from=unknown", nil)
+	requireStatus(t, invalidReturn, http.StatusBadRequest)
+	if len(fixture.webhooks.tested) != 2 {
+		t.Fatal("invalid test return target enqueued a delivery")
+	}
 
 	remove := fixture.post("/webhooks/1/delete", nil)
 	requireStatus(t, remove, http.StatusSeeOther)

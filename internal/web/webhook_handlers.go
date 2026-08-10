@@ -97,6 +97,9 @@ func (h *handler) webhookEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page := buildWebhookFormViewForEndpoint(endpoint, h.authSession(r).CSRFToken, requestLang(r))
+	if r.URL.Query().Get("test") == "1" {
+		page.Notice = tr(requestLang(r)).TestEnqueued
+	}
 	h.render(w, http.StatusOK, "webhook-form", page)
 }
 
@@ -197,8 +200,20 @@ func (h *handler) webhookTest(w http.ResponseWriter, r *http.Request) {
 		plain(w, http.StatusBadRequest, "Bad Request\n")
 		return
 	}
+	returnToEdit := false
+	if values, has := r.URL.Query()["from"]; has {
+		if len(values) != 1 || values[0] != "edit" {
+			plain(w, http.StatusBadRequest, "Bad Request\n")
+			return
+		}
+		returnToEdit = true
+	}
 	if _, err := h.webhookRepo.EnqueueTestDelivery(r.Context(), id, h.clock.Now().UTC()); err != nil {
 		repositoryError(w, err)
+		return
+	}
+	if returnToEdit {
+		http.Redirect(w, r, "/webhooks/"+strconv.FormatInt(id, 10)+"/edit?test=1", http.StatusSeeOther)
 		return
 	}
 	http.Redirect(w, r, "/webhooks?test=1", http.StatusSeeOther)

@@ -1329,6 +1329,56 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
   display: grid;
   gap: 12px;
 }
+.webhook-config-panel {
+  max-width: 720px;
+}
+.webhook-form .form-field {
+  min-width: 0;
+}
+
+.webhook-form input[type="text"],
+.webhook-form input[type="password"],
+.webhook-form select {
+  width: 100%;
+  min-width: 0;
+}
+
+
+.page-header > .button-row {
+  margin-top: 0;
+}
+
+.webhook-auth-settings {
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+}
+
+.webhook-auth-settings summary,
+.webhook-event-example summary {
+  cursor: pointer;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 510;
+}
+
+.webhook-auth-settings summary:hover,
+.webhook-event-example summary:hover {
+  color: var(--text-secondary);
+}
+
+.webhook-auth-settings summary:focus-visible,
+.webhook-event-example summary:focus-visible {
+  outline: 2px solid var(--text-secondary);
+  outline-offset: 3px;
+}
+
+.webhook-auth-fields {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
 
 .subscription-fieldset {
   margin: 0;
@@ -1336,7 +1386,7 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   display: grid;
-  gap: 6px;
+  gap: 12px;
 }
 
 .subscription-fieldset legend {
@@ -1344,6 +1394,63 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
   font-size: 12px;
   font-weight: 510;
   color: var(--text-tertiary);
+}
+.webhook-event-option {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+}
+
+.webhook-event-option > .check-row {
+  margin-top: 0;
+  color: var(--text-secondary);
+  font-weight: 510;
+}
+
+.webhook-event-example {
+  margin: 8px 0 0 24px;
+}
+
+.webhook-event-example summary code {
+  color: var(--accent-text);
+  font-size: 11px;
+}
+
+.webhook-event-example p {
+  margin: 8px 0;
+  color: var(--text-quaternary);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.webhook-event-example pre {
+  max-height: 360px;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 17px;
+  tab-size: 2;
+}
+
+.webhook-event-example pre code {
+  font: inherit;
+}
+
+.webhook-test-after-save,
+.webhook-test-lede {
+  margin: 0;
+}
+
+.webhook-test-paused {
+  margin-top: 8px;
+  color: var(--warn);
 }
 
 .secret-label {
