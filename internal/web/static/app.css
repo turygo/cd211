@@ -1169,6 +1169,12 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
 .settings-form .panel { margin-bottom: 16px; }
 .settings-form .form-field { margin-bottom: 10px; }
 
+.settings-api-token {
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+}
+
 /* ---------- Responsive ---------- */
 
 @media (max-width: 1100px) {
