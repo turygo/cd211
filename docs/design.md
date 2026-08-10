@@ -16,6 +16,8 @@ CD211 is a qBittorrent WebAPI-compatible download client for Sonarr and Radarr. 
 
 CD211 is not a BitTorrent client and does not seed. qBittorrent is only the compatibility protocol presented to upstream applications.
 
+On completion or failure, CD211 also emits signed outbound webhook notifications for external automation and monitoring. Events and their deliveries are committed transactionally with the download mutation and delivered by an independent in-process dispatcher; they are a notification channel and never replace the Sonarr/Radarr polling and import flow.
+
 The first release targets the qBittorrent API calls made by current Sonarr and Radarr versions. It does not attempt to emulate the complete qBittorrent API.
 
 ## 2. Problem
@@ -41,6 +43,7 @@ CD211 makes the complete 115-to-NAS workflow one durable download-client service
 7. Handle duplicate submissions and crash windows idempotently.
 8. Provide a small Web UI for status, errors, retry, cancellation, removal, and category configuration.
 9. Run as one NAS container without Redis.
+10. Deliver signed, retryable outbound webhook notifications for completed and failed downloads from a transactional outbox, with per-endpoint subscriptions, dead-lettering, and manual replay.
 
 ## 4. Non-goals
 
@@ -50,7 +53,9 @@ The first release will not:
 - Implement the complete qBittorrent WebAPI.
 - Support arbitrary qBittorrent desktop or mobile clients.
 - Integrate directly with indexers or Prowlarr.
-- Trigger Sonarr or Radarr import callbacks. Their normal polling and Completed Download Handling remain authoritative.
+- Trigger Sonarr or Radarr import callbacks. Their normal polling and Completed Download Handling remain authoritative; outbound domain webhooks (Section 7.5) are a separate notification channel and never act as an import trigger.
+- Expose a native download API, API tokens, or an inbound webhook API. Webhooks are outbound notifications only; nothing outside CD211 delivers events into it.
+- Provide a public-webhook SSRF allowlist or block private/LAN receiver URLs. Receiver URLs are operator-configured and trusted by design.
 - Automatically blocklist failed releases in Sonarr or Radarr.
 - Support v2-only torrents unless 115 and CloudDrive2 are verified to accept them.
 - Provide multi-instance or distributed-worker operation.
@@ -65,6 +70,10 @@ The first release will not:
 - **Save path**: the category staging root exposed as qBittorrent `save_path`.
 - **Content path**: the exact local file or torrent root directory exposed as qBittorrent `content_path`.
 - **Reconciler**: the in-process worker that advances durable downloads through the workflow.
+- **Outbox**: the durable `domain_events` table into which domain events are written in the same transaction as the download mutation that produced them.
+- **Webhook endpoint**: an operator-configured named receiver URL with its own signing secret and optional bearer token.
+- **Webhook dispatcher**: the in-process worker that fans outbox events out to subscribed webhook endpoints.
+- **Dead-letter**: a webhook delivery that exhausted its retry window and awaits operator replay.
 
 ## 6. Core Invariants
 
@@ -80,6 +89,10 @@ These invariants are correctness requirements:
 8. A category change after submission changes the label only; it does not silently relocate existing data.
 9. Permanent workflow failure is never reported as completion.
 10. Logs and the Web UI never expose tracker passkeys or raw authenticated URLs.
+11. A domain event and its matching delivery fan-out are committed in the same transaction as the download mutation that produced them; fan-out never blocks or delays the mutation.
+12. Webhook delivery is at-least-once. Consumers must deduplicate by event ID, and replay reuses the original event ID and payload.
+13. Webhook receiver URLs, signing secrets, and request bodies are never written to logs.
+14. A webhook receiver URL must be an absolute HTTP/HTTPS URL without userinfo or fragment. Query strings are allowed and delivered to the receiver, but raw query values are redacted from ordinary Web UI reads and edit forms. Redirects are never followed.
 
 ## 7. Architecture
 
@@ -93,9 +106,11 @@ flowchart LR
     CD2 --> CLOUD[115 Offline Download]
     CD2 --> NAS[NAS Staging Directories]
     REC -->|stat and inspect| NAS
+    DISP[Webhook Dispatcher] --> DB
+    DISP -->|signed HTTPS| RX[Webhook Receivers]
 ```
 
-CD211 is one process with four internal components:
+CD211 is one process with five internal components:
 
 ### 7.1 HTTP API
 
@@ -128,7 +143,16 @@ CD211 is one process with four internal components:
 - Uses Go's `html/template` with minimal client-side JavaScript.
 - Does not require a separate SPA build, frontend package manager, or client-side state service.
 
-### 7.5 Selected Implementation Stack
+### 7.5 Outbox and Webhook Dispatcher
+
+- Writes a domain event and its matching delivery fan-out into SQLite in the same transaction as the download mutation that produced them. Fan-out never blocks or delays the mutation path.
+- The dispatcher runs as an independent in-process worker after setup completes; no deployment flag, extra service, or environment variable enables it. Endpoint enabled state and subscriptions control fan-out, and new endpoints may be created enabled or disabled.
+- Claims due deliveries with a short 30-second lease and CAS row-version checks; runs four workers with a 10-second request timeout. Only a 2xx response counts as success, and no database transaction spans an HTTP attempt.
+- Retries failures with bounded exponential backoff for up to 24 hours, then dead-letters the delivery. Manual replay reopens the same `(event_id, endpoint_id)` row for an enabled, non-deleted endpoint, preserving the event ID and payload, resetting attempts/lease/error state, and starting a fresh 24-hour window without creating a duplicate row.
+- Enforces per-endpoint and aggregate delivery ordering. Only `download.completed` and `download.failed` fan out in this release; `download.created`, `download.state_changed`, and `download.category_changed` events are durable history only. `webhook.test` events are targeted solely at the selected endpoint.
+- Process shutdown cancels workers before the store closes; an interrupted attempt leaves its lease to expire and be reclaimed.
+
+### 7.6 Selected Implementation Stack
 
 CD211 is implemented in Go 1.26.x. Release builds pin an exact supported Go patch version, use no CGO, and prefer the standard library where it already satisfies the contract.
 
@@ -186,6 +210,7 @@ Operational constraints:
 - CD211 sends its own `savePath` string to CloudDrive2 as the copy destination, and CloudDrive2 resolves that string inside **its own virtual filesystem**, not inside its container. That virtual root holds the mounted cloud drives plus the local directories CloudDrive2 has been configured to expose, so a path that exists in the CloudDrive2 container is still rejected unless it is also one of those entries. The staging root must therefore be mounted into CD211 at the exact absolute path CloudDrive2 exposes: if CloudDrive2 exposes the staging tree as `/bt`, CD211 mounts that same host directory at `/bt` and sets the local root to `/bt`. Verify with `FindFileByPath` before deploying rather than assuming the container path works.
 - Backups either stop the container or take an atomic snapshot of the complete SQLite file set.
 - The HTTP API is not exposed directly to the public Internet.
+- Outbound webhook delivery runs inside the same single process after setup completes; there is no separate service or deployment flag. Receiver URLs are operator-configured HTTP/HTTPS targets, redirects are never followed, and private/LAN addresses are intentionally allowed — CD211 provides no public-webhook SSRF allowlist, so only trusted URLs should be configured.
 - CloudDrive2 credentials are stored in the SQLite `settings` table (Section 8.1); the operator password exists only as a PBKDF2-SHA256 hash.
 - The entrypoint drops from root to `PUID:PGID` before starting the service, and only adjusts ownership of the `/data` and `/downloads` mount points themselves. The defaults `99:100` match the Synology `guest:users` pair; a deployment whose staging root belongs to another owner must set both.
 - CD211 creates each category staging directory as mode `2770` owned by `PUID:PGID`. CloudDrive2, Sonarr, and Radarr must all run in the `PGID` group, because CloudDrive2 writes the copied content into that directory and the other two read it from there. A staging directory that already exists keeps the mode it has and must grant the same group access.
@@ -200,6 +225,7 @@ Sonarr/Radarr -> CD211 HTTP
 Trusted LAN   -> CD211 HTTP
 CD211         -> CloudDrive2 gRPC
 CD211         -> configured local staging mounts
+CD211         -> configured webhook receiver URLs
 ```
 
 ### 8.1 First-run setup and runtime configuration
@@ -236,7 +262,7 @@ The CloudDrive2 password is stored plaintext in this table. The CloudDrive2 API 
 - **Present and valid** — the full runtime is built from the stored values and installed as the HTTP root.
 - **Present but invalid** — a startup error; CD211 exits instead of silently falling back to setup mode.
 
-**In-process hot swap.** The HTTP root is held in an atomic handler pointer; swapping it takes no locks. Every settings save — the wizard's finish step or the Settings page — persists first, then rebuilds the whole runtime generation (CloudDrive2 client, reconciler coordinator, credentials, HTTP API, Web UI, health mux) and installs it with one atomic store. The previous generation's coordinator is cancelled and awaited, and its CloudDrive2 client is closed; sessions survive because the session store lives for the process lifetime. No restart is involved, and an old generation never keeps serving requests after the swap.
+**In-process hot swap.** The HTTP root is held in an atomic handler pointer; swapping it takes no locks. Every settings save — the wizard's finish step or the Settings page — persists first, then rebuilds the whole runtime generation (CloudDrive2 client, reconciler coordinator, webhook dispatcher, credentials, HTTP API, Web UI, health mux) and installs it with one atomic store. The previous generation's coordinator is cancelled and awaited, and its CloudDrive2 client is closed; sessions survive because the session store lives for the process lifetime. No restart is involved, and an old generation never keeps serving requests after the swap.
 
 **Wizard steps** (served only in setup mode):
 
@@ -798,6 +824,86 @@ updated_at        timestamp not null
 
 This single-row table holds the PBKDF2-SHA256 hash of the operator password, written by the first-run setup wizard and updated on every password change. While the row is absent the service serves only the setup wizard and no credentials exist. The hash record encodes its scheme, iteration count, and salt, so parameters can be raised later without a migration.
 
+The webhook migration adds four tables: `domain_events`, `webhook_endpoints`, `webhook_subscriptions`, and `webhook_deliveries`.
+
+### 12.6 `domain_events`
+
+```text
+id                text primary key      -- evt_ + 32 lowercase hex chars (16 random bytes)
+type              text not null         -- download.completed | download.failed | download.created | download.state_changed | download.category_changed | webhook.test
+aggregate_type    text not null         -- webhook_endpoint for webhook.test; download for download events
+aggregate_id      text not null         -- decimal endpoint ID for webhook.test; download hash for download events
+aggregate_version integer not null      -- endpoint row_version for webhook.test; post-mutation download row_version
+payload           blob not null         -- immutable event envelope JSON at mutation time
+occurred_at       timestamp not null    -- RFC3339Nano describes envelope JSON timestamps, not this SQLite column
+```
+
+The event envelope is `{id, type, schema_version, occurred_at, data}`. Download event data carries `hash`, `name`, `category`, `state`, `previous_state`, `progress`, `content_path`, `total_size`, `error`, `created_at`, `updated_at`, optional `completed_at`, and `download_version`. Failed-event errors are sanitized; `submission_uri`, tracker passkeys, endpoint secrets, and bearer tokens are never present. `webhook.test` data is `{endpoint_id, endpoint_name, message}`. The payload is immutable once written, and only `download.completed` and `download.failed` fan out to webhooks in this release; the remaining types are durable history.
+
+### 12.7 `webhook_endpoints`
+
+```text
+id                integer primary key autoincrement
+name              text not null         -- unique, case-insensitive
+url               text not null         -- absolute HTTP(S); no userinfo or fragment; query strings allowed, raw values redacted from UI
+hmac_secret       text not null         -- HMAC-SHA256 signing secret, generated on create and rotation
+bearer_token      text                  -- optional; never redisplayed
+enabled           integer not null default 1
+created_at        timestamp not null
+updated_at        timestamp not null
+deleted_at        timestamp             -- soft delete
+row_version       integer not null default 0
+```
+
+Constraints:
+
+- The URL must be an absolute HTTP/HTTPS URL without userinfo or fragment. Query strings are allowed and delivered, but raw query values are redacted from ordinary Web UI reads and edit forms; redirects are never followed.
+- The signing secret is generated on create and rotation, shown once through a no-store response, and is not recoverable through the UI. The optional bearer token is never redisplayed; leaving it blank on edit preserves the stored value, and a dedicated clear control removes it. Endpoint data, including secrets, lives in the mode-restricted SQLite database.
+- Deletion is soft: the endpoint is disabled and hidden, and its pending and dead deliveries are cancelled, while delivery history is retained.
+
+### 12.8 `webhook_subscriptions`
+
+```text
+endpoint_id       integer not null
+event_type        text not null         -- download.completed | download.failed
+primary key (endpoint_id, event_type)
+```
+
+Each endpoint subscribes independently to `download.completed` and/or `download.failed`; no other event type is subscribable. Removing a subscription cancels pending and dead delivery rows for that event.
+
+### 12.9 `webhook_deliveries`
+
+```text
+id                integer primary key autoincrement
+event_id          text not null
+endpoint_id       integer not null
+endpoint_name     text not null         -- endpoint name snapshot
+event_type        text not null
+aggregate_type    text not null
+aggregate_id      text not null
+status            text not null         -- pending | delivering | succeeded | dead | cancelled
+attempt_count     integer not null default 0
+first_attempt_at timestamp
+next_attempt_at   timestamp
+lease_owner       text
+lease_until       timestamp             -- 30-second leases, reclaimable after expiry
+last_http_status  integer
+last_error        text
+delivered_at      timestamp
+created_at        timestamp not null
+updated_at        timestamp not null
+row_version       integer not null default 0
+unique (event_id, endpoint_id)
+```
+
+Constraints:
+
+- One row per `(event, endpoint)` fan-out; the event ID and payload are preserved across replays.
+- Only a 2xx response counts as success. Any other outcome retries with bounded exponential backoff for up to 24 hours, after which the delivery becomes dead. Succeeded and cancelled deliveries are retained for 90 days; dead and pending deliveries remain until operator action.
+- No database transaction spans an HTTP attempt. An interrupted attempt leaves its lease to expire and be reclaimed; process shutdown cancels workers before the store closes.
+- Replay reopens a dead delivery for an enabled, non-deleted endpoint: it resets attempts, lease, and error state and starts a fresh 24-hour window without creating a duplicate row.
+- Per-endpoint and aggregate delivery ordering is enforced.
+
 ## 13. Reconciliation and Crash Safety
 
 ### 13.1 Claim Pattern
@@ -881,7 +987,7 @@ Retrying an explicit offline or copy failure first removes or cancels the failed
 
 ## 16. Web UI
 
-The Web UI contains six server-rendered views: sign-in, downloads, download detail, categories, settings, and change password — preceded, on a fresh database, by the first-run setup wizard (Section 8.1). Visual design follows the pinned token sheet in `docs/ref/linear-design-tokens.md` (dark-first, Inter/monospace dual typeface, micro-radius geometry, hairline borders).
+The Web UI contains eight server-rendered views: sign-in, downloads, download detail, categories, settings, change password, webhooks, and delivery history — preceded, on a fresh database, by the first-run setup wizard (Section 8.1). Visual design follows the pinned token sheet in `docs/ref/linear-design-tokens.md` (dark-first, Inter/monospace dual typeface, micro-radius geometry, hairline borders).
 
 All views share a slim sidebar shell with primary navigation, a settings link, a change-password link, a language toggle (English and Simplified Chinese, stored in a preference cookie), and sign-out. Decorative content is excluded by design: no repeated route explainers, no marketing panels, no footer boilerplate.
 
@@ -956,6 +1062,20 @@ Allows operators to:
 
 A form behind authentication (current password, new password, confirmation) that replaces the operator password for both the Web UI and the qBittorrent-compatible API. The new password requires at least 8 characters, a matching confirmation, and proof of the current password; the change is persisted as a PBKDF2-SHA256 hash (Section 12.5). The page reminds the operator to update the qBittorrent password configured in Sonarr and Radarr. Existing sessions stay valid until their TTL expires.
 
+### 16.5 Webhooks
+
+Manages multiple named endpoints at `/webhooks` with create, edit, enable/disable, HMAC secret rotation, delete, test, filters, and dead-letter replay. Each endpoint subscribes independently to `download.completed` and/or `download.failed`, and may be created enabled or disabled.
+
+- All actions use the existing authenticated admin session and CSRF protections; there is no separate role or API credential.
+- The signing secret is generated on create and rotation, shown once from a no-store response, and is not recoverable through the UI. The optional bearer token is never redisplayed; leaving it blank on edit preserves the stored value, and a dedicated clear control removes it.
+- Test enqueues a durable `webhook.test` event and one delivery targeted at the selected endpoint, using the normal signing, bearer, retry, and history path.
+
+### 16.6 Delivery History
+
+Shows delivery history at `/webhook-deliveries` with filters and dead-letter replay.
+
+- Replay is allowed only for dead deliveries on enabled, non-deleted endpoints. It reopens the same `(event_id, endpoint_id)` delivery, preserves the event ID and payload, resets attempts/lease/error state, and starts a fresh 24-hour retry window; it never creates a duplicate delivery row. Consumers must remain idempotent by event ID.
+
 ## 17. Health and Operations
 
 CD211 exposes service-native endpoints outside the qBittorrent namespace:
@@ -1005,6 +1125,9 @@ CloudDrive2 access tokens
 10. Error responses do not echo raw uploaded data or authenticated URLs.
 11. The container has no access to media-library roots unless they are also intentional staging roots.
 12. CD211 is deployed on trusted internal networks and is not a public reverse-proxy target.
+13. Outbound webhook requests are JSON POSTs with `Content-Type: application/json`, signed `v1=` plus lowercase hex HMAC-SHA256 over `<timestamp>.<raw-body>`, and carry `X-CD211-Event`, `X-CD211-Event-ID`, `X-CD211-Timestamp`, `X-CD211-Signature`, and an optional `Authorization: Bearer <token>`; receivers must verify the signature against the exact raw body before parsing and deduplicate by event ID. Redirects are never followed.
+14. Webhook receiver URLs are validated to be absolute HTTP/HTTPS URLs without userinfo or fragment. Query strings are allowed and delivered, but raw query values are redacted from ordinary Web UI reads and edit forms. Private/LAN receivers are intentionally allowed, so operators must configure only trusted URLs; CD211 provides no public-webhook SSRF allowlist.
+15. Webhook signing secrets and bearer tokens live in the mode-restricted SQLite database, are never logged, and are not recoverable through the UI. Receiver URLs, secrets, and request bodies are never written to logs.
 
 ## 19. Verification Strategy
 
@@ -1121,7 +1244,7 @@ The first release is complete when all of the following are true:
 
 ## 22. Remaining Decisions
 
-The implementation stack and dependencies are selected in Section 7.5. Two product and deployment choices remain:
+The implementation stack and dependencies are selected in Section 7.6. Two product and deployment choices remain:
 
 1. Exact category defaults for the production Sonarr and Radarr staging directories.
 2. Whether explicit cloud deletion is included in the first UI release or deferred until after local deletion is proven safe.

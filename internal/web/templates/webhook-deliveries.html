@@ -1,0 +1,92 @@
+{{define "webhook-deliveries"}}<!doctype html>
+<html lang="{{.Lang}}">
+{{template "head" .}}
+<body>
+  <div class="app-shell">
+    {{template "sidebar" .}}
+    <main class="content" id="main-content">
+      <header class="page-header">
+        <div class="page-title">
+          <h1>{{.Str.TitleDeliveries}}</h1>
+        </div>
+      </header>
+      <p class="page-lede">{{.Str.DeliveriesLede}}</p>
+
+      {{if .Notice}}<div class="notice notice-success" role="status">{{.Notice}}</div>{{end}}
+
+      <form class="filter-bar" action="/webhook-deliveries" method="get" data-auto-submit>
+        <label class="filter-field">
+          <span>{{.Str.FilterEndpoint}}</span>
+          <select id="endpoint" name="endpoint">
+            <option value="">{{.Str.AllEndpoints}}</option>
+            {{range .Endpoints}}<option value="{{.Value}}" {{if .Active}}selected{{end}}>{{.Label}}</option>{{end}}
+          </select>
+        </label>
+        <label class="filter-field">
+          <span>{{.Str.FilterEvent}}</span>
+          <select id="event" name="event">
+            <option value="">{{.Str.AllEvents}}</option>
+            {{range .Events}}<option value="{{.Value}}" {{if .Active}}selected{{end}}>{{.Label}}</option>{{end}}
+          </select>
+        </label>
+        <label class="filter-field">
+          <span>{{.Str.FilterStatus}}</span>
+          <select id="status" name="status">
+            <option value="">{{.Str.AllStatuses}}</option>
+            {{range .Statuses}}<option value="{{.Value}}" {{if .Active}}selected{{end}}>{{.Label}}</option>{{end}}
+          </select>
+        </label>
+        <input type="hidden" name="limit" value="{{.Limit}}">
+        <button class="button button-secondary" type="submit">{{.Str.Apply}}</button>
+      </form>
+
+      {{if .Rows}}
+      <section class="panel" aria-labelledby="deliveries-title">
+        <h2 id="deliveries-title" class="visually-hidden">{{.Str.TitleDeliveries}}</h2>
+        <div class="table-wrap"><table class="delivery-table">
+          <thead><tr>
+            <th scope="col">{{.Str.ThEndpoint}}</th>
+            <th scope="col">{{.Str.ThEvent}}</th>
+            <th scope="col">{{.Str.ThStatus}}</th>
+            <th scope="col">{{.Str.Attempts}}</th>
+            <th scope="col">{{.Str.ThHTTPStatus}}</th>
+            <th scope="col">{{.Str.ThLastError}}</th>
+            <th scope="col">{{.Str.ThNextAttempt}}</th>
+            <th scope="col">{{.Str.ThDelivered}}</th>
+            <th scope="col">{{.Str.ThUpdated}}</th>
+            <th scope="col"></th>
+          </tr></thead>
+          <tbody>
+          {{range .Rows}}
+            <tr>
+              <td class="cell-name">{{.EndpointName}}</td>
+              <td><span class="state-badge" data-state="event">{{.EventLabel}}</span></td>
+              <td><span class="state-badge" data-state="{{.Status}}">{{.StatusLabel}}</span></td>
+              <td class="cell-index">{{.AttemptCount}}</td>
+              <td class="cell-index">{{.LastHTTPStatus}}</td>
+              <td class="cell-error">{{.LastError}}</td>
+              <td class="cell-age">{{.NextAttemptAt}}</td>
+              <td class="cell-age">{{.DeliveredAt}}</td>
+              <td class="cell-age">{{.UpdatedAt}}</td>
+              <td class="cell-action">
+                {{if .CanReplay}}
+                <form action="/webhook-deliveries/{{.ID}}/replay" method="post" data-confirm="{{$.Str.ReplayConfirm}}"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><button class="button button-ghost" type="submit">{{$.Str.Replay}}</button></form>
+                {{end}}
+              </td>
+            </tr>
+          {{end}}
+          </tbody>
+        </table></div>
+        {{if .NextURL}}
+        <div class="pager"><a class="button button-secondary" href="{{.NextURL}}">{{.Str.NextPage}}</a></div>
+        {{end}}
+      </section>
+      {{else}}
+      <section class="empty-state" aria-labelledby="empty-title">
+        <h2 id="empty-title">{{.Str.NoDeliveries}}</h2>
+      </section>
+      {{end}}
+    </main>
+  </div>
+</body>
+</html>{{end}}

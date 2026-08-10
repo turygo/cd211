@@ -255,6 +255,73 @@ type Strings struct {
 	SettingsFrozenPathsNote string
 	SettingsRemapTitle      string
 	SettingsRemapHint       string
+
+	// Webhook endpoints
+	NavWebhooks           string
+	TitleWebhooks         string
+	WebhooksLede          string
+	SectionEndpoints      string
+	NoEndpoints           string
+	AddEndpoint           string
+	EditEndpoint          string
+	CancelButton          string
+	EndpointName          string
+	FieldURL              string
+	HintURL               string
+	FieldBearerToken      string
+	BearerKeepHint        string
+	ClearBearerToken      string
+	SubscriptionsLabel    string
+	SubscriptionCompleted string
+	SubscriptionFailed    string
+	CreateEndpointButton  string
+	EndpointSaved         string
+	URLQueryRedacted      string
+	EndpointNameInvalid   string
+	EndpointURLInvalid    string
+	SubscriptionRequired  string
+	BearerTooLong         string
+	RotateSecret          string
+	RotateSecretConfirm   string
+	DeleteEndpoint        string
+	DeleteEndpointConfirm string
+	SendTest              string
+	SendTestConfirm       string
+	DisableEndpoint       string
+	EnableEndpoint        string
+	SecretSetMasked       string
+	SecretTitle           string
+	SecretLede            string
+	SecretLabel           string
+	SecretDone            string
+	TestEnqueued          string
+
+	// Webhook delivery history
+	TitleDeliveries    string
+	DeliveriesLede     string
+	FilterEndpoint     string
+	FilterEvent        string
+	FilterStatus       string
+	AllEndpoints       string
+	AllEvents          string
+	AllStatuses        string
+	ThEndpoint         string
+	ThEvent            string
+	ThStatus           string
+	ThHTTPStatus       string
+	ThLastError        string
+	ThNextAttempt      string
+	ThDelivered        string
+	NoDeliveries       string
+	Replay             string
+	ReplayConfirm      string
+	ReplayEnqueued     string
+	NextPage           string
+	EventTest          string
+	DeliveryPending    string
+	DeliveryDelivering string
+	DeliverySucceeded  string
+	DeliveryDead       string
 }
 
 var stringsEN = Strings{
@@ -480,6 +547,71 @@ var stringsEN = Strings{
 	SettingsFrozenPathsNote: "Existing downloads keep their recorded paths and files are never moved. Only future downloads use remapped category paths.",
 	SettingsRemapTitle:      "Category path changes",
 	SettingsRemapHint:       "Changing either root keeps every category subfolder and previews its new full path below.",
+
+	NavWebhooks:           "Webhooks",
+	TitleWebhooks:         "Webhook endpoints",
+	WebhooksLede:          "Deliver download completion and failure events to your own services with HMAC-signed HTTP requests.",
+	SectionEndpoints:      "Endpoints",
+	NoEndpoints:           "No endpoints yet. Add one to start receiving download events.",
+	AddEndpoint:           "Add endpoint",
+	EditEndpoint:          "Edit endpoint",
+	CancelButton:          "Cancel",
+	EndpointName:          "Name",
+	FieldURL:              "Endpoint URL",
+	HintURL:               "Absolute http or https URL without a username, password, or fragment.",
+	FieldBearerToken:      "Bearer token",
+	BearerKeepHint:        "Leave empty to keep the current token.",
+	ClearBearerToken:      "Clear bearer token",
+	SubscriptionsLabel:    "Events to deliver",
+	SubscriptionCompleted: "Download completed",
+	SubscriptionFailed:    "Download failed",
+	CreateEndpointButton:  "Create endpoint",
+	EndpointSaved:         "Endpoint updated.",
+	URLQueryRedacted:      "Query strings are never shown; they are stored for delivery and displayed as ?….",
+	EndpointNameInvalid:   "The name is required and must be 1–64 characters without control characters.",
+	EndpointURLInvalid:    "The URL must be an absolute http or https URL without a username, password, or fragment.",
+	SubscriptionRequired:  "Choose at least one event to deliver.",
+	BearerTooLong:         "The bearer token must be at most 4096 bytes.",
+	RotateSecret:          "Rotate secret",
+	RotateSecretConfirm:   "Rotate the signing secret? The old secret stops working immediately.",
+	DeleteEndpoint:        "Delete",
+	DeleteEndpointConfirm: "Delete this endpoint? Pending deliveries are cancelled; history is retained.",
+	SendTest:              "Send test",
+	SendTestConfirm:       "Send a test delivery to this endpoint?",
+	DisableEndpoint:       "Disable",
+	EnableEndpoint:        "Enable",
+	SecretSetMasked:       "A signing secret is set. Rotate it to generate a new one.",
+	SecretTitle:           "Webhook signing secret",
+	SecretLede:            "Copy this secret now. It is shown only once and cannot be recovered later.",
+	SecretLabel:           "HMAC-SHA256 signing secret",
+	SecretDone:            "Done",
+	TestEnqueued:          "Test delivery enqueued.",
+
+	TitleDeliveries:    "Webhook deliveries",
+	DeliveriesLede:     "Delivery history for every webhook event, including retries and dead letters.",
+	FilterEndpoint:     "Endpoint",
+	FilterEvent:        "Event",
+	FilterStatus:       "Status",
+	AllEndpoints:       "All endpoints",
+	AllEvents:          "All events",
+	AllStatuses:        "All statuses",
+	ThEndpoint:         "Endpoint",
+	ThEvent:            "Event",
+	ThStatus:           "Status",
+	ThHTTPStatus:       "HTTP",
+	ThLastError:        "Last error",
+	ThNextAttempt:      "Next attempt",
+	ThDelivered:        "Delivered",
+	NoDeliveries:       "No deliveries match these filters.",
+	Replay:             "Replay",
+	ReplayConfirm:      "Replay this dead-letter delivery? It will be retried for up to 24 hours.",
+	ReplayEnqueued:     "Delivery reopened for replay.",
+	NextPage:           "Next",
+	EventTest:          "Test",
+	DeliveryPending:    "Pending",
+	DeliveryDelivering: "Delivering",
+	DeliverySucceeded:  "Succeeded",
+	DeliveryDead:       "Dead letter",
 }
 
 var stringsZH = Strings{
@@ -704,6 +836,71 @@ var stringsZH = Strings{
 	SettingsFrozenPathsNote: "已有任务仍使用提交时记录的路径，文件不会移动；重新映射后的分类路径仅用于后续任务。",
 	SettingsRemapTitle:      "分类路径变化",
 	SettingsRemapHint:       "修改任一根目录时会保留每个分类的子目录；下方会预览新的完整路径。",
+
+	NavWebhooks:           "Webhook 管理",
+	TitleWebhooks:         "Webhook 端点",
+	WebhooksLede:          "通过带 HMAC 签名的 HTTP 请求，将下载完成和失败事件推送到自有服务。",
+	SectionEndpoints:      "端点列表",
+	NoEndpoints:           "还没有端点。添加一个即可开始接收下载事件。",
+	AddEndpoint:           "添加端点",
+	EditEndpoint:          "编辑端点",
+	CancelButton:          "取消",
+	EndpointName:          "名称",
+	FieldURL:              "端点地址",
+	HintURL:               "请填写绝对 HTTP 或 HTTPS URL，且不能包含用户名、密码或片段标识符（fragment）。",
+	FieldBearerToken:      "Bearer 令牌",
+	BearerKeepHint:        "留空则保留当前令牌。",
+	ClearBearerToken:      "清除 Bearer 令牌",
+	SubscriptionsLabel:    "要推送的事件",
+	SubscriptionCompleted: "下载完成",
+	SubscriptionFailed:    "下载失败",
+	CreateEndpointButton:  "创建端点",
+	EndpointSaved:         "端点已更新。",
+	URLQueryRedacted:      "查询字符串仅用于投递；界面一律显示为“?…”，不会展示原始内容。",
+	EndpointNameInvalid:   "名称不能为空，长度须为 1–64 个字符且不能包含控制字符。",
+	EndpointURLInvalid:    "地址必须是绝对 HTTP 或 HTTPS URL，且不能包含用户名、密码或片段标识符。",
+	SubscriptionRequired:  "请至少选择一种要推送的事件。",
+	BearerTooLong:         "Bearer 令牌不能超过 4096 字节。",
+	RotateSecret:          "轮换密钥",
+	RotateSecretConfirm:   "确定轮换签名密钥吗？旧密钥将立即失效。",
+	DeleteEndpoint:        "删除",
+	DeleteEndpointConfirm: "确定删除此端点吗？删除后将取消待投递的请求，但保留历史记录。",
+	SendTest:              "发送测试投递",
+	SendTestConfirm:       "确定要向此端点发送一次测试投递吗？",
+	DisableEndpoint:       "停用",
+	EnableEndpoint:        "启用",
+	SecretSetMasked:       "已设置签名密钥。需要更换时请点击“轮换密钥”。",
+	SecretTitle:           "Webhook 签名密钥",
+	SecretLede:            "请立即复制并妥善保存此密钥。此密钥仅显示一次，之后无法查看。",
+	SecretLabel:           "HMAC-SHA256 签名密钥",
+	SecretDone:            "完成",
+	TestEnqueued:          "测试投递已加入队列。",
+
+	TitleDeliveries:    "Webhook 投递记录",
+	DeliveriesLede:     "查看每个 Webhook 事件的投递历史，包括重试与死信记录。",
+	FilterEndpoint:     "端点",
+	FilterEvent:        "事件",
+	FilterStatus:       "状态",
+	AllEndpoints:       "全部端点",
+	AllEvents:          "全部事件",
+	AllStatuses:        "全部状态",
+	ThEndpoint:         "端点",
+	ThEvent:            "事件",
+	ThStatus:           "状态",
+	ThHTTPStatus:       "HTTP",
+	ThLastError:        "最新错误",
+	ThNextAttempt:      "下次投递",
+	ThDelivered:        "投递时间",
+	NoDeliveries:       "没有符合筛选条件的投递记录。",
+	Replay:             "重新投递",
+	ReplayConfirm:      "确定重新投递这条死信记录吗？系统随后会持续重试，重试期最长为 24 小时。",
+	ReplayEnqueued:     "投递已重新排队。",
+	NextPage:           "下一页",
+	EventTest:          "测试",
+	DeliveryPending:    "待投递",
+	DeliveryDelivering: "投递中",
+	DeliverySucceeded:  "已投递",
+	DeliveryDead:       "死信",
 }
 
 // tr returns the string table for lang, defaulting to English.

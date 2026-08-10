@@ -1,0 +1,65 @@
+{{define "webhooks"}}<!doctype html>
+<html lang="{{.Lang}}">
+{{template "head" .}}
+<body>
+  <div class="app-shell">
+    {{template "sidebar" .}}
+    <main class="content" id="main-content">
+      <header class="page-header">
+        <div class="page-title">
+          <h1>{{.Str.TitleWebhooks}}</h1>
+        </div>
+        <a class="button button-primary" href="/webhooks/new">{{.Str.AddEndpoint}}</a>
+      </header>
+      <p class="page-lede">{{.Str.WebhooksLede}}</p>
+
+      {{if .Notice}}<div class="notice {{if .Success}}notice-success{{else}}notice-error{{end}}" role="{{if .Success}}status{{else}}alert{{end}}">{{.Notice}}</div>{{end}}
+
+      <section class="panel" aria-labelledby="endpoints-title">
+        <h2 id="endpoints-title">{{.Str.SectionEndpoints}}</h2>
+        {{if .Rows}}
+        <div class="table-wrap"><table class="webhook-table">
+          <thead><tr>
+            <th scope="col">{{.Str.EndpointName}}</th>
+            <th scope="col">{{.Str.SubscriptionsLabel}}</th>
+            <th scope="col">{{.Str.ThStatus}}</th>
+            <th scope="col" class="cell-action">{{.Str.ThEvent}}</th>
+          </tr></thead>
+          <tbody>
+          {{range $index, $row := .Rows}}
+            <tr>
+              <td class="cell-name">
+                <a href="/webhooks/{{$row.ID}}/edit">{{$row.Name}}</a>
+                <span class="cell-meta"><code>{{$row.URL}}</code></span>
+                {{if $row.HasQuery}}<span class="cell-error">{{$.Str.URLQueryRedacted}}</span>{{end}}
+              </td>
+              <td>
+                <span class="subscription-badge {{if not $row.Completed}}is-off{{end}}">{{$.Str.SubscriptionCompleted}}</span>
+                <span class="subscription-badge {{if not $row.Failed}}is-off{{end}}">{{$.Str.SubscriptionFailed}}</span>
+              </td>
+              <td><span class="state-badge" data-state="{{if $row.Enabled}}enabled{{else}}disabled{{end}}">{{if $row.Enabled}}{{$.Str.Enabled}}{{else}}{{$.Str.Disabled}}{{end}}</span></td>
+              <td class="cell-action">
+                <div class="action-bar">
+                  <a class="button button-ghost" href="/webhooks/{{$row.ID}}/edit">{{$.Str.EditEndpoint}}</a>
+                  {{if $row.Enabled}}
+                  <form action="/webhooks/{{$row.ID}}/disable" method="post"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><button class="button button-ghost" type="submit">{{$.Str.DisableEndpoint}}</button></form>
+                  {{else}}
+                  <form action="/webhooks/{{$row.ID}}/enable" method="post"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><button class="button button-ghost" type="submit">{{$.Str.EnableEndpoint}}</button></form>
+                  {{end}}
+                  <form action="/webhooks/{{$row.ID}}/rotate-secret" method="post" data-confirm="{{$.Str.RotateSecretConfirm}}"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><button class="button button-ghost" type="submit">{{$.Str.RotateSecret}}</button></form>
+                  <form action="/webhooks/{{$row.ID}}/test" method="post" data-confirm="{{$.Str.SendTestConfirm}}"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><button class="button button-ghost" type="submit">{{$.Str.SendTest}}</button></form>
+                  <form action="/webhooks/{{$row.ID}}/delete" method="post" data-confirm="{{$.Str.DeleteEndpointConfirm}}"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><button class="button button-danger" type="submit">{{$.Str.DeleteEndpoint}}</button></form>
+                </div>
+              </td>
+            </tr>
+          {{end}}
+          </tbody>
+        </table></div>
+        {{else}}
+        <p class="muted">{{.Str.NoEndpoints}}</p>
+        {{end}}
+      </section>
+    </main>
+  </div>
+</body>
+</html>{{end}}

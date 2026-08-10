@@ -20,6 +20,7 @@ import (
 	"github.com/turygo/cd211/internal/creds"
 	"github.com/turygo/cd211/internal/domain"
 	"github.com/turygo/cd211/internal/fsafe"
+	"github.com/turygo/cd211/internal/outbox"
 	"github.com/turygo/cd211/internal/session"
 	"github.com/turygo/cd211/internal/store"
 )
@@ -109,6 +110,7 @@ type webFixture struct {
 	cloud      *controlledCloudStatus
 	filesystem Filesystem
 	creds      *creds.Manager
+	webhooks   *fakeWebhookStore
 	handler    http.Handler
 	localRoot  string
 	sid        string
@@ -164,11 +166,12 @@ func newWebFixtureWithSettings(t *testing.T, settingsDeps SettingsDeps) *webFixt
 	if settingsDeps.Store == nil {
 		settingsDeps.Store = database
 	}
-	handler, err := New(Config{CloudRoot: "/cloud", LocalRoot: localRoot}, credentials, repo, sessions, clock, waker, cloud, filesystem, settingsDeps)
+	webhooks := newFakeWebhookStore()
+	handler, err := New(Config{CloudRoot: "/cloud", LocalRoot: localRoot}, credentials, repo, sessions, clock, waker, cloud, filesystem, settingsDeps, webhooks)
 	if err != nil {
 		t.Fatalf("New(): %v", err)
 	}
-	return &webFixture{t: t, clock: clock, store: database, repo: repo, sessions: sessions, waker: waker, cloud: cloud, filesystem: filesystem, creds: credentials, handler: handler, localRoot: localRoot, sid: sid, csrf: current.CSRFToken}
+	return &webFixture{t: t, clock: clock, store: database, repo: repo, sessions: sessions, waker: waker, cloud: cloud, filesystem: filesystem, creds: credentials, webhooks: webhooks, handler: handler, localRoot: localRoot, sid: sid, csrf: current.CSRFToken}
 }
 
 func (fixture *webFixture) request(method, target string, form url.Values, authenticated bool) *httptest.ResponseRecorder {
@@ -748,7 +751,7 @@ func TestSettingsRootChangeRemapsCategoriesButFreezesExistingDownloads(t *testin
 	handler, err := New(
 		Config{CloudRoot: "/cloud", LocalRoot: fixture.localRoot},
 		fixture.creds, fixture.repo, fixture.sessions, fixture.clock, fixture.waker, fixture.cloud, fixture.filesystem,
-		SettingsDeps{Store: fixture.store, Dial: dial.dial},
+		SettingsDeps{Store: fixture.store, Dial: dial.dial}, fixture.webhooks,
 	)
 	if err != nil {
 		t.Fatalf("New(): %v", err)
@@ -877,26 +880,28 @@ func TestConstructorValidation(t *testing.T) {
 		waker    Waker
 		cloud    CloudStatus
 		settings SettingsDeps
+		webhooks outbox.EndpointRepository
 	}{
-		{"cloud root", Config{CloudRoot: "relative", LocalRoot: t.TempDir()}, fixture.repo, fixture.clock, fixture.waker, fixture.cloud, SettingsDeps{Store: fixture.store}},
-		{"local root", Config{CloudRoot: "/cloud", LocalRoot: "relative"}, fixture.repo, fixture.clock, fixture.waker, fixture.cloud, SettingsDeps{Store: fixture.store}},
-		{"repository", config, nil, fixture.clock, fixture.waker, fixture.cloud, SettingsDeps{Store: fixture.store}},
-		{"clock", config, fixture.repo, nil, fixture.waker, fixture.cloud, SettingsDeps{Store: fixture.store}},
-		{"waker", config, fixture.repo, fixture.clock, nil, fixture.cloud, SettingsDeps{Store: fixture.store}},
-		{"cloud status", config, fixture.repo, fixture.clock, fixture.waker, nil, SettingsDeps{Store: fixture.store}},
-		{"settings store", config, fixture.repo, fixture.clock, fixture.waker, fixture.cloud, SettingsDeps{}},
+		{"cloud root", Config{CloudRoot: "relative", LocalRoot: t.TempDir()}, fixture.repo, fixture.clock, fixture.waker, fixture.cloud, SettingsDeps{Store: fixture.store}, fixture.webhooks},
+		{"local root", Config{CloudRoot: "/cloud", LocalRoot: "relative"}, fixture.repo, fixture.clock, fixture.waker, fixture.cloud, SettingsDeps{Store: fixture.store}, fixture.webhooks},
+		{"repository", config, nil, fixture.clock, fixture.waker, fixture.cloud, SettingsDeps{Store: fixture.store}, fixture.webhooks},
+		{"clock", config, fixture.repo, nil, fixture.waker, fixture.cloud, SettingsDeps{Store: fixture.store}, fixture.webhooks},
+		{"waker", config, fixture.repo, fixture.clock, nil, fixture.cloud, SettingsDeps{Store: fixture.store}, fixture.webhooks},
+		{"cloud status", config, fixture.repo, fixture.clock, fixture.waker, nil, SettingsDeps{Store: fixture.store}, fixture.webhooks},
+		{"settings store", config, fixture.repo, fixture.clock, fixture.waker, fixture.cloud, SettingsDeps{}, fixture.webhooks},
+		{"webhook store", config, fixture.repo, fixture.clock, fixture.waker, fixture.cloud, SettingsDeps{Store: fixture.store}, nil},
 	}
 	for _, item := range cases {
 		t.Run(item.name, func(t *testing.T) {
-			if handler, err := New(item.config, fixture.creds, item.repo, fixture.sessions, item.clock, item.waker, item.cloud, fixture.filesystem, item.settings); err == nil || handler != nil {
+			if handler, err := New(item.config, fixture.creds, item.repo, fixture.sessions, item.clock, item.waker, item.cloud, fixture.filesystem, item.settings, item.webhooks); err == nil || handler != nil {
 				t.Errorf("New() = (%v, %v), want validation error", handler, err)
 			}
 		})
 	}
-	if handler, err := New(config, fixture.creds, fixture.repo, fixture.sessions, fixture.clock, fixture.waker, fixture.cloud, nil, SettingsDeps{Store: fixture.store}); err == nil || handler != nil {
+	if handler, err := New(config, fixture.creds, fixture.repo, fixture.sessions, fixture.clock, fixture.waker, fixture.cloud, nil, SettingsDeps{Store: fixture.store}, fixture.webhooks); err == nil || handler != nil {
 		t.Errorf("New(nil filesystem) = (%v, %v), want validation error", handler, err)
 	}
-	if handler, err := New(config, nil, fixture.repo, fixture.sessions, fixture.clock, fixture.waker, fixture.cloud, fixture.filesystem, SettingsDeps{Store: fixture.store}); err == nil || handler != nil {
+	if handler, err := New(config, nil, fixture.repo, fixture.sessions, fixture.clock, fixture.waker, fixture.cloud, fixture.filesystem, SettingsDeps{Store: fixture.store}, fixture.webhooks); err == nil || handler != nil {
 		t.Errorf("New(nil credentials) = (%v, %v), want validation error", handler, err)
 	}
 }

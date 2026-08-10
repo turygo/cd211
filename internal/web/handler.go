@@ -23,6 +23,7 @@ import (
 	"github.com/turygo/cd211/internal/creds"
 	"github.com/turygo/cd211/internal/domain"
 	"github.com/turygo/cd211/internal/fsafe"
+	"github.com/turygo/cd211/internal/outbox"
 	"github.com/turygo/cd211/internal/session"
 	"github.com/turygo/cd211/internal/settings"
 	"github.com/turygo/cd211/internal/store"
@@ -102,6 +103,10 @@ type SettingsDeps struct {
 	Apply func(ctx context.Context, cfg settings.Config) error
 }
 
+// webhookRepo is the canonical outbox.EndpointRepository consumed by the
+// management UI; *store.Store satisfies it. Ordinary reads never expose
+// secrets, and Create/Rotate return the endpoint with HMACSecret populated
+// exactly once for the one-time reveal page.
 type handler struct {
 	config      Config
 	creds       Credentials
@@ -112,6 +117,7 @@ type handler struct {
 	cloudStatus CloudStatus
 	filesystem  Filesystem
 	settings    SettingsDeps
+	webhookRepo outbox.EndpointRepository
 	templates   *template.Template
 }
 
@@ -123,8 +129,8 @@ type authenticatedSession struct {
 }
 
 // New constructs the server-rendered operator interface.
-func New(config Config, credentials Credentials, repo Repository, sessions *session.Store, clock Clock, waker Waker, cloudStatus CloudStatus, filesystem Filesystem, settings SettingsDeps) (http.Handler, error) {
-	if isNil(credentials) || isNil(repo) || sessions == nil || isNil(clock) || isNil(waker) || isNil(cloudStatus) || isNil(filesystem) || isNil(settings.Store) {
+func New(config Config, credentials Credentials, repo Repository, sessions *session.Store, clock Clock, waker Waker, cloudStatus CloudStatus, filesystem Filesystem, settings SettingsDeps, webhooks outbox.EndpointRepository) (http.Handler, error) {
+	if isNil(credentials) || isNil(repo) || sessions == nil || isNil(clock) || isNil(waker) || isNil(cloudStatus) || isNil(filesystem) || isNil(settings.Store) || isNil(webhooks) {
 		return nil, errors.New("web dependency is nil")
 	}
 	dial := settings.Dial
@@ -153,6 +159,7 @@ func New(config Config, credentials Credentials, repo Repository, sessions *sess
 		cloudStatus: cloudStatus,
 		filesystem:  filesystem,
 		settings:    settings,
+		webhookRepo: webhooks,
 		templates:   templates,
 	}
 	mux := http.NewServeMux()
@@ -175,6 +182,18 @@ func New(config Config, credentials Credentials, repo Repository, sessions *sess
 	mux.Handle("POST /downloads/{hash}/retry", h.auth(h.retry, true))
 	mux.Handle("POST /downloads/{hash}/cancel", h.auth(h.cancel, true))
 	mux.Handle("POST /downloads/{hash}/remove", h.auth(h.remove, true))
+	mux.Handle("GET /webhooks", h.auth(h.webhooks, false))
+	mux.Handle("GET /webhooks/new", h.auth(h.webhookNew, false))
+	mux.Handle("POST /webhooks", h.auth(h.webhookCreate, true))
+	mux.Handle("GET /webhooks/{id}/edit", h.auth(h.webhookEdit, false))
+	mux.Handle("POST /webhooks/{id}", h.auth(h.webhookUpdate, true))
+	mux.Handle("POST /webhooks/{id}/enable", h.auth(h.webhookEnable, true))
+	mux.Handle("POST /webhooks/{id}/disable", h.auth(h.webhookDisable, true))
+	mux.Handle("POST /webhooks/{id}/rotate-secret", h.auth(h.webhookRotateSecret, true))
+	mux.Handle("POST /webhooks/{id}/delete", h.auth(h.webhookDelete, true))
+	mux.Handle("POST /webhooks/{id}/test", h.auth(h.webhookTest, true))
+	mux.Handle("GET /webhook-deliveries", h.auth(h.webhookDeliveries, false))
+	mux.Handle("POST /webhook-deliveries/{id}/replay", h.auth(h.webhookReplay, true))
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		method, found := routeMethod(r.URL.Path, r.Method)
@@ -208,6 +227,13 @@ func routeMethod(requestPath, requestMethod string) (string, bool) {
 		return http.MethodGet, true
 	case "/logout", "/categories/save", "/settings/test", "/settings/save":
 		return http.MethodPost, true
+	case "/webhooks", "/webhook-deliveries":
+		if requestPath == "/webhooks" && requestMethod == http.MethodPost {
+			return http.MethodPost, true
+		}
+		return http.MethodGet, true
+	case "/webhooks/new":
+		return http.MethodGet, true
 	}
 	parts := strings.Split(strings.TrimPrefix(requestPath, "/"), "/")
 	if len(parts) == 2 && parts[0] == "downloads" && parts[1] != "" {
@@ -218,6 +244,20 @@ func routeMethod(requestPath, requestMethod string) (string, bool) {
 		case "start", "retry", "cancel", "remove":
 			return http.MethodPost, true
 		}
+	}
+	if len(parts) == 2 && parts[0] == "webhooks" && parts[1] != "" {
+		return http.MethodPost, true
+	}
+	if len(parts) == 3 && parts[0] == "webhooks" && parts[1] != "" {
+		switch parts[2] {
+		case "edit":
+			return http.MethodGet, true
+		case "enable", "disable", "rotate-secret", "delete", "test":
+			return http.MethodPost, true
+		}
+	}
+	if len(parts) == 3 && parts[0] == "webhook-deliveries" && parts[1] != "" && parts[2] == "replay" {
+		return http.MethodPost, true
 	}
 	return "", false
 }
@@ -1048,9 +1088,9 @@ func validSubpathCharacters(value string) bool {
 
 func repositoryError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, store.ErrNotFound):
+	case errors.Is(err, store.ErrNotFound), errors.Is(err, outbox.ErrNotFound):
 		plain(w, http.StatusNotFound, "Not Found\n")
-	case errors.Is(err, store.ErrInvalidTransition), errors.Is(err, store.ErrDestinationConflict):
+	case errors.Is(err, store.ErrInvalidTransition), errors.Is(err, store.ErrDestinationConflict), errors.Is(err, outbox.ErrNameConflict):
 		plain(w, http.StatusConflict, "Conflict\n")
 	default:
 		plain(w, http.StatusInternalServerError, "Internal Server Error\n")

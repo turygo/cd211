@@ -224,7 +224,7 @@ func (m *manager) build(ctx context.Context, cfg settings.Config) (*runtime, err
 		Store: m.store,
 		Dial:  nil,
 		Apply: m.Apply,
-	})
+	}, m.store)
 	if err != nil {
 		return nil, fmt.Errorf("web: %w", err)
 	}

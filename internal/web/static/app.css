@@ -1289,3 +1289,79 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
     gap: 4px;
   }
 }
+
+/* ---------- Webhooks ---------- */
+
+.state-badge[data-state="enabled"] { color: var(--ok); border-color: rgba(76, 183, 130, 0.4); }
+.state-badge[data-state="disabled"] { color: var(--text-tertiary); }
+
+.state-badge[data-state="succeeded"] { color: var(--ok); border-color: rgba(76, 183, 130, 0.4); }
+.state-badge[data-state="dead"] { color: var(--danger); border-color: rgba(235, 87, 87, 0.4); }
+.state-badge[data-state="delivering"] { color: #a1a8f0; border-color: rgba(94, 106, 210, 0.5); }
+.state-badge[data-state="pending"],
+.state-badge[data-state="cancelled"] { color: var(--text-tertiary); }
+
+.subscription-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  border: 1px solid rgba(76, 183, 130, 0.4);
+  font-size: 10px;
+  font-weight: 510;
+  letter-spacing: 0.02em;
+  color: var(--ok);
+  white-space: nowrap;
+}
+
+.subscription-badge.is-off {
+  border-color: var(--border-strong);
+  color: var(--text-quaternary);
+}
+
+.webhook-form {
+  display: grid;
+  gap: 12px;
+}
+
+.subscription-fieldset {
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: 6px;
+}
+
+.subscription-fieldset legend {
+  padding: 0 4px;
+  font-size: 12px;
+  font-weight: 510;
+  color: var(--text-tertiary);
+}
+
+.secret-label {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 510;
+  color: var(--text-tertiary);
+}
+
+.secret-value {
+  display: block;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  word-break: break-all;
+  user-select: all;
+}
+
+.delivery-table .cell-name { min-width: 160px; }
+.delivery-table .cell-age { white-space: nowrap; }
+
+.pager {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}

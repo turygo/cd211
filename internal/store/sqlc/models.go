@@ -18,6 +18,16 @@ type Category struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+type DomainEvent struct {
+	ID               string    `json:"id"`
+	Type             string    `json:"type"`
+	AggregateType    string    `json:"aggregate_type"`
+	AggregateID      string    `json:"aggregate_id"`
+	AggregateVersion int64     `json:"aggregate_version"`
+	Payload          []byte    `json:"payload"`
+	OccurredAt       time.Time `json:"occurred_at"`
+}
+
 type Download struct {
 	Hash                 string         `json:"hash"`
 	Name                 string         `json:"name"`
@@ -68,4 +78,44 @@ type Setting struct {
 	Key       string    `json:"key"`
 	Value     string    `json:"value"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type WebhookDelivery struct {
+	ID             int64          `json:"id"`
+	EventID        string         `json:"event_id"`
+	EndpointID     int64          `json:"endpoint_id"`
+	EndpointName   string         `json:"endpoint_name"`
+	EventType      string         `json:"event_type"`
+	AggregateType  string         `json:"aggregate_type"`
+	AggregateID    string         `json:"aggregate_id"`
+	Status         string         `json:"status"`
+	AttemptCount   int64          `json:"attempt_count"`
+	FirstAttemptAt sql.NullTime   `json:"first_attempt_at"`
+	NextAttemptAt  sql.NullTime   `json:"next_attempt_at"`
+	LeaseOwner     sql.NullString `json:"lease_owner"`
+	LeaseUntil     sql.NullTime   `json:"lease_until"`
+	LastHttpStatus sql.NullInt64  `json:"last_http_status"`
+	LastError      sql.NullString `json:"last_error"`
+	DeliveredAt    sql.NullTime   `json:"delivered_at"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+	RowVersion     int64          `json:"row_version"`
+}
+
+type WebhookEndpoint struct {
+	ID          int64          `json:"id"`
+	Name        string         `json:"name"`
+	Url         string         `json:"url"`
+	HmacSecret  string         `json:"hmac_secret"`
+	BearerToken sql.NullString `json:"bearer_token"`
+	Enabled     int64          `json:"enabled"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	DeletedAt   sql.NullTime   `json:"deleted_at"`
+	RowVersion  int64          `json:"row_version"`
+}
+
+type WebhookSubscription struct {
+	EndpointID int64  `json:"endpoint_id"`
+	EventType  string `json:"event_type"`
 }

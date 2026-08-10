@@ -1,0 +1,52 @@
+{{define "webhook-form"}}<!doctype html>
+<html lang="{{.Lang}}">
+{{template "head" .}}
+<body>
+  <div class="app-shell">
+    {{template "sidebar" .}}
+    <main class="content" id="main-content">
+      <nav class="breadcrumb" aria-label="Breadcrumb"><a href="/webhooks">{{.Str.TitleWebhooks}}</a><span aria-hidden="true">/</span>{{if .Editing}}{{.Str.EditEndpoint}}{{else}}{{.Str.AddEndpoint}}{{end}}</nav>
+      <header class="page-header">
+        <div class="page-title">
+          <h1>{{if .Editing}}{{.Str.EditEndpoint}}{{else}}{{.Str.AddEndpoint}}{{end}}</h1>
+        </div>
+      </header>
+
+      {{if .Error}}<div class="notice notice-error" role="alert">{{.Error}}</div>{{end}}
+      {{if .Notice}}<div class="notice notice-success" role="status">{{.Notice}}</div>{{end}}
+
+      <section class="panel panel-narrow" aria-labelledby="form-title">
+        <h2 id="form-title" class="visually-hidden">{{if .Editing}}{{.Str.EditEndpoint}}{{else}}{{.Str.AddEndpoint}}{{end}}</h2>
+        <form action="{{if .Editing}}/webhooks/{{.EndpointID}}{{else}}/webhooks{{end}}" method="post" class="webhook-form">
+          <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+          <div class="form-field"><label for="webhook-name">{{.Str.EndpointName}}</label><input id="webhook-name" name="name" type="text" value="{{.Values.Name}}" maxlength="64" required aria-describedby="name-hint"><small id="name-hint">{{.Str.EndpointNameInvalid}}</small></div>
+          <div class="form-field"><label for="webhook-url">{{.Str.FieldURL}}</label><input id="webhook-url" name="url" type="text" value="{{.Values.URL}}" maxlength="2048" {{if not .Editing}}required{{end}} aria-describedby="url-hint"><small id="url-hint">{{.Str.HintURL}} {{.Str.URLQueryRedacted}}</small>{{if .StoredURL}}<small class="path-preview">{{.Str.FieldURL}} · <code>{{.StoredURL}}</code></small>{{end}}</div>
+          <div class="form-field"><label for="webhook-bearer">{{.Str.FieldBearerToken}}</label><input id="webhook-bearer" name="bearer" type="text" maxlength="4096" autocomplete="off" aria-describedby="bearer-hint"><small id="bearer-hint">{{.Str.BearerKeepHint}} {{.Str.BearerTooLong}}</small></div>
+          {{if .Editing}}<label class="check-row"><input name="clear_bearer" type="checkbox" value="true"> {{.Str.ClearBearerToken}}</label>{{end}}
+          <div class="form-field"><label for="webhook-enabled">{{.Str.ThStatus}}</label><select id="webhook-enabled" name="enabled"><option value="true" {{if .Values.Enabled}}selected{{end}}>{{.Str.Enabled}}</option><option value="false" {{if not .Values.Enabled}}selected{{end}}>{{.Str.Disabled}}</option></select></div>
+          <fieldset class="subscription-fieldset">
+            <legend>{{.Str.SubscriptionsLabel}}</legend>
+            <label class="check-row"><input name="completed" type="checkbox" value="true" {{if .Values.Completed}}checked{{end}}> {{.Str.SubscriptionCompleted}}</label>
+            <label class="check-row"><input name="failed" type="checkbox" value="true" {{if .Values.Failed}}checked{{end}}> {{.Str.SubscriptionFailed}}</label>
+          </fieldset>
+          <div class="button-row">
+            <button class="button button-primary" type="submit">{{if .Editing}}{{.Str.Save}}{{else}}{{.Str.CreateEndpointButton}}{{end}}</button>
+            {{if .Editing}}<a class="button button-secondary" href="/webhooks">{{.Str.CancelButton}}</a>{{end}}
+          </div>
+        </form>
+      </section>
+
+      {{if .Editing}}
+      <section class="panel panel-narrow" aria-labelledby="secret-title">
+        <h2 id="secret-title">{{.Str.RotateSecret}}</h2>
+        <p class="muted">{{.Str.SecretSetMasked}}</p>
+        <form action="/webhooks/{{.EndpointID}}/rotate-secret" method="post" data-confirm="{{.Str.RotateSecretConfirm}}">
+          <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+          <button class="button button-secondary" type="submit">{{.Str.RotateSecret}}</button>
+        </form>
+      </section>
+      {{end}}
+    </main>
+  </div>
+</body>
+</html>{{end}}

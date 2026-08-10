@@ -486,10 +486,10 @@ func safeError(download domain.Download, str *Strings) string {
 	if errorText == "" {
 		return ""
 	}
-	lower := strings.ToLower(errorText)
-	if (download.SubmissionURI != "" && strings.Contains(errorText, download.SubmissionURI)) ||
-		strings.Contains(lower, "magnet:") || strings.Contains(lower, "tracker") ||
-		strings.Contains(lower, "token") || strings.Contains(lower, "sid=") {
+	// The shared predicate keeps webhook payload redaction and this interface
+	// on one convention; it covers the submission URI, magnet links, tracker
+	// URLs/passkeys, tokens, sid=, authorization/bearer/cookie/secret/password.
+	if domain.IsSensitiveError(errorText, download.SubmissionURI) {
 		return str.RedactedError
 	}
 	return errorText

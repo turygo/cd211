@@ -11,6 +11,7 @@ section using the release version and date.
 ### Added
 
 - Added CloudDrive2 and local directory pickers to the first-run setup flow, including directory creation.
+- Added signed outbound webhook notifications for completed and failed downloads: a transactional outbox, per-endpoint subscriptions, HMAC signing, bounded retry for up to 24 hours, dead-letter, and manual replay from delivery history.
 
 ### Changed
 

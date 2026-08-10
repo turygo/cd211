@@ -20,6 +20,7 @@ CD211 不是 BitTorrent 客户端，也不会做种。请仅在可信局域网�
 - 支持下载筛选，并展示进度、文件列表、历史记录和错误详情。
 - 支持开始、重试、取消、删除记录和删除本地文件。
 - 无需重启 CD211 即可修改 CloudDrive2、路径、超时、分类和密码设置。
+- 通过带签名的 Webhook 推送下载完成和失败事件，支持重试、死信和手动重新投递。
 - 提供 `/healthz` 和 `/readyz` 端点用于容器健康检查。
 
 删除下载任务不会删除其在 115 中的副本。
@@ -172,6 +173,34 @@ services:
 - 管理员密码在首次运行设置时创建，可以通过 Web 界面的**修改密码**页面更改。
 - Web 界面和 Sonarr/Radarr 使用相同的凭据。
 - 修改密码后，请同步更新 Sonarr 和 Radarr 中的 qBittorrent 下载客户端配置。
+
+### Webhook
+
+下载完成或失败时，CD211 可以向外部自动化服务或通知系统发送带签名的 Webhook 请求。Webhook 仅用于外部通知；Sonarr 和 Radarr 仍通过轮询和 Completed Download Handling 导入下载。
+
+在 Web 界面的 **Webhook** 页面管理 Webhook 端点，在 **投递记录** 页面（`/webhook-deliveries`）查看投递历史。每个端点可以单独或同时订阅 `download.completed` 和 `download.failed` 事件，并支持创建、编辑、启用、停用、轮换签名密钥、删除、测试、筛选和重新投递死信。所有操作均受现有管理员会话和 CSRF 机制保护，不使用独立的角色或 API 凭据。
+
+端点配置项：
+
+- **名称**：用于区分端点的任意名称。
+- **接收 URL**：必须是绝对 HTTP 或 HTTPS URL，且不能包含用户信息（userinfo）或片段标识符（fragment）。查询参数可以使用，但 Web 界面会隐藏其原始内容。CD211 不跟随重定向。
+- **可选 Bearer 令牌**：通过 `Authorization: Bearer <token>` 请求头发送；编辑时留空可保留原值，也可通过专用控件清除。
+
+每次投递均为 JSON 格式的 POST 请求，并携带 `X-CD211-Event`、`X-CD211-Event-ID`、`X-CD211-Timestamp`（Unix 秒）、`X-CD211-Signature` 以及可选的 `Authorization: Bearer <token>` 请求头。签名为 `v1=` 加上小写十六进制的 HMAC-SHA256(secret, `<timestamp>.<raw-body>`)。接收方必须先使用原始请求体验证签名，再解析请求体，并根据事件 ID 去重。事件封装格式为 `{id, type, schema_version, occurred_at, data}`；失败事件的错误信息已脱敏，不含提交 URI、Tracker 凭据、签名密钥或 Bearer 令牌。
+
+安全要点：
+
+- 签名密钥在创建或轮换时生成，仅通过带 `Cache-Control: no-store` 的响应显示一次，之后无法在 Web 界面中找回；Bearer 令牌也不会再次显示。
+- URL、密钥和请求体不会写入日志。
+- 仅配置可信的接收方 URL。CD211 有意允许访问私网或局域网地址，因此不提供用于限制目标地址的 SSRF 白名单。
+
+重试与重新投递：
+
+- 只有 2xx 响应视为成功；其他响应会按指数退避策略重试，退避间隔设有上限。重试期最长为 24 小时，之后进入死信状态。
+- 死信投递可在 **投递记录** 页面手动重新投递（仅限已启用且未删除的端点）；重新投递时会沿用原事件 ID 和载荷，重新开始最长 24 小时的重试期，且不会创建重复的投递记录。
+- 接收方必须根据事件 ID 做幂等处理。
+
+`webhook.test` 事件只发送给所选端点，用于测试。
 
 ### 健康检查
 

@@ -20,6 +20,7 @@ CD211 is not a BitTorrent client and does not seed. Run it on a trusted LAN; do 
 - Download filtering, progress, file lists, history, and error details.
 - Start, retry, cancel, remove-record, and remove-local-files actions.
 - Editable CloudDrive2, path, timeout, category, and password settings without restarting CD211.
+- Signed webhook notifications for completed and failed downloads, with retry, dead-letter, and manual replay.
 - `/healthz` and `/readyz` endpoints for container health checks.
 
 Removing a download never deletes its copy in 115.
@@ -172,6 +173,34 @@ Configure categories in the CD211 Web UI before using them in Sonarr or Radarr. 
 - The operator password is created during first-run setup and can be changed from **Change password** in the Web UI.
 - The same credentials are used by the Web UI and Sonarr/Radarr.
 - After changing the password, update the qBittorrent download client entry in Sonarr and Radarr.
+
+### Webhooks
+
+When a download completes or fails, CD211 can notify external automation or notification systems with signed webhooks. Webhooks are for external notifications only; Sonarr and Radarr still import downloads through polling and Completed Download Handling.
+
+Manage named endpoints on the **Webhooks** page and delivery history on the **Delivery history** page (`/webhook-deliveries`). Each endpoint subscribes independently to `download.completed` and/or `download.failed`, with create, edit, enable/disable, HMAC secret rotation, delete, test, filters, and dead-letter replay. All actions use the existing authenticated admin session and CSRF protections; there is no separate role or API credential.
+
+Configuring an endpoint requires:
+
+- **Name** — any identifier.
+- **Receiver URL** — an absolute HTTP/HTTPS URL without userinfo or fragment. Query parameters are allowed and delivered to the receiver, but the Web UI hides their original contents. CD211 does not follow redirects.
+- **Optional bearer token** — sent as `Authorization: Bearer <token>`; leaving it blank on edit preserves the stored value, and a dedicated control clears it.
+
+Every request is a JSON POST carrying `X-CD211-Event`, `X-CD211-Event-ID`, `X-CD211-Timestamp` (Unix seconds), `X-CD211-Signature`, and an optional `Authorization: Bearer <token>` header. The signature is `v1=` plus lowercase hex HMAC-SHA256(secret, `<timestamp>.<raw-body>`). Receivers must verify the signature against the exact raw body before parsing and deduplicate by event ID. The event envelope is `{id, type, schema_version, occurred_at, data}`; error information in failed events is sanitized — submission URIs, tracker passkeys, endpoint secrets, and bearer tokens are never included.
+
+Security:
+
+- The signing secret is generated on create and rotation, shown once from a no-store response, and cannot be recovered through the UI; the bearer token is never redisplayed.
+- URLs, secrets, and request bodies are never logged.
+- Configure only trusted receiver URLs. CD211 intentionally supports private/LAN addresses and provides no public-webhook SSRF allowlist.
+
+Retry and replay:
+
+- Only a 2xx response counts as success; other responses retry with bounded exponential backoff for up to 24 hours, then move to dead-letter.
+- Dead-letter deliveries can be replayed manually from the **Delivery history** page (only for enabled, non-deleted endpoints); replay reuses the original event ID and payload with a fresh 24-hour window and does not create a duplicate delivery.
+- Consumers must stay idempotent by event ID.
+
+`webhook.test` events are sent only to the selected endpoint for testing.
 
 ### Health checks
 

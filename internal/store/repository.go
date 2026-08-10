@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/turygo/cd211/internal/domain"
+	"github.com/turygo/cd211/internal/outbox"
 	storedb "github.com/turygo/cd211/internal/store/sqlc"
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
@@ -102,6 +103,9 @@ func (s *Store) CreateSubmission(ctx context.Context, submission domain.Submissi
 		return domain.Download{}, false, cause
 	}
 
+	// previousState distinguishes a fresh lifecycle (empty) from a revival of
+	// a DELETED row when serializing the created event payload.
+	previousState := domain.State("")
 	existing, err := queries.GetDownload(ctx, submission.Download.Hash)
 	if err == nil {
 		download, conversionErr := downloadFromDB(existing)
@@ -114,6 +118,7 @@ func (s *Store) CreateSubmission(ctx context.Context, submission domain.Submissi
 			}
 			return download, false, nil
 		}
+		previousState = domain.StateDeleted
 		if err := queries.ReviveDownload(ctx, reviveDownloadParams(submission.Download)); err != nil {
 			return finish(fmt.Errorf("revive submission: %w", err))
 		}
@@ -152,6 +157,9 @@ func (s *Store) CreateSubmission(ctx context.Context, submission domain.Submissi
 	}
 	download, err := downloadFromDB(row)
 	if err != nil {
+		return finish(err)
+	}
+	if err := emitDownloadEvent(ctx, queries, outbox.EventTypeCreated, previousState, download); err != nil {
 		return finish(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -237,93 +245,238 @@ func (s *Store) ListDownloadFiles(ctx context.Context, hash string) ([]domain.Do
 	return files, nil
 }
 
-// SetCategory changes only a download's visible category label.
+// SetCategory changes only a download's visible category label. A same-value
+// call succeeds without changing the row or emitting an event; a real change
+// emits download.category_changed in the same transaction.
 func (s *Store) SetCategory(ctx context.Context, hash, category string, now time.Time) error {
 	if (category != "" && !safeCategoryName(category)) || now.IsZero() {
 		return errors.New("category or update time is invalid")
 	}
-	updated, err := s.queries.SetDownloadCategory(ctx, storedb.SetDownloadCategoryParams{Category: category, UpdatedAt: now, Hash: hash})
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		return fmt.Errorf("begin category update: %w", err)
+	}
+	queries := s.queries.WithTx(tx)
+	before, err := queries.GetDownload(ctx, hash)
+	if err != nil {
+		_ = tx.Rollback()
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("read category download: %w", err)
+	}
+	if before.Category == category {
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit same-category update: %w", err)
+		}
+		return nil
+	}
+	updated, err := queries.SetDownloadCategory(ctx, storedb.SetDownloadCategoryParams{Category: category, UpdatedAt: now, Hash: hash})
+	if err != nil {
+		_ = tx.Rollback()
 		return fmt.Errorf("set category: %w", err)
 	}
 	if updated == 0 {
+		_ = tx.Rollback()
 		return s.intentMiss(ctx, hash, domain.StateAccepted)
+	}
+	row, err := queries.GetDownload(ctx, hash)
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("read updated category download: %w", err)
+	}
+	download, err := downloadFromDB(row)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := emitDownloadEvent(ctx, queries, outbox.EventTypeCategoryChanged, download.State, download); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit category update: %w", err)
 	}
 	return nil
 }
 
-// Start schedules a stopped download; starting an accepted download is idempotent.
+// Start schedules a stopped download; starting an accepted download is
+// idempotent. Only a real STOPPED -> ACCEPTED|VERIFYING_LOCAL transition
+// emits download.state_changed.
 func (s *Store) Start(ctx context.Context, hash string, now time.Time) error {
 	if now.IsZero() {
 		return errors.New("start time is required")
 	}
-	updated, err := s.queries.StartDownload(ctx, storedb.StartDownloadParams{Now: now, Hash: hash})
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		return fmt.Errorf("begin start: %w", err)
+	}
+	queries := s.queries.WithTx(tx)
+	updated, err := queries.StartDownload(ctx, storedb.StartDownloadParams{Now: now, Hash: hash})
+	if err != nil {
+		_ = tx.Rollback()
 		return fmt.Errorf("start download: %w", err)
 	}
-	if updated != 0 {
-		return nil
+	if updated == 0 {
+		_ = tx.Rollback()
+		download, getErr := s.GetDownload(ctx, hash)
+		if getErr != nil {
+			return getErr
+		}
+		if download.State == domain.StateAccepted ||
+			(download.State == domain.StateVerifyingLocal && download.LastUpstreamStatus == domain.UpstreamRetainedContent) {
+			return nil
+		}
+		return ErrInvalidTransition
 	}
-	download, getErr := s.GetDownload(ctx, hash)
-	if getErr != nil {
-		return getErr
+	row, err := queries.GetDownload(ctx, hash)
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("read started download: %w", err)
 	}
-	if download.State == domain.StateAccepted ||
-		(download.State == domain.StateVerifyingLocal && download.LastUpstreamStatus == domain.UpstreamRetainedContent) {
-		return nil
+	download, err := downloadFromDB(row)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
 	}
-	return ErrInvalidTransition
+	if err := emitDownloadEvent(ctx, queries, outbox.EventTypeStateChanged, domain.StateStopped, download); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit start: %w", err)
+	}
+	return nil
 }
 
-// Retry resumes a failed workflow or a cleanup intent blocked by operator action.
+// Retry resumes a failed workflow or a cleanup intent blocked by operator
+// action. A real FAILED -> retry target transition emits
+// download.state_changed; a cleanup retry that only clears an error without
+// changing state emits nothing.
 func (s *Store) Retry(ctx context.Context, hash string, target domain.State, now time.Time) error {
 	if now.IsZero() {
 		return ErrInvalidTransition
 	}
-	var (
-		updated int64
-		err     error
-	)
-	if target == domain.StateCancelRequested || target == domain.StateDeleteRequested {
-		updated, err = s.queries.RetryCleanup(ctx, storedb.RetryCleanupParams{Now: now, Hash: hash})
-	} else {
+	cleanup := target == domain.StateCancelRequested || target == domain.StateDeleteRequested
+	if !cleanup {
 		if !domain.CanTransition(domain.StateFailed, target) || target == domain.StateDeleteRequested {
 			return ErrInvalidTransition
 		}
-		updated, err = s.queries.RetryDownload(ctx, storedb.RetryDownloadParams{State: string(target), Now: now, Hash: hash})
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("retry download: %w", err)
+		return fmt.Errorf("begin retry: %w", err)
 	}
-	if updated != 0 {
-		return nil
+	queries := s.queries.WithTx(tx)
+	var (
+		updated int64
+		runErr  error
+	)
+	if cleanup {
+		updated, runErr = queries.RetryCleanup(ctx, storedb.RetryCleanupParams{Now: now, Hash: hash})
+	} else {
+		updated, runErr = queries.RetryDownload(ctx, storedb.RetryDownloadParams{State: string(target), Now: now, Hash: hash})
 	}
-	return s.intentMiss(ctx, hash, "")
+	if runErr != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("retry download: %w", runErr)
+	}
+	if updated == 0 {
+		_ = tx.Rollback()
+		return s.intentMiss(ctx, hash, "")
+	}
+	row, err := queries.GetDownload(ctx, hash)
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("read retried download: %w", err)
+	}
+	// The retry transition is pre-authorized by CanTransition and the row was
+	// valid in its pre-update state; phase prerequisites such as
+	// cloud_source_path are materialized when the workflow runs the target
+	// phase, so the event payload is built from a structurally converted row
+	// rather than one gated by full domain validation.
+	download, err := downloadRow(row)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if !cleanup {
+		if err := emitDownloadEvent(ctx, queries, outbox.EventTypeStateChanged, domain.StateFailed, download); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit retry: %w", err)
+	}
+	return nil
 }
 
-// Cancel requests cancellation of active or stopped downloads.
+// Cancel requests cancellation of active or stopped downloads. A real
+// transition to CANCEL_REQUESTED emits download.state_changed; idempotent
+// calls emit nothing.
 func (s *Store) Cancel(ctx context.Context, hash string, now time.Time) error {
 	if now.IsZero() {
 		return errors.New("cancel time is required")
 	}
-	updated, err := s.queries.CancelDownload(ctx, storedb.CancelDownloadParams{Now: now, Hash: hash})
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("cancel download: %w", err)
+		return fmt.Errorf("begin cancel: %w", err)
 	}
-	if updated != 0 {
-		return nil
-	}
-	row, err := s.GetDownload(ctx, hash)
+	queries := s.queries.WithTx(tx)
+	beforeRow, err := queries.GetDownload(ctx, hash)
 	if err != nil {
+		_ = tx.Rollback()
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("read cancel download: %w", err)
+	}
+	before, err := downloadFromDB(beforeRow)
+	if err != nil {
+		_ = tx.Rollback()
 		return err
 	}
-	if row.State == domain.StateCancelRequested || row.State == domain.StateCancelled {
-		return nil
+	updated, err := queries.CancelDownload(ctx, storedb.CancelDownloadParams{Now: now, Hash: hash})
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("cancel download: %w", err)
 	}
-	return ErrInvalidTransition
+	if updated == 0 {
+		_ = tx.Rollback()
+		row, err := s.GetDownload(ctx, hash)
+		if err != nil {
+			return err
+		}
+		if row.State == domain.StateCancelRequested || row.State == domain.StateCancelled {
+			return nil
+		}
+		return ErrInvalidTransition
+	}
+	row, err := queries.GetDownload(ctx, hash)
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("read cancelled download: %w", err)
+	}
+	download, err := downloadFromDB(row)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := emitDownloadEvent(ctx, queries, outbox.EventTypeStateChanged, before.State, download); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit cancel: %w", err)
+	}
+	return nil
 }
 
-// RequestDelete hides matching downloads and records the strongest delete-files intent.
+// RequestDelete hides matching downloads and records the strongest delete-files
+// intent. A real transition to DELETE_REQUESTED emits download.state_changed;
+// strengthening delete_files_requested on an already requested delete emits
+// nothing. Unknown hashes are skipped silently.
 func (s *Store) RequestDelete(ctx context.Context, hashes []string, deleteFiles bool, now time.Time) error {
 	if now.IsZero() {
 		return errors.New("delete time is required")
@@ -345,9 +498,39 @@ func (s *Store) RequestDelete(ctx context.Context, hashes []string, deleteFiles 
 	}
 	queries := s.queries.WithTx(tx)
 	for hash := range unique {
+		beforeRow, err := queries.GetDownload(ctx, hash)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("request delete read: %w", err)
+		}
+		before, err := downloadFromDB(beforeRow)
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
 		if _, err := queries.RequestDelete(ctx, storedb.RequestDeleteParams{DeleteFilesRequested: boolInteger(deleteFiles), Now: now, Hash: hash}); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("request delete: %w", err)
+		}
+		if before.State == domain.StateDeleteRequested || before.State == domain.StateDeleted {
+			continue
+		}
+		row, err := queries.GetDownload(ctx, hash)
+		if err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("read delete request: %w", err)
+		}
+		download, err := downloadFromDB(row)
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if err := emitDownloadEvent(ctx, queries, outbox.EventTypeStateChanged, before.State, download); err != nil {
+			_ = tx.Rollback()
+			return err
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -381,7 +564,11 @@ func (s *Store) ClaimDue(ctx context.Context, owner string, now time.Time, lease
 	return &Claim{Download: download, Owner: owner, State: download.State, Version: download.RowVersion}, nil
 }
 
-// CommitClaim persists a claimed workflow result only if the lease is still current.
+// CommitClaim persists a claimed workflow result only if the lease is still
+// current, atomically with any terminal/state event and its fanout: entering
+// COMPLETED emits download.completed, entering FAILED emits download.failed,
+// and every other real state transition emits download.state_changed.
+// Same-state progress, retry bookkeeping, and lease changes emit nothing.
 func (s *Store) CommitClaim(ctx context.Context, claim Claim, next domain.Download) error {
 	if strings.TrimSpace(claim.Owner) == "" || claim.Version < 0 || claim.Download.Hash == "" || !claim.State.Valid() || claim.Download.State != claim.State {
 		return ErrClaimLost
@@ -394,15 +581,48 @@ func (s *Store) CommitClaim(ctx context.Context, claim Claim, next domain.Downlo
 	if err := domain.ValidateDownload(next); err != nil {
 		return err
 	}
-	updated, err := s.queries.CommitClaim(ctx, commitClaimParams(claim, next))
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		return fmt.Errorf("begin claim commit: %w", err)
+	}
+	queries := s.queries.WithTx(tx)
+	updated, err := queries.CommitClaim(ctx, commitClaimParams(claim, next))
+	if err != nil {
+		_ = tx.Rollback()
 		if destinationConstraint(err) && next.DestinationName != "" {
 			return ErrDestinationConflict
 		}
 		return fmt.Errorf("commit claim: %w", err)
 	}
 	if updated == 0 {
+		_ = tx.Rollback()
 		return ErrClaimLost
+	}
+	row, err := queries.GetDownload(ctx, next.Hash)
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("read committed claim: %w", err)
+	}
+	download, err := downloadFromDB(row)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if download.State != claim.State {
+		eventType := outbox.EventTypeStateChanged
+		switch download.State {
+		case domain.StateCompleted:
+			eventType = outbox.EventTypeCompleted
+		case domain.StateFailed:
+			eventType = outbox.EventTypeFailed
+		}
+		if err := emitDownloadEvent(ctx, queries, eventType, claim.State, download); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit claim transaction: %w", err)
 	}
 	return nil
 }
@@ -451,7 +671,13 @@ func categoryFromDB(row storedb.Category) (domain.Category, error) {
 	return domain.Category{Name: row.Name, CloudPath: row.CloudPath, SavePath: row.SavePath, Enabled: row.Enabled == 1, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}, nil
 }
 
-func downloadFromDB(row storedb.Download) (domain.Download, error) {
+// downloadRow maps a stored download row to a domain.Download after checking
+// structural integrity only. It deliberately skips domain.ValidateDownload:
+// phase-prerequisite fields (for example cloud_source_path for copy states)
+// are materialized by the workflow that runs the phase, so authorized
+// transitions such as Retry can observe rows that are momentarily mid-phase.
+// Callers that need the full domain invariants must use downloadFromDB.
+func downloadRow(row storedb.Download) (domain.Download, error) {
 	if row.IsMultiFile.Valid && row.IsMultiFile.Int64 != 0 && row.IsMultiFile.Int64 != 1 || row.DeleteFilesRequested != 0 && row.DeleteFilesRequested != 1 {
 		return domain.Download{}, errors.New("stored download boolean is invalid")
 	}
@@ -473,6 +699,14 @@ func downloadFromDB(row storedb.Download) (domain.Download, error) {
 	if row.IsMultiFile.Valid {
 		value := row.IsMultiFile.Int64 == 1
 		download.IsMultiFile = &value
+	}
+	return download, nil
+}
+
+func downloadFromDB(row storedb.Download) (domain.Download, error) {
+	download, err := downloadRow(row)
+	if err != nil {
+		return domain.Download{}, err
 	}
 	if err := domain.ValidateDownload(download); err != nil {
 		return domain.Download{}, fmt.Errorf("stored download is invalid: %w", err)
