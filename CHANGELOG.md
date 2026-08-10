@@ -8,6 +8,13 @@ section using the release version and date.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-08-11
+
+### Fixed
+
+- Added a forward migration for webhook outbox databases missing the domain event sequence, preserving existing events, delivery references, and feed cursors.
+- Logged the underlying webhook repository failure instead of a literal placeholder.
+
 ## [0.3.1] - 2026-08-11
 
 ### Changed
