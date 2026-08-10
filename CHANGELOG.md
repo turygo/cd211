@@ -8,6 +8,13 @@ section using the release version and date.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-11
+
+### Changed
+
+- Separated API token management from the main settings save actions.
+- Clarified webhook endpoint setup with authentication guidance, event payload examples, and a dedicated delivery test action.
+
 ## [0.3.0] - 2026-08-10
 
 ### Added
