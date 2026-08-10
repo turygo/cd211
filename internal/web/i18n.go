@@ -256,6 +256,25 @@ type Strings struct {
 	SettingsRemapTitle      string
 	SettingsRemapHint       string
 
+	// Automation API token (managed inside the Settings page)
+	SettingsSectionAPIToken string
+	APITokenLede            string
+	APITokenConfigured      string
+	APITokenNotConfigured   string
+	APITokenHintLabel       string
+	APITokenCreatedLabel    string
+	APITokenUpdatedLabel    string
+	APITokenGenerateButton  string
+	APITokenRotateButton    string
+	APITokenRevokeButton    string
+	APITokenRotateConfirm   string
+	APITokenRevokeConfirm   string
+	APITokenRevoked         string
+	APITokenSecretTitle     string
+	APITokenSecretLede      string
+	APITokenSecretLabel     string
+	APITokenSecretDone      string
+
 	// Webhook endpoints
 	NavWebhooks           string
 	TitleWebhooks         string
@@ -548,6 +567,24 @@ var stringsEN = Strings{
 	SettingsRemapTitle:      "Category path changes",
 	SettingsRemapHint:       "Changing either root keeps every category subfolder and previews its new full path below.",
 
+	SettingsSectionAPIToken: "Automation API token",
+	APITokenLede:            "Automation clients authenticate with this token. Only one token exists at a time and it is never shown again after it is generated.",
+	APITokenConfigured:      "An API token is configured. Send it as the Authorization: Bearer header.",
+	APITokenNotConfigured:   "No API token is configured. Generate one to enable automation API access.",
+	APITokenHintLabel:       "Token hint",
+	APITokenCreatedLabel:    "First configured",
+	APITokenUpdatedLabel:    "Current token since",
+	APITokenGenerateButton:  "Generate token",
+	APITokenRotateButton:    "Rotate token",
+	APITokenRevokeButton:    "Revoke token",
+	APITokenRotateConfirm:   "Rotate the API token? The old token stops working immediately.",
+	APITokenRevokeConfirm:   "Revoke the API token? Automation API access stops immediately until a new token is generated.",
+	APITokenRevoked:         "API token revoked.",
+	APITokenSecretTitle:     "Automation API token",
+	APITokenSecretLede:      "Copy this token now. It is shown only once and cannot be recovered later.",
+	APITokenSecretLabel:     "Bearer token",
+	APITokenSecretDone:      "Done",
+
 	NavWebhooks:           "Webhooks",
 	TitleWebhooks:         "Webhook endpoints",
 	WebhooksLede:          "Deliver download completion and failure events to your own services with HMAC-signed HTTP requests.",
@@ -836,6 +873,24 @@ var stringsZH = Strings{
 	SettingsFrozenPathsNote: "已有任务仍使用提交时记录的路径，文件不会移动；重新映射后的分类路径仅用于后续任务。",
 	SettingsRemapTitle:      "分类路径变化",
 	SettingsRemapHint:       "修改任一根目录时会保留每个分类的子目录；下方会预览新的完整路径。",
+
+	SettingsSectionAPIToken: "自动化 API 令牌",
+	APITokenLede:            "自动化客户端使用此令牌进行身份验证。同一时刻仅存在一个令牌，生成后不会再显示。",
+	APITokenConfigured:      "已配置 API 令牌。请将其放入 Authorization: Bearer 请求头。",
+	APITokenNotConfigured:   "尚未配置 API 令牌。生成一个以启用自动化 API 访问。",
+	APITokenHintLabel:       "令牌提示",
+	APITokenCreatedLabel:    "首次配置时间",
+	APITokenUpdatedLabel:    "当前令牌生成时间",
+	APITokenGenerateButton:  "生成令牌",
+	APITokenRotateButton:    "轮换令牌",
+	APITokenRevokeButton:    "撤销令牌",
+	APITokenRotateConfirm:   "确定轮换 API 令牌吗？旧令牌将立即失效。",
+	APITokenRevokeConfirm:   "确定撤销 API 令牌吗？撤销后自动化 API 将立即停止访问，直到生成新令牌。",
+	APITokenRevoked:         "API 令牌已撤销。",
+	APITokenSecretTitle:     "自动化 API 令牌",
+	APITokenSecretLede:      "请立即复制并妥善保存此令牌。此令牌仅显示一次，之后无法查看。",
+	APITokenSecretLabel:     "Bearer 令牌",
+	APITokenSecretDone:      "完成",
 
 	NavWebhooks:           "Webhook 管理",
 	TitleWebhooks:         "Webhook 端点",

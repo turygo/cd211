@@ -355,7 +355,7 @@ func (q *Queries) GetEndpointSubscriptions(ctx context.Context, endpointID int64
 }
 
 const getEvent = `-- name: GetEvent :one
-SELECT id, type, aggregate_type, aggregate_id, aggregate_version, payload, occurred_at
+SELECT sequence, id, type, aggregate_type, aggregate_id, aggregate_version, payload, occurred_at
 FROM domain_events
 WHERE id = ?1
 `
@@ -364,6 +364,7 @@ func (q *Queries) GetEvent(ctx context.Context, id string) (DomainEvent, error) 
 	row := q.db.QueryRowContext(ctx, getEvent, id)
 	var i DomainEvent
 	err := row.Scan(
+		&i.Sequence,
 		&i.ID,
 		&i.Type,
 		&i.AggregateType,
@@ -571,6 +572,18 @@ func (q *Queries) InsertSubscription(ctx context.Context, arg InsertSubscription
 	return err
 }
 
+const latestEventSequence = `-- name: LatestEventSequence :one
+SELECT CAST(COALESCE(MAX(sequence), 0) AS INTEGER)
+FROM domain_events
+`
+
+func (q *Queries) LatestEventSequence(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, latestEventSequence)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const listDeliveries = `-- name: ListDeliveries :many
 SELECT id, event_id, endpoint_id, endpoint_name, event_type, aggregate_type, aggregate_id, status, attempt_count, first_attempt_at, next_attempt_at, lease_owner, lease_until, last_http_status, last_error, delivered_at, created_at, updated_at, row_version
 FROM webhook_deliveries
@@ -631,6 +644,70 @@ func (q *Queries) ListDeliveries(ctx context.Context, arg ListDeliveriesParams) 
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.RowVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDownloadEvents = `-- name: ListDownloadEvents :many
+SELECT sequence, id, type, aggregate_type, aggregate_id, aggregate_version, payload, occurred_at
+FROM domain_events
+WHERE sequence > ?1
+  AND sequence <= ?2
+  AND aggregate_type = 'download'
+  AND type IN ('download.completed', 'download.failed')
+  AND (
+      type = ?3
+      OR type = ?4
+  )
+  AND aggregate_id = COALESCE(?5, aggregate_id)
+ORDER BY sequence ASC
+LIMIT ?6
+`
+
+type ListDownloadEventsParams struct {
+	AfterSequence   int64          `json:"after_sequence"`
+	ThroughSequence int64          `json:"through_sequence"`
+	CompletedType   sql.NullString `json:"completed_type"`
+	FailedType      sql.NullString `json:"failed_type"`
+	AggregateID     sql.NullString `json:"aggregate_id"`
+	Limit           int64          `json:"limit"`
+}
+
+func (q *Queries) ListDownloadEvents(ctx context.Context, arg ListDownloadEventsParams) ([]DomainEvent, error) {
+	rows, err := q.db.QueryContext(ctx, listDownloadEvents,
+		arg.AfterSequence,
+		arg.ThroughSequence,
+		arg.CompletedType,
+		arg.FailedType,
+		arg.AggregateID,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DomainEvent{}
+	for rows.Next() {
+		var i DomainEvent
+		if err := rows.Scan(
+			&i.Sequence,
+			&i.ID,
+			&i.Type,
+			&i.AggregateType,
+			&i.AggregateID,
+			&i.AggregateVersion,
+			&i.Payload,
+			&i.OccurredAt,
 		); err != nil {
 			return nil, err
 		}
@@ -716,11 +793,11 @@ func (q *Queries) ListEndpoints(ctx context.Context) ([]WebhookEndpoint, error) 
 }
 
 const listEventsByAggregate = `-- name: ListEventsByAggregate :many
-SELECT id, type, aggregate_type, aggregate_id, aggregate_version, payload, occurred_at
+SELECT sequence, id, type, aggregate_type, aggregate_id, aggregate_version, payload, occurred_at
 FROM domain_events
 WHERE aggregate_type = ?1
   AND aggregate_id = ?2
-ORDER BY occurred_at ASC, id ASC
+ORDER BY sequence ASC
 `
 
 type ListEventsByAggregateParams struct {
@@ -738,6 +815,7 @@ func (q *Queries) ListEventsByAggregate(ctx context.Context, arg ListEventsByAgg
 	for rows.Next() {
 		var i DomainEvent
 		if err := rows.Scan(
+			&i.Sequence,
 			&i.ID,
 			&i.Type,
 			&i.AggregateType,

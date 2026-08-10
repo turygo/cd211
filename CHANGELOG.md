@@ -8,6 +8,16 @@ section using the release version and date.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-10
+
+### Added
+
+- Added a native automation API secured by a single system-generated global API token, with JSON magnet and multipart torrent submission, status queries, terminal wait, and a completed/failed event pull feed.
+
+### Changed
+
+- Index-backed completed/failed event scans and sanitized, path-safe error output for the native automation API.
+
 ## [0.2.3] - 2026-08-10
 
 ### Added

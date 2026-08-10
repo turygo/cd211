@@ -342,6 +342,70 @@ func (s *Store) ListWebhookDeliveries(ctx context.Context, filter outbox.Deliver
 	return deliveries, page, nil
 }
 
+// LatestEventSequence returns the current high-water: the maximum durable
+// domain event sequence, or 0 when no events exist. It is the authoritative
+// snapshot bound that event feed scans are capped by.
+func (s *Store) LatestEventSequence(ctx context.Context) (int64, error) {
+	sequence, err := s.queries.LatestEventSequence(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("read latest event sequence: %w", err)
+	}
+	return sequence, nil
+}
+
+// ListDownloadEvents returns completed/failed download events with durable
+// sequence strictly greater than AfterSequence and at most ThroughSequence,
+// in ascending sequence order, bounded by Limit (1..outbox.MaxEventFeedLimit;
+// 501 is the HTTP lookahead bound). AggregateID optionally filters one
+// download hash. The query validates nonnegative/ordered bounds, the limit,
+// and that at least one event type is requested; rows are converted exactly,
+// preserving the immutable payload bytes.
+func (s *Store) ListDownloadEvents(ctx context.Context, query outbox.EventQuery) ([]outbox.Event, error) {
+	if query.AfterSequence < 0 {
+		return nil, errors.New("event feed after sequence is negative")
+	}
+	if query.ThroughSequence < 0 {
+		return nil, errors.New("event feed through sequence is negative")
+	}
+	if query.AfterSequence > query.ThroughSequence {
+		return nil, errors.New("event feed sequence range is inverted")
+	}
+	if query.Limit < 1 || query.Limit > outbox.MaxEventFeedLimit {
+		return nil, errors.New("event feed limit must be between 1 and " + strconv.Itoa(outbox.MaxEventFeedLimit))
+	}
+	if !query.IncludeCompleted && !query.IncludeFailed {
+		return nil, errors.New("event feed requires at least one event type")
+	}
+	completedType := ""
+	if query.IncludeCompleted {
+		completedType = outbox.EventTypeCompleted
+	}
+	failedType := ""
+	if query.IncludeFailed {
+		failedType = outbox.EventTypeFailed
+	}
+	rows, err := s.queries.ListDownloadEvents(ctx, storedb.ListDownloadEventsParams{
+		AfterSequence:   query.AfterSequence,
+		ThroughSequence: query.ThroughSequence,
+		CompletedType:   nullableString(completedType),
+		FailedType:      nullableString(failedType),
+		AggregateID:     nullableString(query.AggregateID),
+		Limit:           query.Limit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list download events: %w", err)
+	}
+	events := make([]outbox.Event, 0, len(rows))
+	for _, row := range rows {
+		event, err := eventFromDB(row)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, nil
+}
+
 // GetWebhookDelivery returns one delivery row.
 func (s *Store) GetWebhookDelivery(ctx context.Context, id int64) (outbox.Delivery, error) {
 	row, err := s.queries.GetDelivery(ctx, id)
@@ -427,7 +491,7 @@ func (s *Store) EnqueueTestDelivery(ctx context.Context, endpointID int64, now t
 		_ = tx.Rollback()
 		return outbox.Delivery{}, fmt.Errorf("insert webhook.test delivery: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
+	if err := s.commitEventTx(tx, true); err != nil {
 		return outbox.Delivery{}, fmt.Errorf("commit webhook.test delivery: %w", err)
 	}
 	return deliveryFromDB(delivery)
@@ -618,6 +682,22 @@ func (s *Store) PruneWebhookDeliveries(ctx context.Context, now time.Time) (int6
 	return rows, nil
 }
 
+// commitEventTx commits a transaction and, only when the transaction inserted
+// at least one domain_events row, notifies the process event signal. It is
+// the commit path for every event-emitting mutation: notification is strictly
+// post-commit, so failed inserts, rollbacks, and commit failures never wake
+// waiters, and no-op mutations (which never reach it with emitted true) do
+// not either.
+func (s *Store) commitEventTx(tx *sql.Tx, emitted bool) error {
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if emitted {
+		s.eventSignal.Notify()
+	}
+	return nil
+}
+
 // emitDownloadEvent inserts one immutable download event and, for the
 // subscribable completed/failed types, fans out one delivery per enabled
 // non-deleted subscribed endpoint, all in the caller's transaction. It must be
@@ -762,6 +842,24 @@ func deliveryFromDB(row storedb.WebhookDelivery) (outbox.Delivery, error) {
 		CreatedAt:      row.CreatedAt,
 		UpdatedAt:      row.UpdatedAt,
 		RowVersion:     row.RowVersion,
+	}, nil
+}
+
+func eventFromDB(row storedb.DomainEvent) (outbox.Event, error) {
+	if row.Sequence < 1 || row.ID == "" || row.Type == "" ||
+		row.AggregateType == "" || row.AggregateID == "" ||
+		row.AggregateVersion < 0 || row.OccurredAt.IsZero() || len(row.Payload) == 0 {
+		return outbox.Event{}, errors.New("stored domain event is invalid")
+	}
+	return outbox.Event{
+		Sequence:         row.Sequence,
+		ID:               row.ID,
+		Type:             row.Type,
+		AggregateType:    row.AggregateType,
+		AggregateID:      row.AggregateID,
+		AggregateVersion: row.AggregateVersion,
+		Payload:          row.Payload,
+		OccurredAt:       row.OccurredAt,
 	}, nil
 }
 

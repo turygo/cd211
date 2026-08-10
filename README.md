@@ -21,6 +21,7 @@ CD211 不是 BitTorrent 客户端，也不会做种。请仅在可信局域网�
 - 支持开始、重试、取消、删除记录和删除本地文件。
 - 无需重启 CD211 即可修改 CloudDrive2、路径、超时、分类和密码设置。
 - 通过带签名的 Webhook 推送下载完成和失败事件，支持重试、死信和手动重新投递。
+- 提供基于全局 API 令牌的原生自动化 API：提交磁力链接或种子文件、查询状态、等待任务进入终止状态，以及拉取下载完成/失败事件。
 - 提供 `/healthz` 和 `/readyz` 端点用于容器健康检查。
 
 删除下载任务不会删除其在 115 中的副本。
@@ -173,6 +174,35 @@ services:
 - 管理员密码在首次运行设置时创建，可以通过 Web 界面的**修改密码**页面更改。
 - Web 界面和 Sonarr/Radarr 使用相同的凭据。
 - 修改密码后，请同步更新 Sonarr 和 Radarr 中的 qBittorrent 下载客户端配置。
+- 自动化 API 使用独立于管理员密码的全局 API 令牌（见下文「自动化 API」）：系统生成并仅显示一次，轮换后旧令牌立即失效，吊销后 API 禁用，令牌不会过期。
+
+### 自动化 API
+
+CD211 提供独立于 qBittorrent 兼容接口的原生自动化 API（`/api/v1`），用于提交下载、查询状态、等待任务进入终止状态以及拉取完成/失败事件。所有请求必须携带 `Authorization: Bearer <令牌>` 请求头，且仅支持 Bearer 认证；Web 界面的 SID 会话和管理员密码均不能用于此 API。
+
+在 Web 界面的**设置**页面管理唯一的全局 API 令牌：
+
+- 系统生成**一个**全局令牌，可随时生成、轮换或吊销。生成或轮换后，页面只显示一次新令牌；页面响应包含 `Cache-Control: no-store`，之后无法找回该令牌。
+- 轮换会使旧令牌立即失效；吊销会禁用 API。令牌**不会过期**。
+- SQLite 仅存储令牌的 SHA-256 摘要和令牌提示（末尾字符），从不保存原始令牌。
+- 未携带令牌或令牌无效时，API 返回 `401`；首次运行设置尚未完成时，`/api/v1` 返回 `503`。
+
+端点：
+
+| 端点 | 说明 |
+|---|---|
+| `POST /api/v1/downloads` | 提交下载：使用 JSON 请求体 `{"magnet":"...","category":"movies","stopped":false}`，或使用 multipart 表单中的 `torrent` 文件字段以及 `category`、`stopped` 字段 |
+| `GET /api/v1/downloads/{hash}` | 查询下载状态（40 位十六进制哈希；服务端统一转换为小写） |
+| `GET /api/v1/downloads/{hash}/wait?timeout=1s..25s` | 等待任务进入终止状态；超时返回 `204` |
+| `GET /api/v1/events` | 拉取 `download.completed`/`download.failed` 事件，支持 `cursor`/`types`/`hash`/`limit`/`wait` 参数 |
+
+提交响应为 `{"created","download"}`：创建新任务或恢复已删除的任务时，返回 `201` 和 `Location` 响应头；任务已存在且处于活跃状态时，返回 `200`，且不修改任何字段。下载模型包含以下字段：`hash`、`name`、`category`、`state`、`progress`、`version`、`terminal`、`outcome`、`content_path`、`total_size`、`error`、`created_at`、`updated_at`、`completed_at` 和 `links`。终止结果包括 `completed`、`failed`、`cancelled` 和 `deleted`；`STOPPED` 和所有进行中状态均不是终止状态。
+
+`wait` 的 `timeout` 默认为 `25s`，允许 `1s` 至 `25s`。任务进入终止状态后，接口返回 `200` 及完整下载模型；超时则返回 `204`，响应正文为空，并携带 `X-CD211-Download-Version` 响应头。
+
+事件响应为 `{"items":[{"cursor","event"}],"next_cursor","has_more"}`。`cursor` 是采用 base64url 编码且带版本的不透明游标；客户端应将其作为字符串原样保存。省略 `cursor` 时，从当前保留的最早事件开始；`latest` 表示只拉取当前高水位之后产生的新事件。`types` 可筛选 `download.completed` 和 `download.failed`，`hash` 可限定单个任务；`limit` 默认为 `100`、最大为 `500`，`wait` 允许 `0s` 至 `25s`。翻页时，游标按单调递增的事件序号推进，并跳过不符合筛选条件的事件。事件采用「至少一次」投递语义，客户端必须按事件 ID 去重。失败事件中的错误信息会经过脱敏；任务提交时记录的固定路径也在脱敏范围内。
+
+原生 API 仅提供提交、查询、等待和事件拉取能力，**没有**重试、取消、删除或分类变更等控制端点。与 Webhook 一样，请仅在可信局域网内使用：所有客户端共用一个全局令牌，也没有适用于公网或多租户环境的防滥用机制。
 
 ### Webhook
 

@@ -162,7 +162,7 @@ func (s *Store) CreateSubmission(ctx context.Context, submission domain.Submissi
 	if err := emitDownloadEvent(ctx, queries, outbox.EventTypeCreated, previousState, download); err != nil {
 		return finish(err)
 	}
-	if err := tx.Commit(); err != nil {
+	if err := s.commitEventTx(tx, true); err != nil {
 		return domain.Download{}, false, fmt.Errorf("commit submission: %w", err)
 	}
 	return download, true, nil
@@ -294,7 +294,7 @@ func (s *Store) SetCategory(ctx context.Context, hash, category string, now time
 		_ = tx.Rollback()
 		return err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := s.commitEventTx(tx, true); err != nil {
 		return fmt.Errorf("commit category update: %w", err)
 	}
 	return nil
@@ -343,7 +343,7 @@ func (s *Store) Start(ctx context.Context, hash string, now time.Time) error {
 		_ = tx.Rollback()
 		return err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := s.commitEventTx(tx, true); err != nil {
 		return fmt.Errorf("commit start: %w", err)
 	}
 	return nil
@@ -406,7 +406,7 @@ func (s *Store) Retry(ctx context.Context, hash string, target domain.State, now
 			return err
 		}
 	}
-	if err := tx.Commit(); err != nil {
+	if err := s.commitEventTx(tx, !cleanup); err != nil {
 		return fmt.Errorf("commit retry: %w", err)
 	}
 	return nil
@@ -467,7 +467,7 @@ func (s *Store) Cancel(ctx context.Context, hash string, now time.Time) error {
 		_ = tx.Rollback()
 		return err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := s.commitEventTx(tx, true); err != nil {
 		return fmt.Errorf("commit cancel: %w", err)
 	}
 	return nil
@@ -497,6 +497,7 @@ func (s *Store) RequestDelete(ctx context.Context, hashes []string, deleteFiles 
 		return fmt.Errorf("begin delete request: %w", err)
 	}
 	queries := s.queries.WithTx(tx)
+	emitted := false
 	for hash := range unique {
 		beforeRow, err := queries.GetDownload(ctx, hash)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -532,8 +533,9 @@ func (s *Store) RequestDelete(ctx context.Context, hashes []string, deleteFiles 
 			_ = tx.Rollback()
 			return err
 		}
+		emitted = true
 	}
-	if err := tx.Commit(); err != nil {
+	if err := s.commitEventTx(tx, emitted); err != nil {
 		return fmt.Errorf("commit delete request: %w", err)
 	}
 	return nil
@@ -608,6 +610,7 @@ func (s *Store) CommitClaim(ctx context.Context, claim Claim, next domain.Downlo
 		_ = tx.Rollback()
 		return err
 	}
+	emitted := false
 	if download.State != claim.State {
 		eventType := outbox.EventTypeStateChanged
 		switch download.State {
@@ -620,8 +623,9 @@ func (s *Store) CommitClaim(ctx context.Context, claim Claim, next domain.Downlo
 			_ = tx.Rollback()
 			return err
 		}
+		emitted = true
 	}
-	if err := tx.Commit(); err != nil {
+	if err := s.commitEventTx(tx, emitted); err != nil {
 		return fmt.Errorf("commit claim transaction: %w", err)
 	}
 	return nil

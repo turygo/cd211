@@ -18,6 +18,8 @@ CD211 is not a BitTorrent client and does not seed. qBittorrent is only the comp
 
 On completion or failure, CD211 also emits signed outbound webhook notifications for external automation and monitoring. Events and their deliveries are committed transactionally with the download mutation and delivered by an independent in-process dispatcher; they are a notification channel and never replace the Sonarr/Radarr polling and import flow.
 
+Alongside the qBittorrent-compatible surface, CD211 exposes a native automation API authenticated by a single system-generated global API token. It submits magnet and torrent downloads, queries durable download state, waits for a terminal outcome, and pulls completed and failed events; it performs no broad management or control actions. Automation consumers may use either the qBittorrent compatibility profile or the native API.
+
 The first release targets the qBittorrent API calls made by current Sonarr and Radarr versions. It does not attempt to emulate the complete qBittorrent API.
 
 ## 2. Problem
@@ -44,6 +46,7 @@ CD211 makes the complete 115-to-NAS workflow one durable download-client service
 8. Provide a small Web UI for status, errors, retry, cancellation, removal, and category configuration.
 9. Run as one NAS container without Redis.
 10. Deliver signed, retryable outbound webhook notifications for completed and failed downloads from a transactional outbox, with per-endpoint subscriptions, dead-lettering, and manual replay.
+11. Expose a native automation API — Bearer-token submission, status query, terminal wait, and a completed/failed event pull feed — alongside the qBittorrent compatibility surface.
 
 ## 4. Non-goals
 
@@ -54,7 +57,7 @@ The first release will not:
 - Support arbitrary qBittorrent desktop or mobile clients.
 - Integrate directly with indexers or Prowlarr.
 - Trigger Sonarr or Radarr import callbacks. Their normal polling and Completed Download Handling remain authoritative; outbound domain webhooks (Section 7.5) are a separate notification channel and never act as an import trigger.
-- Expose a native download API, API tokens, or an inbound webhook API. Webhooks are outbound notifications only; nothing outside CD211 delivers events into it.
+- Expose broad native management or control actions beyond the shipped submit, query, terminal-wait, and event-pull surface. The native API accepts submissions and reads state; it does not retry, cancel, delete, or mutate categories, and events are pulled out, never delivered inbound.
 - Provide a public-webhook SSRF allowlist or block private/LAN receiver URLs. Receiver URLs are operator-configured and trusted by design.
 - Automatically blocklist failed releases in Sonarr or Radarr.
 - Support v2-only torrents unless 115 and CloudDrive2 are verified to accept them.
@@ -99,6 +102,7 @@ These invariants are correctness requirements:
 ```mermaid
 flowchart LR
     ARR[Sonarr / Radarr] -->|qBittorrent WebAPI| API[HTTP API]
+    AUT[Automation Client] -->|Bearer /api/v1| API
     WEB[CD211 Web UI] --> API
     API --> DB[(SQLite)]
     REC[Reconciler] --> DB
@@ -110,7 +114,7 @@ flowchart LR
     DISP -->|signed HTTPS| RX[Webhook Receivers]
 ```
 
-CD211 is one process with five internal components:
+CD211 is one process with six internal components:
 
 ### 7.1 HTTP API
 
@@ -152,7 +156,17 @@ CD211 is one process with five internal components:
 - Enforces per-endpoint and aggregate delivery ordering. Only `download.completed` and `download.failed` fan out in this release; `download.created`, `download.state_changed`, and `download.category_changed` events are durable history only. `webhook.test` events are targeted solely at the selected endpoint.
 - Process shutdown cancels workers before the store closes; an interrupted attempt leaves its lease to expire and be reclaimed.
 
-### 7.6 Selected Implementation Stack
+### 7.6 Native Automation API
+
+- Mounted at `/api/v1` in the configured runtime. The setup-mode mux answers every `/api/v1/*` path with an unauthenticated JSON 503 until first-run setup completes.
+- Authentication is the single system-generated global API token, read from the store on every request so generate, rotate, and revoke apply immediately. Only `Authorization: Bearer <token>` is accepted; SID cookies and the admin password are ignored. Missing or invalid tokens receive the same JSON 401 with `Cache-Control: no-store`, and token material is never logged.
+- `POST /api/v1/downloads` accepts a strict JSON magnet body `{magnet, category, stopped}` or a multipart form with a `torrent` file plus `category`/`stopped`, through the same shared submission service as the qBittorrent adapter (Section 11.4). New and revived submissions answer 201 with a `Location` header; an existing active row answers 200 unchanged. The body is `{created, download}`.
+- `GET /api/v1/downloads/{hash}` returns the query model: persisted uppercase state, projected progress, `row_version` as version, terminal/outcome mapping, sanitized error, timestamps, content path, and `links`. A `DELETED` row remains queryable; a never-existing hash is 404. `submission_uri`, raw sources, tracker passkeys, and cloud credentials are never exposed.
+- `GET /api/v1/downloads/{hash}/wait?timeout=1s..25s` is terminal-only: it answers 200 with the model once the download reaches `COMPLETED`, `FAILED`, `CANCELLED`, or `DELETED`, and 204 with the `X-CD211-Download-Version` header on timeout or runtime shutdown. `STOPPED` and all request/in-progress states stay non-terminal. Waiters observe the process-owned event signal (Section 7.5) without holding a database transaction.
+- `GET /api/v1/events` pulls `download.completed` and `download.failed` events with strict `cursor`/`types`/`hash`/`limit`/`wait` parameters. The cursor is an opaque base64url versioned cursor over the monotonic `domain_events.sequence`; omitting it starts at the oldest retained event and the literal `latest` starts after the current high-water. Each scan snapshots the signal, reads the high-water, and lists matching rows with index-backed queries; pages are `{items, next_cursor, has_more}` and advance over hidden types without rescanning. Delivery is at-least-once and the immutable event ID is the idempotency key; failed-event errors are sanitized, including frozen paths. `wait` long-polls up to 25s on the shared signal.
+- The native surface has no control endpoints: it does not retry, cancel, delete, or mutate categories, and no events are delivered inbound. Like the rest of the service it is for trusted-LAN deployments; long polls share the single-token deployment boundary and provide no public or multi-tenant abuse resistance.
+
+### 7.7 Selected Implementation Stack
 
 CD211 is implemented in Go 1.26.x. Release builds pin an exact supported Go patch version, use no CGO, and prefer the standard library where it already satisfies the contract.
 
@@ -824,12 +838,13 @@ updated_at        timestamp not null
 
 This single-row table holds the PBKDF2-SHA256 hash of the operator password, written by the first-run setup wizard and updated on every password change. While the row is absent the service serves only the setup wizard and no credentials exist. The hash record encodes its scheme, iteration count, and salt, so parameters can be raised later without a migration.
 
-The webhook migration adds four tables: `domain_events`, `webhook_endpoints`, `webhook_subscriptions`, and `webhook_deliveries`.
+The webhook migration adds four tables — `domain_events`, `webhook_endpoints`, `webhook_subscriptions`, and `webhook_deliveries` — plus the index-backed event-feed indexes below.
 
 ### 12.6 `domain_events`
 
 ```text
-id                text primary key      -- evt_ + 32 lowercase hex chars (16 random bytes)
+sequence          integer primary key autoincrement
+id                text not null unique  -- evt_ + 32 lowercase hex chars (16 random bytes)
 type              text not null         -- download.completed | download.failed | download.created | download.state_changed | download.category_changed | webhook.test
 aggregate_type    text not null         -- webhook_endpoint for webhook.test; download for download events
 aggregate_id      text not null         -- decimal endpoint ID for webhook.test; download hash for download events
@@ -837,6 +852,15 @@ aggregate_version integer not null      -- endpoint row_version for webhook.test
 payload           blob not null         -- immutable event envelope JSON at mutation time
 occurred_at       timestamp not null    -- RFC3339Nano describes envelope JSON timestamps, not this SQLite column
 ```
+
+Two partial indexes serve the native event feed, both filtered to `aggregate_type = 'download'` and the completed/failed types:
+
+```text
+(type, sequence)              -- feed ordered by type
+(aggregate_id, type, sequence) -- feed filtered by download hash
+```
+
+The `sequence` column is the durable, monotonically increasing SQLite AUTOINCREMENT order and the event feed's ordering key: rows are listed strictly ascending by sequence, so events with identical timestamps are still deterministically ordered, and the opaque native cursor encodes exactly this sequence. `id` remains the unique immutable event identifier: delivery fan-out references it, consumers deduplicate by it, and it is stable across replay and reconnect — the sequence alone is never a consumer-facing event ID.
 
 The event envelope is `{id, type, schema_version, occurred_at, data}`. Download event data carries `hash`, `name`, `category`, `state`, `previous_state`, `progress`, `content_path`, `total_size`, `error`, `created_at`, `updated_at`, optional `completed_at`, and `download_version`. Failed-event errors are sanitized; `submission_uri`, tracker passkeys, endpoint secrets, and bearer tokens are never present. `webhook.test` data is `{endpoint_id, endpoint_name, message}`. The payload is immutable once written, and only `download.completed` and `download.failed` fan out to webhooks in this release; the remaining types are durable history.
 
@@ -903,6 +927,25 @@ Constraints:
 - No database transaction spans an HTTP attempt. An interrupted attempt leaves its lease to expire and be reclaimed; process shutdown cancels workers before the store closes.
 - Replay reopens a dead delivery for an enabled, non-deleted endpoint: it resets attempts, lease, and error state and starts a fresh 24-hour window without creating a duplicate row.
 - Per-endpoint and aggregate delivery ordering is enforced.
+
+### 12.10 `api_token`
+
+```text
+id                integer primary key check (id = 1)
+token_hash        blob not null check (length(token_hash) = 32)
+token_hint        text not null
+created_at        timestamp not null
+updated_at        timestamp not null
+row_version       integer not null default 0 check (row_version >= 0)
+```
+
+This single-row table holds the SHA-256 digest of the one system-generated global API token; a missing row means the native API is disabled. Lifecycle:
+
+- **Generate** (only while absent) creates the secret `cd211_api_` plus 32 crypto-random bytes encoded base64url, persists its SHA-256 digest with the hint (`cd211_api_…` plus the final six characters of the token), and shows the original token exactly once through a `Cache-Control: no-store` response. The original token is never stored, logged, or recoverable.
+- **Rotate** is the same atomic replace: the old token becomes invalid immediately, `updated_at` advances to the new generation, and `created_at` keeps the first-ever setup time.
+- **Revoke** deletes the row and disables the API until the next generate. Missing, invalid, or revoked tokens and the admin password or SID cookie all receive the same JSON 401; setup mode answers 503.
+- The token does not expire. Row-version CAS makes concurrent generate/rotate/revoke safe: one write wins and stale writers receive 409.
+- Native authentication reads the row on every request, so lifecycle changes apply immediately without a runtime rebuild.
 
 ## 13. Reconciliation and Crash Safety
 
@@ -1128,6 +1171,9 @@ CloudDrive2 access tokens
 13. Outbound webhook requests are JSON POSTs with `Content-Type: application/json`, signed `v1=` plus lowercase hex HMAC-SHA256 over `<timestamp>.<raw-body>`, and carry `X-CD211-Event`, `X-CD211-Event-ID`, `X-CD211-Timestamp`, `X-CD211-Signature`, and an optional `Authorization: Bearer <token>`; receivers must verify the signature against the exact raw body before parsing and deduplicate by event ID. Redirects are never followed.
 14. Webhook receiver URLs are validated to be absolute HTTP/HTTPS URLs without userinfo or fragment. Query strings are allowed and delivered, but raw query values are redacted from ordinary Web UI reads and edit forms. Private/LAN receivers are intentionally allowed, so operators must configure only trusted URLs; CD211 provides no public-webhook SSRF allowlist.
 15. Webhook signing secrets and bearer tokens live in the mode-restricted SQLite database, are never logged, and are not recoverable through the UI. Receiver URLs, secrets, and request bodies are never written to logs.
+16. The native automation API is authenticated by the single system-generated global API token: only `Authorization: Bearer <token>` is accepted, and SID cookies or the admin password never authenticate the native surface. SQLite stores only the token's SHA-256 digest and a trailing hint; the original token is shown once from a no-store response and is never logged or recoverable. Rotation invalidates the old token immediately, revocation disables the API, and the token does not expire.
+17. Setup mode answers every `/api/v1/*` request with an unauthenticated JSON 503; a missing or invalid token in the configured runtime receives the same JSON 401 with `Cache-Control: no-store`. API errors are stable `{error: {code, message}}` bodies that never leak raw repository or network errors.
+18. Native long polls and the event feed share the trusted single-token deployment boundary: they provide no public or multi-tenant abuse resistance, and failed-event error output is sanitized, including frozen paths.
 
 ## 19. Verification Strategy
 
@@ -1208,6 +1254,9 @@ The first release is complete when all of the following are true:
 12. The service runs without Redis or BullMQ.
 13. The pinned CloudDrive2 proto passes the controlled contract check against the supported production CloudDrive2 version.
 14. Both published container architectures start, migrate SQLite, and pass health checks.
+15. The native automation API authenticates with the global Bearer token, submits JSON magnets and multipart torrents, queries state by hash, waits for terminal outcomes, and pulls completed/failed events with opaque sequence cursors.
+16. A generated token is shown exactly once (no-store), rotation invalidates the old token immediately, and revocation disables the API; the database holds only the SHA-256 digest and hint.
+17. Event pull is at-least-once with event-ID idempotency, and failed-event errors never expose frozen paths or credentials.
 
 ## 21. Implementation Sequence
 
@@ -1244,7 +1293,7 @@ The first release is complete when all of the following are true:
 
 ## 22. Remaining Decisions
 
-The implementation stack and dependencies are selected in Section 7.6. Two product and deployment choices remain:
+The implementation stack and dependencies are selected in Section 7.7. Two product and deployment choices remain:
 
 1. Exact category defaults for the production Sonarr and Radarr staging directories.
 2. Whether explicit cloud deletion is included in the first UI release or deferred until after local deletion is proven safe.

@@ -85,3 +85,38 @@ func TestSanitizeErrorText(t *testing.T) {
 		}
 	})
 }
+
+func TestSanitizeDownloadError(t *testing.T) {
+	tests := []struct {
+		name  string
+		field func(*Download)
+		want  string
+	}{
+		{"cloud folder", func(d *Download) {
+			d.CloudFolder = "/cloud/folder"
+			d.LastError = "copy failed for " + d.CloudFolder
+		}, RedactedErrorText},
+		{"save path", func(d *Download) {
+			d.SavePath = "/local/save"
+			d.LastError = "copy failed for " + d.SavePath
+		}, RedactedErrorText},
+		{"cloud source path", func(d *Download) {
+			d.CloudSourcePath = "/cloud/source"
+			d.LastError = "copy failed for " + d.CloudSourcePath
+		}, RedactedErrorText},
+		{"content path", func(d *Download) {
+			d.ContentPath = "/local/content"
+			d.LastError = "copy failed for " + d.ContentPath
+		}, RedactedErrorText},
+		{"plain error", func(d *Download) { d.LastError = "  local deletion failed  " }, "local deletion failed"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			download := Download{}
+			test.field(&download)
+			if got := SanitizeDownloadError(download); got != test.want {
+				t.Errorf("SanitizeDownloadError() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}

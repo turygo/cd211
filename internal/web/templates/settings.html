@@ -79,6 +79,37 @@
           <button class="button button-primary" type="submit">{{.Str.SettingsSaveButton}}</button>
         </div>
       </form>
+
+      <section class="panel panel-narrow" aria-labelledby="api-token-title">
+        <h2 id="api-token-title">{{.Str.SettingsSectionAPIToken}}</h2>
+        <p class="muted">{{.Str.APITokenLede}}</p>
+        {{if .APIToken.Configured}}
+        <p class="muted">{{.Str.APITokenConfigured}}</p>
+        <dl class="detail-list">
+          <div><dt>{{.Str.APITokenHintLabel}}</dt><dd><code>{{.APIToken.Hint}}</code></dd></div>
+          <div><dt>{{.Str.APITokenCreatedLabel}}</dt><dd>{{.APIToken.CreatedAt}}</dd></div>
+          <div><dt>{{.Str.APITokenUpdatedLabel}}</dt><dd>{{.APIToken.UpdatedAt}}</dd></div>
+        </dl>
+        <div class="action-bar">
+          <form action="/settings/api-token/rotate" method="post" data-confirm="{{.Str.APITokenRotateConfirm}}">
+            <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+            <input type="hidden" name="expected_version" value="{{.APIToken.RowVersion}}">
+            <button class="button button-secondary" type="submit">{{.Str.APITokenRotateButton}}</button>
+          </form>
+          <form action="/settings/api-token/revoke" method="post" data-confirm="{{.Str.APITokenRevokeConfirm}}">
+            <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+            <input type="hidden" name="expected_version" value="{{.APIToken.RowVersion}}">
+            <button class="button button-danger" type="submit">{{.Str.APITokenRevokeButton}}</button>
+          </form>
+        </div>
+        {{else}}
+        <p class="muted">{{.Str.APITokenNotConfigured}}</p>
+        <form action="/settings/api-token/generate" method="post">
+          <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+          <button class="button button-secondary" type="submit">{{.Str.APITokenGenerateButton}}</button>
+        </form>
+        {{end}}
+      </section>
     </main>
   </div>
 </body>

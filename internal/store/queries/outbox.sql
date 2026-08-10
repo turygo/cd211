@@ -27,7 +27,26 @@ SELECT *
 FROM domain_events
 WHERE aggregate_type = sqlc.arg(aggregate_type)
   AND aggregate_id = sqlc.arg(aggregate_id)
-ORDER BY occurred_at ASC, id ASC;
+ORDER BY sequence ASC;
+
+-- name: LatestEventSequence :one
+SELECT CAST(COALESCE(MAX(sequence), 0) AS INTEGER)
+FROM domain_events;
+
+-- name: ListDownloadEvents :many
+SELECT *
+FROM domain_events
+WHERE sequence > sqlc.arg(after_sequence)
+  AND sequence <= sqlc.arg(through_sequence)
+  AND aggregate_type = 'download'
+  AND type IN ('download.completed', 'download.failed')
+  AND (
+      type = sqlc.narg(completed_type)
+      OR type = sqlc.narg(failed_type)
+  )
+  AND aggregate_id = COALESCE(sqlc.narg(aggregate_id), aggregate_id)
+ORDER BY sequence ASC
+LIMIT sqlc.arg(limit);
 
 -- name: InsertEndpoint :one
 INSERT INTO webhook_endpoints (

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1150,6 +1151,266 @@ func TestUpdateEndpointRemovedSubscriptionCancelsDeliveries(t *testing.T) {
 			t.Errorf("delivery %s status = %s, want %s", delivery.EventType, delivery.Status, want)
 		}
 	}
+}
+
+func TestLatestEventSequence(t *testing.T) {
+	ctx := context.Background()
+	store := testStore(t)
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+
+	high, err := store.LatestEventSequence(ctx)
+	if err != nil {
+		t.Fatalf("LatestEventSequence(empty) error = %v", err)
+	}
+	if high != 0 {
+		t.Errorf("LatestEventSequence(empty) = %d, want 0", high)
+	}
+
+	hashA := completeDownload(t, store, "a", now)
+	afterA, err := store.LatestEventSequence(ctx)
+	if err != nil {
+		t.Fatalf("LatestEventSequence(completed) error = %v", err)
+	}
+	if want := int64(len(eventsForDownload(t, store, hashA))); afterA != want {
+		t.Errorf("LatestEventSequence(completed) = %d, want %d", afterA, want)
+	}
+
+	failDownload(t, store, "f", now.Add(time.Minute), "disk full")
+	afterF, err := store.LatestEventSequence(ctx)
+	if err != nil {
+		t.Fatalf("LatestEventSequence(failed) error = %v", err)
+	}
+	if afterF != afterA+2 {
+		t.Errorf("LatestEventSequence(failed) = %d, want %d", afterF, afterA+2)
+	}
+}
+
+func TestListDownloadEventsFeed(t *testing.T) {
+	ctx := context.Background()
+	store := testStore(t)
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+
+	hashA := completeDownload(t, store, "a", now)
+	hashF := failDownload(t, store, "f", now.Add(10*time.Second), "disk full")
+	high, err := store.LatestEventSequence(ctx)
+	if err != nil {
+		t.Fatalf("LatestEventSequence() error = %v", err)
+	}
+	completedEvents := eventsForDownload(t, store, hashA)
+	completed := completedEvents[len(completedEvents)-1]
+	failedEvents := eventsForDownload(t, store, hashF)
+	failed := failedEvents[len(failedEvents)-1]
+
+	// Both types: exactly the two terminal events, ascending by sequence, with
+	// the hidden created/state_changed rows skipped.
+	events, err := store.ListDownloadEvents(ctx, outbox.EventQuery{
+		AfterSequence: 0, ThroughSequence: high,
+		IncludeCompleted: true, IncludeFailed: true, Limit: outbox.MaxEventFeedLimit,
+	})
+	if err != nil {
+		t.Fatalf("ListDownloadEvents(both) error = %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("ListDownloadEvents(both) = %d events, want 2 (hidden types skipped)", len(events))
+	}
+	for index, event := range events {
+		if event.Type != outbox.EventTypeCompleted && event.Type != outbox.EventTypeFailed {
+			t.Errorf("feed event %d leaked hidden type %q", index, event.Type)
+		}
+		if index > 0 && events[index-1].Sequence >= event.Sequence {
+			t.Errorf("feed events not ascending by sequence: %d, %d", events[index-1].Sequence, event.Sequence)
+		}
+	}
+	if events[0].ID != completed.ID || events[0].Type != outbox.EventTypeCompleted {
+		t.Errorf("first feed event = %+v, want completed %q", events[0], completed.ID)
+	}
+	if events[1].ID != failed.ID || events[1].Type != outbox.EventTypeFailed {
+		t.Errorf("second feed event = %+v, want failed %q", events[1], failed.ID)
+	}
+
+	// Type filters select exactly the requested event type.
+	completedOnly, err := store.ListDownloadEvents(ctx, outbox.EventQuery{
+		AfterSequence: 0, ThroughSequence: high, IncludeCompleted: true, Limit: outbox.MaxEventFeedLimit,
+	})
+	if err != nil || len(completedOnly) != 1 || completedOnly[0].Type != outbox.EventTypeCompleted {
+		t.Errorf("ListDownloadEvents(completed only) = (%+v, %v), want one completed", completedOnly, err)
+	}
+	failedOnly, err := store.ListDownloadEvents(ctx, outbox.EventQuery{
+		AfterSequence: 0, ThroughSequence: high, IncludeFailed: true, Limit: outbox.MaxEventFeedLimit,
+	})
+	if err != nil || len(failedOnly) != 1 || failedOnly[0].Type != outbox.EventTypeFailed {
+		t.Errorf("ListDownloadEvents(failed only) = (%+v, %v), want one failed", failedOnly, err)
+	}
+
+	// Hash filter narrows to one download's terminal event.
+	byHash, err := store.ListDownloadEvents(ctx, outbox.EventQuery{
+		AfterSequence: 0, ThroughSequence: high,
+		IncludeCompleted: true, IncludeFailed: true, AggregateID: hashA, Limit: outbox.MaxEventFeedLimit,
+	})
+	if err != nil || len(byHash) != 1 || byHash[0].ID != completed.ID {
+		t.Errorf("ListDownloadEvents(hash %s) = (%+v, %v), want one completed for %s", hashA, byHash, err, hashA)
+	}
+
+	// Cursor semantics: sequence strictly greater than after.
+	after, err := store.ListDownloadEvents(ctx, outbox.EventQuery{
+		AfterSequence: completed.Sequence, ThroughSequence: high,
+		IncludeCompleted: true, IncludeFailed: true, Limit: outbox.MaxEventFeedLimit,
+	})
+	if err != nil || len(after) != 1 || after[0].ID != failed.ID {
+		t.Errorf("ListDownloadEvents(after completed) = (%+v, %v), want the failed event", after, err)
+	}
+
+	// Limit bounds the returned page.
+	limited, err := store.ListDownloadEvents(ctx, outbox.EventQuery{
+		AfterSequence: 0, ThroughSequence: high,
+		IncludeCompleted: true, IncludeFailed: true, Limit: 1,
+	})
+	if err != nil || len(limited) != 1 || limited[0].ID != completed.ID {
+		t.Errorf("ListDownloadEvents(limit 1) = (%+v, %v), want only the completed event", limited, err)
+	}
+
+	// A through snapshot excludes events inserted after it; the widened scan
+	// then sees them.
+	snapshot := high
+	completeDownload(t, store, "b", now.Add(20*time.Second))
+	afterLater, err := store.LatestEventSequence(ctx)
+	if err != nil {
+		t.Fatalf("LatestEventSequence(later) error = %v", err)
+	}
+	frozen, err := store.ListDownloadEvents(ctx, outbox.EventQuery{
+		AfterSequence: 0, ThroughSequence: snapshot,
+		IncludeCompleted: true, IncludeFailed: true, Limit: outbox.MaxEventFeedLimit,
+	})
+	if err != nil {
+		t.Fatalf("ListDownloadEvents(through snapshot) error = %v", err)
+	}
+	if len(frozen) != 2 {
+		t.Errorf("ListDownloadEvents(through snapshot) = %d events, want 2 (later insert excluded)", len(frozen))
+	}
+	wide, err := store.ListDownloadEvents(ctx, outbox.EventQuery{
+		AfterSequence: 0, ThroughSequence: afterLater,
+		IncludeCompleted: true, IncludeFailed: true, Limit: outbox.MaxEventFeedLimit,
+	})
+	if err != nil || len(wide) != 3 || wide[2].Type != outbox.EventTypeCompleted {
+		t.Errorf("ListDownloadEvents(through later) = (%d events, %v), want 3 ending in completed", len(wide), err)
+	}
+}
+
+func TestListDownloadEventsSameTimestampOrder(t *testing.T) {
+	ctx := context.Background()
+	store := testStore(t)
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+
+	hashA := completeDownload(t, store, "a", now)
+	hashB := completeDownload(t, store, "b", now)
+	high, err := store.LatestEventSequence(ctx)
+	if err != nil {
+		t.Fatalf("LatestEventSequence() error = %v", err)
+	}
+	events, err := store.ListDownloadEvents(ctx, outbox.EventQuery{
+		AfterSequence: 0, ThroughSequence: high,
+		IncludeCompleted: true, IncludeFailed: true, Limit: outbox.MaxEventFeedLimit,
+	})
+	if err != nil {
+		t.Fatalf("ListDownloadEvents() error = %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("feed = %d events, want 2 completed", len(events))
+	}
+	if !events[0].OccurredAt.Equal(events[1].OccurredAt) {
+		t.Fatalf("test setup: completed events occurred_at differ (%v, %v)", events[0].OccurredAt, events[1].OccurredAt)
+	}
+	if events[0].Sequence >= events[1].Sequence {
+		t.Errorf("same-timestamp feed not ascending by sequence: %d, %d", events[0].Sequence, events[1].Sequence)
+	}
+	lastA := eventsForDownload(t, store, hashA)
+	lastB := eventsForDownload(t, store, hashB)
+	if events[0].ID != lastA[len(lastA)-1].ID || events[1].ID != lastB[len(lastB)-1].ID {
+		t.Errorf("same-timestamp feed order = %q, %q, want %q, %q",
+			events[0].ID, events[1].ID, lastA[len(lastA)-1].ID, lastB[len(lastB)-1].ID)
+	}
+}
+
+func TestListDownloadEventsPreservation(t *testing.T) {
+	ctx := context.Background()
+	store := testStore(t)
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+
+	hashA := completeDownload(t, store, "a", now)
+	failDownload(t, store, "f", now.Add(10*time.Second), "boom")
+	high, err := store.LatestEventSequence(ctx)
+	if err != nil {
+		t.Fatalf("LatestEventSequence() error = %v", err)
+	}
+	events, err := store.ListDownloadEvents(ctx, outbox.EventQuery{
+		AfterSequence: 0, ThroughSequence: high,
+		IncludeCompleted: true, IncludeFailed: true, Limit: outbox.MaxEventFeedLimit,
+	})
+	if err != nil {
+		t.Fatalf("ListDownloadEvents() error = %v", err)
+	}
+	stored := eventsForDownload(t, store, hashA)
+	want := stored[len(stored)-1]
+	got := events[0]
+	if got.Sequence != want.Sequence || got.ID != want.ID || got.Type != want.Type ||
+		got.AggregateType != want.AggregateType || got.AggregateID != want.AggregateID ||
+		got.AggregateVersion != want.AggregateVersion || !got.OccurredAt.Equal(want.OccurredAt) ||
+		!bytes.Equal(got.Payload, want.Payload) {
+		t.Errorf("feed event = %+v, want exact stored row %+v", got, want)
+	}
+	if len(got.Payload) == 0 || !json.Valid(got.Payload) {
+		t.Errorf("feed payload is not valid JSON: %q", got.Payload)
+	}
+}
+
+func TestListDownloadEventsInvalid(t *testing.T) {
+	ctx := context.Background()
+	store := testStore(t)
+	base := outbox.EventQuery{
+		AfterSequence: 0, ThroughSequence: 100,
+		IncludeCompleted: true, IncludeFailed: true, Limit: outbox.MaxEventFeedLimit,
+	}
+	invalid := []struct {
+		name  string
+		query outbox.EventQuery
+	}{
+		{"negative after", withEventQuery(base, func(q *outbox.EventQuery) { q.AfterSequence = -1 })},
+		{"negative through", withEventQuery(base, func(q *outbox.EventQuery) { q.ThroughSequence = -1 })},
+		{"inverted range", withEventQuery(base, func(q *outbox.EventQuery) { q.AfterSequence = 10; q.ThroughSequence = 5 })},
+		{"zero limit", withEventQuery(base, func(q *outbox.EventQuery) { q.Limit = 0 })},
+		{"negative limit", withEventQuery(base, func(q *outbox.EventQuery) { q.Limit = -5 })},
+		{"limit over max", withEventQuery(base, func(q *outbox.EventQuery) { q.Limit = outbox.MaxEventFeedLimit + 1 })},
+		{"no types", withEventQuery(base, func(q *outbox.EventQuery) { q.IncludeCompleted = false; q.IncludeFailed = false })},
+	}
+	for _, test := range invalid {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := store.ListDownloadEvents(ctx, test.query); err == nil {
+				t.Errorf("ListDownloadEvents(%+v) error = nil, want error", test.query)
+			}
+		})
+	}
+
+	// after == through is the valid empty long-poll scan.
+	empty, err := store.ListDownloadEvents(ctx, withEventQuery(base, func(q *outbox.EventQuery) {
+		q.AfterSequence = 7
+		q.ThroughSequence = 7
+	}))
+	if err != nil {
+		t.Fatalf("ListDownloadEvents(after == through) error = %v", err)
+	}
+	if len(empty) != 0 {
+		t.Errorf("ListDownloadEvents(after == through) = %d events, want 0", len(empty))
+	}
+	// The lookahead limit is accepted.
+	if _, err := store.ListDownloadEvents(ctx, base); err != nil {
+		t.Errorf("ListDownloadEvents(limit %d) error = %v, want nil", outbox.MaxEventFeedLimit, err)
+	}
+}
+
+func withEventQuery(base outbox.EventQuery, mutate func(*outbox.EventQuery)) outbox.EventQuery {
+	query := base
+	mutate(&query)
+	return query
 }
 
 // successAt builds a valid succeeded commit result stamped with at; the

@@ -670,8 +670,8 @@ func (s *Scheduler) log(d domain.Download, operation string, started time.Time, 
 		"latency", s.clock.Now().Sub(started),
 		"result", result,
 	}
-	if d.LastError != "" {
-		attributes = append(attributes, "error", d.LastError)
+	if errorText := domain.SanitizeDownloadError(d); errorText != "" {
+		attributes = append(attributes, "error", errorText)
 	}
 	s.logger.Info("reconciled download", attributes...)
 }

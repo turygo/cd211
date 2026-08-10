@@ -14,11 +14,13 @@ import (
 	"github.com/turygo/cd211/internal/creds"
 	"github.com/turygo/cd211/internal/fsafe"
 	"github.com/turygo/cd211/internal/httpapi"
+	"github.com/turygo/cd211/internal/nativeapi"
 	"github.com/turygo/cd211/internal/reconcile"
 	"github.com/turygo/cd211/internal/server"
 	"github.com/turygo/cd211/internal/session"
 	"github.com/turygo/cd211/internal/settings"
 	"github.com/turygo/cd211/internal/store"
+	"github.com/turygo/cd211/internal/submission"
 	"github.com/turygo/cd211/internal/web"
 )
 
@@ -186,9 +188,15 @@ func (m *manager) build(ctx context.Context, cfg settings.Config) (*runtime, err
 	if err != nil {
 		return nil, fmt.Errorf("clouddrive dial: %w", err)
 	}
+	// The generation context is created before the native handler because
+	// the wait route observes its cancellation as the lifecycle shutdown
+	// boundary. Any later build failure cancels it, so a partially built
+	// generation can never leave waiters parked on a dead handler.
+	generationContext, cancel := context.WithCancel(context.Background())
 	built := false
 	defer func() {
 		if !built {
+			cancel()
 			_ = cloud.Close()
 		}
 	}()
@@ -211,19 +219,39 @@ func (m *manager) build(ctx context.Context, cfg settings.Config) (*runtime, err
 		return nil, fmt.Errorf("credentials: %w", err)
 	}
 	limits := metadataLimits()
+	service, err := submission.New(submission.Config{
+		CloudRoot: cfg.CloudRoot, LocalRoot: cfg.LocalRoot,
+		TorrentLimits: limits,
+	}, m.store, m.clock, coord, files)
+	if err != nil {
+		return nil, fmt.Errorf("submission service: %w", err)
+	}
 	api, err := httpapi.New(httpapi.Config{
 		CloudRoot: cfg.CloudRoot, LocalRoot: cfg.LocalRoot,
 		TorrentLimits: limits, MaxRequestBytes: int64(limits.MaxInputBytes) + 64<<10,
-	}, credentials, m.store, m.sessions, m.clock, coord, files)
+	}, credentials, m.store, m.sessions, m.clock, coord, files, service)
 	if err != nil {
 		return nil, fmt.Errorf("httpapi: %w", err)
+	}
+	nativeAuth, err := nativeapi.NewAuth(m.store)
+	if err != nil {
+		return nil, fmt.Errorf("nativeapi auth: %w", err)
+	}
+	native, err := nativeapi.NewHandler(nativeapi.Config{
+		MaxRequestBytes: int64(limits.MaxInputBytes) + 64<<10,
+		TorrentLimits:   limits,
+		Shutdown:        generationContext.Done(),
+	}, service, m.store, m.store.EventSignal())
+	if err != nil {
+		return nil, fmt.Errorf("nativeapi: %w", err)
 	}
 	ui, err := web.New(web.Config{
 		CloudRoot: cfg.CloudRoot, LocalRoot: cfg.LocalRoot,
 	}, credentials, m.store, m.sessions, m.clock, coord, cloud, files, web.SettingsDeps{
-		Store: m.store,
-		Dial:  nil,
-		Apply: m.Apply,
+		Store:  m.store,
+		Tokens: m.store,
+		Dial:   nil,
+		Apply:  m.Apply,
 	}, m.store)
 	if err != nil {
 		return nil, fmt.Errorf("web: %w", err)
@@ -242,10 +270,10 @@ func (m *manager) build(ctx context.Context, cfg settings.Config) (*runtime, err
 	root.Handle("/healthz", health)
 	root.Handle("/readyz", health)
 	root.Handle("/api/v2/", api)
+	root.Handle("/api/v1/", nativeAuth.Middleware(native))
 	root.Handle("/setup", http.RedirectHandler("/", http.StatusSeeOther))
 	root.Handle("/", ui)
 
-	generationContext, cancel := context.WithCancel(context.Background())
 	built = true
 	return &runtime{
 		cfg:     cfg,
@@ -267,6 +295,7 @@ func setupModeMux(setup http.Handler) *http.ServeMux {
 	mux.Handle("/healthz", plainTextHandler(http.StatusOK, "ok\n"))
 	mux.Handle("/readyz", plainTextHandler(http.StatusServiceUnavailable, "not ready\n"))
 	mux.Handle("/api/v2/", plainTextHandler(http.StatusServiceUnavailable, "setup in progress\n"))
+	mux.Handle("/api/v1/", http.HandlerFunc(setupAPIUnavailable))
 	mux.Handle("/setup", setup)
 	mux.Handle("/setup/", setup)
 	mux.Handle("/lang", setup)
@@ -277,6 +306,19 @@ func setupModeMux(setup http.Handler) *http.ServeMux {
 	})
 	return mux
 }
+
+// setupAPIUnavailable answers every native API request with the stable setup
+// placeholder. Setup mode runs no authentication: the token store is not
+// populated until setup completes.
+func setupAPIUnavailable(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_, _ = w.Write([]byte(setupIncompleteBody))
+}
+
+// setupIncompleteBody is the fixed JSON body for /api/v1/* during setup.
+const setupIncompleteBody = "{\"error\":{\"code\":\"setup_incomplete\",\"message\":\"Setup is incomplete\"}}\n"
 
 func plainTextHandler(status int, body string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

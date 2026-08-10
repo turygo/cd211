@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -109,6 +110,8 @@ func TestSetupModeMux(t *testing.T) {
 		{name: "readyz", method: http.MethodGet, path: "/readyz", wantStatus: http.StatusServiceUnavailable, wantBody: "not ready\n"},
 		{name: "api root", method: http.MethodGet, path: "/api/v2/", wantStatus: http.StatusServiceUnavailable, wantBody: "setup in progress\n"},
 		{name: "api sub", method: http.MethodPost, path: "/api/v2/downloads", wantStatus: http.StatusServiceUnavailable, wantBody: "setup in progress\n"},
+		{name: "native api", method: http.MethodGet, path: "/api/v1/downloads", wantStatus: http.StatusServiceUnavailable, wantBody: "{\"error\":{\"code\":\"setup_incomplete\",\"message\":\"Setup is incomplete\"}}\n"},
+		{name: "native api sub", method: http.MethodPost, path: "/api/v1/downloads/0123456789abcdef0123456789abcdef01234567", wantStatus: http.StatusServiceUnavailable, wantBody: "{\"error\":{\"code\":\"setup_incomplete\",\"message\":\"Setup is incomplete\"}}\n"},
 		{name: "root redirects", method: http.MethodGet, path: "/", wantStatus: http.StatusSeeOther, wantLocation: "/setup"},
 		{name: "unknown redirects", method: http.MethodGet, path: "/login", wantStatus: http.StatusSeeOther, wantLocation: "/setup"},
 		{name: "setup exact", method: http.MethodGet, path: "/setup", wantStatus: http.StatusOK, wantBody: "setup handler"},
@@ -132,5 +135,26 @@ func TestSetupModeMux(t *testing.T) {
 				t.Errorf("%s %s Location = %q, want %q", tt.method, tt.path, got, tt.wantLocation)
 			}
 		})
+	}
+}
+
+func TestSetupModeNativeAPIPlaceholder(t *testing.T) {
+	mux := setupModeMux(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("setup placeholder invoked the setup handler")
+	}))
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/downloads/0123456789abcdef0123456789abcdef01234567", nil))
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", recorder.Code)
+	}
+	if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+	if got := recorder.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
+		t.Errorf("Content-Type = %q, want application/json", got)
+	}
+	want := "{\"error\":{\"code\":\"setup_incomplete\",\"message\":\"Setup is incomplete\"}}\n"
+	if got := recorder.Body.String(); got != want {
+		t.Errorf("body = %q, want %q", got, want)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/turygo/cd211/internal/fsafe"
 	"github.com/turygo/cd211/internal/session"
 	"github.com/turygo/cd211/internal/store"
+	"github.com/turygo/cd211/internal/submission"
 	"github.com/turygo/cd211/internal/torrentmeta"
 )
 
@@ -22,12 +23,12 @@ const (
 	formLimit int64 = 64 << 10
 )
 
-// repository is the durable API surface required by the WebAPI.
+// repository is the durable API surface required by the WebAPI. Submission
+// persistence and category lookup for torrents/add live in the shared
+// submission.Service injected at construction.
 type repository interface {
 	UpsertCategory(context.Context, domain.Category) (domain.Category, error)
-	GetCategory(context.Context, string) (domain.Category, error)
 	ListCategories(context.Context) ([]domain.Category, error)
-	CreateSubmission(context.Context, domain.Submission) (domain.Download, bool, error)
 	GetDownload(context.Context, string) (domain.Download, error)
 	ListDownloads(context.Context, *string) ([]domain.Download, error)
 	ListDownloadFiles(context.Context, string) ([]domain.DownloadFile, error)
@@ -73,11 +74,14 @@ type handler struct {
 	clock      Clock
 	waker      Waker
 	filesystem filesystem
+	service    *submission.Service
 }
 
-// New creates the authenticated qBittorrent-compatible HTTP handler.
-func New(config Config, credentials Credentials, repo repository, sessions *session.Store, clock Clock, waker Waker, files filesystem) (http.Handler, error) {
-	if isNil(credentials) || isNil(repo) || sessions == nil || isNil(clock) || isNil(waker) || isNil(files) {
+// New creates the authenticated qBittorrent-compatible HTTP handler. service
+// is the shared submission boundary also consumed by the native API; it owns
+// torrents/add parsing, category lookup, and persistence.
+func New(config Config, credentials Credentials, repo repository, sessions *session.Store, clock Clock, waker Waker, files filesystem, service *submission.Service) (http.Handler, error) {
+	if isNil(credentials) || isNil(repo) || sessions == nil || isNil(clock) || isNil(waker) || isNil(files) || isNil(service) {
 		return nil, errors.New("httpapi dependency is nil")
 	}
 	if !validCloudRoot(config.CloudRoot) {
@@ -93,7 +97,7 @@ func New(config Config, credentials Credentials, repo repository, sessions *sess
 		return nil, errors.New("request limit is too small")
 	}
 
-	h := &handler{config: config, creds: credentials, repo: repo, sessions: sessions, clock: clock, waker: waker, filesystem: files}
+	h := &handler{config: config, creds: credentials, repo: repo, sessions: sessions, clock: clock, waker: waker, filesystem: files, service: service}
 	mux := http.NewServeMux()
 	routes := map[string]string{
 		apiPrefix + "auth/login":              http.MethodPost,

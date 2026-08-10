@@ -1,6 +1,7 @@
 -- +goose Up
 CREATE TABLE domain_events (
-    id TEXT PRIMARY KEY,
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
     type TEXT NOT NULL,
     aggregate_type TEXT NOT NULL,
     aggregate_id TEXT NOT NULL,
@@ -9,7 +10,14 @@ CREATE TABLE domain_events (
     occurred_at TIMESTAMP NOT NULL
 );
 
-CREATE INDEX idx_domain_events_aggregate ON domain_events (aggregate_type, aggregate_id, occurred_at, id);
+CREATE INDEX idx_domain_events_feed_type_sequence
+    ON domain_events (type, sequence)
+    WHERE aggregate_type = 'download'
+      AND type IN ('download.completed', 'download.failed');
+CREATE INDEX idx_domain_events_feed_aggregate_type_sequence
+    ON domain_events (aggregate_id, type, sequence)
+    WHERE aggregate_type = 'download'
+      AND type IN ('download.completed', 'download.failed');
 
 CREATE TABLE webhook_endpoints (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

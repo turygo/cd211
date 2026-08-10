@@ -103,8 +103,11 @@ func (e outboxError) Error() string { return string(e) }
 
 func errOutbox(message string) error { return outboxError(message) }
 
-// Event is an immutable domain or test event.
+// Event is an immutable domain or test event. Sequence is the monotonic
+// SQLite-generated row sequence, assigned at insert time; existing inserts
+// never supply it.
 type Event struct {
+	Sequence         int64
 	ID               string
 	Type             string
 	AggregateType    string
@@ -112,6 +115,26 @@ type Event struct {
 	AggregateVersion int64
 	Payload          []byte
 	OccurredAt       time.Time
+}
+
+// MaxEventFeedLimit is the largest ListDownloadEvents bound. The public event
+// feed limit is capped at 500; the extra row is the HTTP lookahead that
+// decides has_more and is never exposed as a page size.
+const MaxEventFeedLimit = 501
+
+// EventQuery narrows one completed/failed event feed scan. The scan covers
+// durable sequences strictly greater than AfterSequence and at most
+// ThroughSequence, in ascending sequence order. IncludeCompleted and
+// IncludeFailed select the subscribable event types; at least one must be
+// true. AggregateID optionally filters one download hash. Limit bounds the
+// returned rows to 1..MaxEventFeedLimit inclusive.
+type EventQuery struct {
+	AfterSequence    int64
+	ThroughSequence  int64
+	IncludeCompleted bool
+	IncludeFailed    bool
+	AggregateID      string
+	Limit            int64
 }
 
 // Endpoint is a webhook endpoint. Secret fields (HMACSecret, BearerToken)

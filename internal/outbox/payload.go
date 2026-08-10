@@ -57,7 +57,7 @@ type testEnvelope struct {
 func BuildDownloadPayload(eventID, eventType string, previousState domain.State, download domain.Download) ([]byte, error) {
 	errorText := ""
 	if eventType == EventTypeFailed {
-		errorText = domain.SanitizeErrorText(download.LastError, download.SubmissionURI)
+		errorText = domain.SanitizeDownloadError(download)
 	}
 	data := downloadData{
 		Hash:            download.Hash,

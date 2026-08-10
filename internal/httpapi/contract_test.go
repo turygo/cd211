@@ -20,6 +20,7 @@ import (
 	"github.com/turygo/cd211/internal/fsafe"
 	"github.com/turygo/cd211/internal/session"
 	"github.com/turygo/cd211/internal/store"
+	"github.com/turygo/cd211/internal/submission"
 	"github.com/turygo/cd211/internal/torrentmeta"
 )
 
@@ -72,11 +73,19 @@ func TestRealStoreSubmissionChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	waker := &contractWaker{}
+	filesystem := &contractFilesystem{root: "/local", err: fs.ErrNotExist}
+	service, err := submission.New(submission.Config{
+		CloudRoot: "/cloud", LocalRoot: "/local",
+		TorrentLimits: torrentmeta.Limits{MaxInputBytes: 1 << 20, MaxInfoBytes: 1 << 18, MaxFiles: 16, MaxNameBytes: 255, MaxPathBytes: 1024, MaxComponentBytes: 255, MaxTrackerCount: 16, MaxTrackerBytes: 1024, MaxTotalSize: 1 << 30},
+	}, repository, clock, waker, filesystem)
+	if err != nil {
+		t.Fatal(err)
+	}
 	api, err := New(Config{
 		CloudRoot: "/cloud", LocalRoot: "/local",
 		TorrentLimits:   torrentmeta.Limits{MaxInputBytes: 1 << 20, MaxInfoBytes: 1 << 18, MaxFiles: 16, MaxNameBytes: 255, MaxPathBytes: 1024, MaxComponentBytes: 255, MaxTrackerCount: 16, MaxTrackerBytes: 1024, MaxTotalSize: 1 << 30},
 		MaxRequestBytes: (1 << 20) + (64 << 10),
-	}, stubCredentials{username: "user", password: "password"}, repository, sessions, clock, waker, &contractFilesystem{root: "/local", err: fs.ErrNotExist})
+	}, stubCredentials{username: "user", password: "password"}, repository, sessions, clock, waker, filesystem, service)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,10 +185,17 @@ func newContractHarness(t *testing.T) *contractHarness {
 	limits := torrentmeta.Limits{MaxInputBytes: 1 << 20, MaxInfoBytes: 1 << 18, MaxFiles: 16, MaxNameBytes: 255, MaxPathBytes: 1024, MaxComponentBytes: 255, MaxTrackerCount: 16, MaxTrackerBytes: 1024, MaxTotalSize: 1 << 30}
 	waker := &contractWaker{}
 	filesystem := &contractFilesystem{root: "/local", err: fs.ErrNotExist}
+	service, err := submission.New(submission.Config{
+		CloudRoot: "/cloud", LocalRoot: "/local",
+		TorrentLimits: limits,
+	}, repository, clock, waker, filesystem)
+	if err != nil {
+		t.Fatal(err)
+	}
 	api, err := New(Config{
 		CloudRoot: "/cloud", LocalRoot: "/local",
 		TorrentLimits: limits, MaxRequestBytes: int64(limits.MaxInputBytes) + (64 << 10),
-	}, stubCredentials{username: "user", password: "password"}, repository, sessions, clock, waker, filesystem)
+	}, stubCredentials{username: "user", password: "password"}, repository, sessions, clock, waker, filesystem, service)
 	if err != nil {
 		t.Fatal(err)
 	}

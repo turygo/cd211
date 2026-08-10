@@ -141,6 +141,25 @@ type SettingsView struct {
 	Categories []SettingsCategoryPath
 	Notice     string
 	Success    bool
+	APIToken   APITokenView
+}
+
+// APITokenView renders the Automation API token lifecycle section of the
+// Settings page. It never carries the plaintext secret or its digest; Hint
+// and the timestamps are the only stored token details shown.
+type APITokenView struct {
+	Configured bool
+	Hint       string
+	CreatedAt  string
+	UpdatedAt  string
+	RowVersion int64
+}
+
+// APITokenSecretView renders the one-time token reveal page. It must only be
+// served with Cache-Control: no-store and never linked, redirected, or cached.
+type APITokenSecretView struct {
+	PageMeta
+	Secret string
 }
 
 // SettingsFormValues carries the prefilled settings form fields. CD2Password
@@ -482,14 +501,11 @@ func canCancel(state domain.State) bool {
 }
 
 func safeError(download domain.Download, str *Strings) string {
-	errorText := strings.TrimSpace(download.LastError)
+	errorText := domain.SanitizeDownloadError(download)
 	if errorText == "" {
 		return ""
 	}
-	// The shared predicate keeps webhook payload redaction and this interface
-	// on one convention; it covers the submission URI, magnet links, tracker
-	// URLs/passkeys, tokens, sid=, authorization/bearer/cookie/secret/password.
-	if domain.IsSensitiveError(errorText, download.SubmissionURI) {
+	if errorText == domain.RedactedErrorText {
 		return str.RedactedError
 	}
 	return errorText

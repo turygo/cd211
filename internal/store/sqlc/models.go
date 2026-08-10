@@ -9,6 +9,15 @@ import (
 	"time"
 )
 
+type ApiToken struct {
+	ID         int64     `json:"id"`
+	TokenHash  []byte    `json:"token_hash"`
+	TokenHint  string    `json:"token_hint"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+	RowVersion int64     `json:"row_version"`
+}
+
 type Category struct {
 	Name      string    `json:"name"`
 	CloudPath string    `json:"cloud_path"`
@@ -19,6 +28,7 @@ type Category struct {
 }
 
 type DomainEvent struct {
+	Sequence         int64     `json:"sequence"`
 	ID               string    `json:"id"`
 	Type             string    `json:"type"`
 	AggregateType    string    `json:"aggregate_type"`

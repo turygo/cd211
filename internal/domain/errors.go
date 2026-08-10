@@ -70,3 +70,21 @@ func SanitizeErrorText(errorText, submissionURI string) string {
 	}
 	return cut
 }
+
+// SanitizeDownloadError prepares a persisted download error for external
+// sinks. Errors that include any frozen path are redacted before applying the
+// shared marker, submission URI, trimming, and truncation semantics.
+func SanitizeDownloadError(download Download) string {
+	trimmed := strings.TrimSpace(download.LastError)
+	for _, path := range []string{
+		download.CloudFolder,
+		download.SavePath,
+		download.CloudSourcePath,
+		download.ContentPath,
+	} {
+		if path = strings.TrimSpace(path); path != "" && strings.Contains(trimmed, path) {
+			return RedactedErrorText
+		}
+	}
+	return SanitizeErrorText(trimmed, download.SubmissionURI)
+}

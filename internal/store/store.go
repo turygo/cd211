@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/pressly/goose/v3"
+	"github.com/turygo/cd211/internal/outbox"
 	"github.com/turygo/cd211/internal/store/sqlc"
 	_ "modernc.org/sqlite"
 )
@@ -22,8 +23,9 @@ import (
 var embeddedMigrations embed.FS
 
 type Store struct {
-	db      *sql.DB
-	queries *storedb.Queries
+	db          *sql.DB
+	queries     *storedb.Queries
+	eventSignal *outbox.Signal
 }
 
 func Open(ctx context.Context, databasePath string) (*Store, error) {
@@ -57,9 +59,19 @@ func Open(ctx context.Context, databasePath string) (*Store, error) {
 	}
 
 	return &Store{
-		db:      db,
-		queries: storedb.New(db),
+		db:          db,
+		queries:     storedb.New(db),
+		eventSignal: outbox.NewSignal(),
 	}, nil
+}
+
+// EventSignal returns the process-owned event broadcast signal. The store
+// owns one Signal for the process lifetime, so it survives settings runtime
+// generation swaps. Snapshot holders wake after any transaction that inserted
+// a domain_events row commits successfully; the signal itself carries no
+// event data and the database remains authoritative.
+func (s *Store) EventSignal() *outbox.Signal {
+	return s.eventSignal
 }
 
 func (s *Store) PingContext(ctx context.Context) error {

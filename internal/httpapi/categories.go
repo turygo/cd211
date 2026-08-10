@@ -5,11 +5,10 @@ import (
 	"net/http"
 	"path"
 	"path/filepath"
-	"strings"
-	"unicode/utf8"
 
 	"github.com/turygo/cd211/internal/domain"
 	"github.com/turygo/cd211/internal/store"
+	"github.com/turygo/cd211/internal/submission"
 )
 
 func (h *handler) categories(w http.ResponseWriter, r *http.Request) {
@@ -31,7 +30,7 @@ func (h *handler) createCategory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rawName, present := exactlyOne(form["category"])
-	name, valid := canonicalCategory(rawName, false)
+	name, valid := submission.CanonicalCategory(rawName, false)
 	if !present || !valid {
 		badRequest(w)
 		return
@@ -79,23 +78,4 @@ func (h *handler) createCategory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-}
-
-func canonicalCategory(raw string, allowEmpty bool) (string, bool) {
-	if !utf8.ValidString(raw) {
-		return "", false
-	}
-	name := strings.ToLower(strings.TrimSpace(raw))
-	if name == "" {
-		return "", allowEmpty
-	}
-	if name == "." || name == ".." || strings.ContainsAny(name, "/\\") {
-		return "", false
-	}
-	for _, char := range name {
-		if char == 0 || char < 0x20 || char == 0x7f {
-			return "", false
-		}
-	}
-	return name, true
 }

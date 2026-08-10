@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -125,5 +126,56 @@ func TestManagerApplyRejectsRebuildAfterShutdown(t *testing.T) {
 	m.shutdown()
 	if err := m.Apply(ctx, cfg); err == nil {
 		t.Error("Apply after shutdown succeeded, want error")
+	}
+}
+
+// TestConfiguredRuntimeMountsNativeAPI verifies the Phase 2 routing: a built
+// runtime mounts the authenticated native API at /api/v1/ (401 without a
+// token) while the qBittorrent surface keeps serving.
+func TestConfiguredRuntimeMountsNativeAPI(t *testing.T) {
+	ctx := context.Background()
+	st := openApplyStore(t)
+	cfg := applyTestConfig(t)
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	sessions, err := session.New(reconcile.RealClock{}, rand.Reader, sessionTTL, sessionCapacity)
+	if err != nil {
+		t.Fatalf("session.New: %v", err)
+	}
+	root := &switchHandler{}
+	m := newManager(root, st, sessions, reconcile.RealClock{}, logger)
+
+	generation, err := m.build(ctx, cfg)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	m.activate(generation)
+	defer m.shutdown()
+
+	// Without a configured API token every /api/v1/* request is the stable 401.
+	recorder := httptest.NewRecorder()
+	root.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/downloads/0123456789abcdef0123456789abcdef01234567", nil))
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("native api status = %d, want 401; body=%q", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+	if !strings.Contains(recorder.Body.String(), `"code":"unauthorized"`) {
+		t.Errorf("native api body = %q, want unauthorized JSON", recorder.Body.String())
+	}
+
+	// Unknown /api/v1/* paths are authenticated before routing.
+	recorder = httptest.NewRecorder()
+	root.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/events", nil))
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("unknown native api status = %d, want 401", recorder.Code)
+	}
+
+	// The qBittorrent surface is untouched by the new mount.
+	recorder = httptest.NewRecorder()
+	root.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v2/torrents/add", nil))
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("qBittorrent add status = %d, want 403 without SID", recorder.Code)
 	}
 }

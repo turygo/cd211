@@ -21,6 +21,7 @@ CD211 is not a BitTorrent client and does not seed. Run it on a trusted LAN; do 
 - Start, retry, cancel, remove-record, and remove-local-files actions.
 - Editable CloudDrive2, path, timeout, category, and password settings without restarting CD211.
 - Signed webhook notifications for completed and failed downloads, with retry, dead-letter, and manual replay.
+- Native automation API with a single global API token: magnet/torrent submission, status queries, terminal wait, and completed/failed event pull.
 - `/healthz` and `/readyz` endpoints for container health checks.
 
 Removing a download never deletes its copy in 115.
@@ -173,6 +174,35 @@ Configure categories in the CD211 Web UI before using them in Sonarr or Radarr. 
 - The operator password is created during first-run setup and can be changed from **Change password** in the Web UI.
 - The same credentials are used by the Web UI and Sonarr/Radarr.
 - After changing the password, update the qBittorrent download client entry in Sonarr and Radarr.
+- The automation API uses its own global API token, separate from the admin password (see Automation API below): the system generates it and shows it once, rotation invalidates the old token immediately, revocation disables the API, and the token never expires.
+
+### Automation API
+
+CD211 also exposes a native automation API (`/api/v1`), separate from the qBittorrent-compatible surface, for submitting downloads, querying status, waiting for a terminal state, and pulling completed/failed events. Every request must carry an `Authorization: Bearer <token>` header; only Bearer authentication is accepted, and the Web UI's SID sessions and admin password do not apply.
+
+**Settings** in the Web UI manages the single global API token:
+
+- The system generates **one** global token, which can be generated, rotated, or revoked at any time. A generated or rotated token is shown exactly once from a `Cache-Control: no-store` page and can never be recovered afterwards.
+- Rotation invalidates the old token immediately; revocation disables the API. The token **does not expire**.
+- SQLite stores only the token's SHA-256 digest and a trailing hint, never the original token.
+- A missing or invalid token returns `401`; `/api/v1` returns `503` until first-run setup is complete.
+
+Endpoints:
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/v1/downloads` | Submit a download with JSON `{"magnet":"...","category":"movies","stopped":false}`, or a multipart form with the `torrent` file field and optional `category`/`stopped` fields |
+| `GET /api/v1/downloads/{hash}` | Query download status (40-character hexadecimal hash, normalized to lowercase) |
+| `GET /api/v1/downloads/{hash}/wait?timeout=1s..25s` | Wait for a terminal state; `204` on timeout |
+| `GET /api/v1/events` | Pull `download.completed`/`download.failed` events with `cursor`/`types`/`hash`/`limit`/`wait` parameters |
+
+A submission answers `{"created","download"}`: `201` with a `Location` header for a new or revived row, `200` for an existing active download (no field is modified). The download model carries `hash`/`name`/`category`/`state`/`progress`/`version`/`terminal`/`outcome`/`content_path`/`total_size`/`error`/`created_at`/`updated_at`/`completed_at`/`links`. Terminal outcomes are `completed`/`failed`/`cancelled`/`deleted`; `STOPPED` and all in-progress states are non-terminal.
+
+`wait` defaults to `timeout=25s` and accepts `1s` through `25s`. Once the download is terminal it answers `200` with the full model; on timeout it answers `204` with an empty body and the `X-CD211-Download-Version` response header.
+
+Events answer `{"items":[{"cursor","event"}],"next_cursor","has_more"}`. `cursor` is an opaque, versioned base64url cursor; clients persist only the string. Omitting it starts at the oldest retained event; `latest` starts after the current high-water. `types` filters `download.completed` and `download.failed`, while `hash` selects one download; `limit` defaults to `100` and is capped at `500`, and `wait` accepts `0s` through `25s`. Pagination advances over the monotonic event sequence and skips filtered events. Delivery is at-least-once; clients must deduplicate by event ID, and error information in failed events is sanitized, including paths frozen at submission time.
+
+The native API provides only the submit, query, wait, and event-pull operations above — there are **no** control endpoints for retry, cancel, delete, or category mutation. Like the webhook channel, it is for trusted-LAN use: it shares the single-token deployment boundary and offers no abuse resistance for public or multi-tenant exposure.
 
 ### Webhooks
 
