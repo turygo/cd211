@@ -40,10 +40,17 @@ const (
 type Error struct {
 	Operation string
 	Kind      ErrorKind
+	detail    string
 	cause     error
 }
 
-func (e *Error) Error() string { return "clouddrive " + e.Operation + ": " + string(e.Kind) }
+func (e *Error) Error() string {
+	message := "clouddrive " + e.Operation + ": " + string(e.Kind)
+	if e.detail != "" {
+		return message + ": " + e.detail
+	}
+	return message
+}
 func (e *Error) Unwrap() error { return e.cause }
 
 type OfflineState string
@@ -478,7 +485,7 @@ func (c *Client) EnsureCopy(ctx context.Context, spec CopySpec) (CopyTask, error
 		return CopyTask{}, newError("add_copy", ErrorInvalidResponse, nil)
 	}
 	if !result.Success {
-		return c.recheckCopy(ctx, source, destination, newError("add_copy", ErrorPermanent, nil))
+		return c.recheckCopy(ctx, source, destination, newResultError("add_copy", ErrorPermanent, result.GetErrorMessage()))
 	}
 	task, found, inspectErr := c.InspectCopy(ctx, source, destination)
 	if inspectErr != nil {
@@ -634,6 +641,10 @@ func (c *Client) rpcError(operation string, err error) error {
 
 func newError(operation string, kind ErrorKind, cause error) error {
 	return &Error{Operation: operation, Kind: kind, cause: cause}
+}
+
+func newResultError(operation string, kind ErrorKind, detail string) error {
+	return &Error{Operation: operation, Kind: kind, detail: strings.TrimSpace(detail)}
 }
 
 func classify(err error) ErrorKind {

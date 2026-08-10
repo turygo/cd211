@@ -444,6 +444,21 @@ func TestCopyRequestsMappingAndCrashAdoption(t *testing.T) {
 		t.Fatalf("EnsureCopy delayed visibility = (%+v, %v)", delayedTask, err)
 	}
 
+	rejectedRPC := &fakeRPC{}
+	rejectedRPC.getToken = func(_ context.Context, _ *pb.GetTokenRequest) (*pb.JWTToken, error) { return token(base), nil }
+	rejectedRPC.getCopy = func(context.Context, *emptypb.Empty) (*pb.GetCopyTaskResult, error) {
+		return &pb.GetCopyTaskResult{}, nil
+	}
+	rejectedRPC.copyFile = func(context.Context, *pb.CopyFileRequest) (*pb.FileOperationResult, error) {
+		return &pb.FileOperationResult{Success: false, ErrorMessage: " destination directory not found "}, nil
+	}
+	rejectedClient := newTestClient(t, rejectedRPC, func() time.Time { return base })
+	_, err = rejectedClient.EnsureCopy(context.Background(), CopySpec{SourcePath: "/src/item", DestinationPath: "/dst"})
+	assertErrorKind(t, err, "add_copy", ErrorPermanent)
+	if got, want := err.Error(), "clouddrive add_copy: permanent: destination directory not found"; got != want {
+		t.Fatalf("EnsureCopy rejection error = %q, want %q", got, want)
+	}
+
 	var cancelReq *pb.CopyTaskRequest
 	rpc.cancelCopy = func(_ context.Context, req *pb.CopyTaskRequest) (*emptypb.Empty, error) {
 		cancelReq = req
