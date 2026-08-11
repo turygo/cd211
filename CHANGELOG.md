@@ -8,6 +8,10 @@ section using the release version and date.
 
 ## [Unreleased]
 
+### Changed
+
+- Updated Docker CI and publishing actions to Node.js 24-based major versions.
+
 ## [0.3.2] - 2026-08-11
 
 ### Fixed
