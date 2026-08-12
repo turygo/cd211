@@ -11,7 +11,7 @@
           <span class="record-count">{{printf .Str.ShownFormat .TotalRows}}</span>
         </div>
         <div class="page-header-actions">
-          <span class="status-chip {{.CloudStatusClass}}"><span class="status-dot" aria-hidden="true"></span>{{.CloudStatus}}</span>
+          <span class="status-chip {{.CloudStatusClass}}" role="status" aria-label="CloudDrive2 {{.CloudStatus}}" title="CloudDrive2 {{.CloudStatus}}"><span class="status-dot" aria-hidden="true"></span><span aria-hidden="true">{{.CloudStatus}}</span></span>
           <button class="theme-toggle" type="button" data-theme-toggle aria-label="{{.Str.SwitchTheme}}" title="{{.Str.SwitchTheme}}">
             <svg class="theme-icon-sun" viewBox="0 0 16 16" aria-hidden="true">
               <circle cx="8" cy="8" r="2.75"></circle>

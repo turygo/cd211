@@ -511,7 +511,7 @@ func TestDashboardFiltersRouteEvidenceRedactionAndCloudStatus(t *testing.T) {
 	all := fixture.request(http.MethodGet, "/?category=movies", nil, true)
 	requireStatus(t, all, http.StatusOK)
 	body := all.Body.String()
-	requireContains(t, body, "CloudDrive2 online", "115 OFFLINE", "NAS COPY", "LOCAL VERIFY", "is-verified", "Protected upstream details were redacted.", `value="all" selected`)
+	requireContains(t, body, "CloudDrive2 Online", `<span aria-hidden="true">Online</span>`, "115 OFFLINE", "NAS COPY", "LOCAL VERIFY", "is-verified", "Protected upstream details were redacted.", `value="all" selected`)
 	requireAbsent(t, body, "magnet:?", "tracker.invalid", "secret-token", fixture.sid)
 	for _, item := range states {
 		requireContains(t, body, "release-"+item.seed, string(item.state))
@@ -540,7 +540,7 @@ func TestDashboardFiltersRouteEvidenceRedactionAndCloudStatus(t *testing.T) {
 	fixture.cloud.err = errors.New("private upstream detail")
 	unavailable := fixture.request(http.MethodGet, "/", nil, true)
 	requireStatus(t, unavailable, http.StatusOK)
-	requireContains(t, unavailable.Body.String(), "CloudDrive2 unavailable")
+	requireContains(t, unavailable.Body.String(), "CloudDrive2 Issue", `<span aria-hidden="true">Issue</span>`)
 	requireAbsent(t, unavailable.Body.String(), "private upstream detail")
 	if fixture.cloud.calls != 7 {
 		t.Errorf("cloud status calls = %d, want one for each dashboard request", fixture.cloud.calls)
@@ -927,7 +927,7 @@ func TestCloudStatusTimeoutIsBoundedAndPrivate(t *testing.T) {
 	if elapsed < 450*time.Millisecond || elapsed > 2*time.Second {
 		t.Errorf("cloud status timeout elapsed = %s, want bounded near 500ms", elapsed)
 	}
-	requireContains(t, response.Body.String(), "CloudDrive2 unavailable")
+	requireContains(t, response.Body.String(), "CloudDrive2 Issue")
 	requireAbsent(t, response.Body.String(), context.DeadlineExceeded.Error())
 }
 

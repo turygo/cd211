@@ -380,8 +380,8 @@ var stringsEN = Strings{
 
 	TitleDownloads:    "Downloads",
 	ShownFormat:       "%d shown",
-	CloudOnline:       "CloudDrive2 online",
-	CloudUnavailable:  "CloudDrive2 unavailable",
+	CloudOnline:       "Online",
+	CloudUnavailable:  "Issue",
 	FilterView:        "View",
 	FilterCategory:    "Category",
 	Apply:             "Apply",
@@ -709,8 +709,8 @@ var stringsZH = Strings{
 
 	TitleDownloads:    "下载任务",
 	ShownFormat:       "共 %d 条",
-	CloudOnline:       "CloudDrive2 在线",
-	CloudUnavailable:  "CloudDrive2 不可用",
+	CloudOnline:       "在线",
+	CloudUnavailable:  "异常",
 	FilterView:        "视图",
 	FilterCategory:    "分类",
 	Apply:             "应用",

@@ -12,6 +12,10 @@ section using the release version and date.
 
 - Added a system-aware light theme with an accessible dashboard toggle and saved user preference.
 
+### Changed
+
+- Shortened the dashboard CloudDrive2 status to compact localized labels while preserving the full accessible description.
+
 ## [0.3.4] - 2026-08-12
 
 ### Added
