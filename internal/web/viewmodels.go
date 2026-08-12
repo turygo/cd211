@@ -44,6 +44,16 @@ type DownloadsView struct {
 	Categories       []CategoryOption
 	SelectedView     string
 	SelectedCategory string
+	Search           string
+	TotalRows        int
+	PageNumber       int
+	TotalPages       int
+	PageStart        int
+	PageEnd          int
+	HasPrevious      bool
+	HasNext          bool
+	PreviousURL      string
+	NextURL          string
 	CloudStatus      string
 	CloudStatusClass string
 }
@@ -75,6 +85,9 @@ type DownloadRow struct {
 	CloudSource    string
 	ContentPath    string
 	Route          RouteView
+	CanPause       bool
+	CanResume      bool
+	CanRemove      bool
 }
 
 type RouteView struct {
@@ -116,7 +129,7 @@ type DetailView struct {
 	Files           []FileView
 	CanStart        bool
 	CanRetry        bool
-	CanCancel       bool
+	CanPause        bool
 	CanRemove       bool
 }
 
@@ -195,18 +208,19 @@ type CategoryRow struct {
 	UpdatedAt     string
 }
 
-func buildDownloadsView(downloads []domain.Download, categories []domain.Category, selectedView, selectedCategory, csrfToken string, now time.Time, cloudOnline bool, lang Lang) (DownloadsView, error) {
+func buildDownloadsView(downloads []domain.Download, categories []domain.Category, options downloadListOptions, csrfToken string, now time.Time, cloudOnline bool, lang Lang) (DownloadsView, error) {
 	str := tr(lang)
 	page := DownloadsView{
 		PageMeta:         pageMeta(str.TitleDownloads, "downloads", csrfToken, lang),
-		SelectedView:     selectedView,
-		SelectedCategory: selectedCategory,
+		SelectedView:     options.View,
+		SelectedCategory: options.Category,
+		Search:           options.Search,
 		Views: []ViewOption{
-			{Value: "active", Label: str.ViewActive, Active: selectedView == "active"},
-			{Value: "completed", Label: str.ViewCompleted, Active: selectedView == "completed"},
-			{Value: "failed", Label: str.ViewFailed, Active: selectedView == "failed"},
-			{Value: "cancelled", Label: str.ViewCancelled, Active: selectedView == "cancelled"},
-			{Value: "all", Label: str.ViewAll, Active: selectedView == "all"},
+			{Value: "active", Label: str.ViewActive, Active: options.View == "active"},
+			{Value: "completed", Label: str.ViewCompleted, Active: options.View == "completed"},
+			{Value: "failed", Label: str.ViewFailed, Active: options.View == "failed"},
+			{Value: "cancelled", Label: str.ViewCancelled, Active: options.View == "cancelled"},
+			{Value: "all", Label: str.ViewAll, Active: options.View == "all"},
 		},
 	}
 	if cloudOnline {
@@ -217,24 +231,44 @@ func buildDownloadsView(downloads []domain.Download, categories []domain.Categor
 		page.CloudStatusClass = "is-unavailable"
 	}
 	for _, category := range categories {
-		page.Categories = append(page.Categories, CategoryOption{Name: category.Name, Selected: category.Name == selectedCategory})
+		page.Categories = append(page.Categories, CategoryOption{Name: category.Name, Selected: category.Name == options.Category})
 	}
+	search := strings.ToLower(options.Search)
 	for _, download := range downloads {
 		if download.UpdatedAt.IsZero() {
 			return DownloadsView{}, errors.New("download updated time is zero")
 		}
+		if !downloadMatchesView(download, options.View) ||
+			search != "" && !strings.Contains(strings.ToLower(download.Name), search) && !strings.Contains(download.Hash, search) {
+			continue
+		}
 		projection, err := domain.Project(download)
 		if err != nil {
 			return DownloadsView{}, err
-		}
-		if !downloadMatchesView(download, selectedView) {
-			continue
 		}
 		row, err := buildDownloadRow(download, projection, now, str)
 		if err != nil {
 			return DownloadsView{}, err
 		}
 		page.Rows = append(page.Rows, row)
+	}
+	page.TotalRows = len(page.Rows)
+	page.TotalPages = max(1, (page.TotalRows+downloadPageSize-1)/downloadPageSize)
+	page.PageNumber = min(options.Page, page.TotalPages)
+	start := min((page.PageNumber-1)*downloadPageSize, page.TotalRows)
+	end := min(start+downloadPageSize, page.TotalRows)
+	if page.TotalRows > 0 {
+		page.PageStart = start + 1
+		page.PageEnd = end
+	}
+	page.Rows = page.Rows[start:end]
+	page.HasPrevious = page.PageNumber > 1
+	page.HasNext = page.PageNumber < page.TotalPages
+	if page.HasPrevious {
+		page.PreviousURL = downloadListURL(options, page.PageNumber-1)
+	}
+	if page.HasNext {
+		page.NextURL = downloadListURL(options, page.PageNumber+1)
 	}
 	return page, nil
 }
@@ -249,7 +283,7 @@ func buildDownloadRow(download domain.Download, projection domain.Projection, no
 		Name:           download.Name,
 		Category:       displayCategory(download.Category, str),
 		InternalState:  string(download.State),
-		StateLabel:     displayState(download.State, str),
+		StateLabel:     displayDownloadState(download, str),
 		ProjectedState: projection.State,
 		Projected:      percent(projection.Progress),
 		Offline:        percent(download.OfflineProgress),
@@ -259,6 +293,9 @@ func buildDownloadRow(download domain.Download, projection domain.Projection, no
 		CloudSource:    displayPath(download.CloudSourcePath, str),
 		ContentPath:    displayPath(download.ContentPath, str),
 		Route:          buildRoute(download, str),
+		CanPause:       canPause(download),
+		CanResume:      download.State == domain.StateStopped,
+		CanRemove:      download.State.Visible(),
 	}, nil
 }
 
@@ -278,7 +315,7 @@ func buildDetailView(download domain.Download, files []domain.DownloadFile, csrf
 		CloudSourcePath: displayPath(download.CloudSourcePath, str),
 		ContentPath:     displayPath(download.ContentPath, str),
 		InternalState:   string(download.State),
-		StateLabel:      displayState(download.State, str),
+		StateLabel:      displayDownloadState(download, str),
 		ProjectedState:  projection.State,
 		Projected:       percent(projection.Progress),
 		Offline:         percent(download.OfflineProgress),
@@ -293,7 +330,7 @@ func buildDetailView(download domain.Download, files []domain.DownloadFile, csrf
 		Route:           buildRoute(download, str),
 		CanStart:        download.State == domain.StateStopped,
 		CanRetry:        canRetry(download),
-		CanCancel:       canCancel(download.State),
+		CanPause:        canPause(download),
 		CanRemove:       download.State.Visible(),
 	}
 	for _, file := range files {
@@ -391,9 +428,16 @@ func buildRoute(download domain.Download, str *Strings) RouteView {
 		stages[2].Status = str.StatusVerified
 	default:
 		stages[2].Class = "is-halted"
-		stages[2].Status = displayState(download.State, str)
+		stages[2].Status = displayDownloadState(download, str)
 	}
 	return RouteView{Stages: stages, Verified: download.State == domain.StateCompleted, State: string(download.State)}
+}
+
+func displayDownloadState(download domain.Download, str *Strings) string {
+	if download.State == domain.StateCancelRequested && download.PauseRequested {
+		return str.States.Pausing
+	}
+	return displayState(download.State, str)
 }
 
 func displayState(state domain.State, str *Strings) string {
@@ -487,6 +531,19 @@ func retryTarget(download domain.Download) domain.State {
 		return domain.StateWaitingOffline
 	default:
 		return domain.StateSubmittingOffline
+	}
+}
+
+func canPause(download domain.Download) bool {
+	if download.PauseRequested {
+		return false
+	}
+	switch download.State {
+	case domain.StateAccepted, domain.StateSubmittingOffline, domain.StateWaitingOffline,
+		domain.StateSubmittingCopy, domain.StateWaitingCopy, domain.StateVerifyingLocal:
+		return true
+	default:
+		return false
 	}
 }
 

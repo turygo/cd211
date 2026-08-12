@@ -9,6 +9,39 @@ for (const form of document.querySelectorAll("form[data-confirm]")) {
   });
 }
 
+for (const opener of document.querySelectorAll("[data-dialog-open]")) {
+  opener.addEventListener("click", () => {
+    const id = opener.getAttribute("data-dialog-open");
+    const dialog = id ? document.getElementById(id) : null;
+    if (dialog instanceof HTMLDialogElement) {
+      dialog.showModal();
+    }
+  });
+}
+
+for (const closer of document.querySelectorAll("[data-dialog-close]")) {
+  closer.addEventListener("click", () => {
+    const dialog = closer.closest("dialog");
+    if (dialog instanceof HTMLDialogElement) {
+      dialog.close();
+    }
+  });
+}
+
+for (const dialog of document.querySelectorAll("dialog.delete-dialog")) {
+  dialog.addEventListener("click", (event) => {
+    const bounds = dialog.getBoundingClientRect();
+    const outside =
+      event.clientX < bounds.left ||
+      event.clientX > bounds.right ||
+      event.clientY < bounds.top ||
+      event.clientY > bounds.bottom;
+    if (outside) {
+      dialog.close();
+    }
+  });
+}
+
 for (const form of document.querySelectorAll("form[data-auto-submit]")) {
   for (const select of form.querySelectorAll("select")) {
     select.addEventListener("change", () => form.requestSubmit());

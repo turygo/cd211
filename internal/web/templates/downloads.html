@@ -8,12 +8,16 @@
       <header class="page-header">
         <div class="page-title">
           <h1>{{.Str.TitleDownloads}}</h1>
-          <span class="record-count">{{printf .Str.ShownFormat (len .Rows)}}</span>
+          <span class="record-count">{{printf .Str.ShownFormat .TotalRows}}</span>
         </div>
         <span class="status-chip {{.CloudStatusClass}}"><span class="status-dot" aria-hidden="true"></span>{{.CloudStatus}}</span>
       </header>
 
-      <form class="filter-bar" action="/" method="get" data-auto-submit>
+      <form class="filter-bar download-filters" action="/" method="get" data-auto-submit>
+        <label class="filter-field search-field">
+          <span>{{.Str.SearchLabel}}</span>
+          <input name="q" type="search" value="{{.Search}}" placeholder="{{.Str.SearchPlaceholder}}" maxlength="200">
+        </label>
         <label class="filter-field">
           <span>{{.Str.FilterView}}</span>
           <select id="view" name="view">
@@ -33,20 +37,29 @@
       {{if .Rows}}
       <div class="table-wrap" aria-live="polite">
         <table class="download-table">
+          <colgroup>
+            <col class="col-name">
+            <col class="col-state">
+            <col class="col-progress">
+            <col class="col-category">
+            <col class="col-age">
+            <col class="col-actions">
+          </colgroup>
           <thead>
             <tr>
               <th scope="col">{{.Str.ThName}}</th>
               <th scope="col">{{.Str.ThState}}</th>
-              <th scope="col" class="col-progress">{{.Str.ThProgress}}</th>
+              <th scope="col">{{.Str.ThProgress}}</th>
               <th scope="col">{{.Str.ThCategory}}</th>
-              <th scope="col" class="col-age">{{.Str.ThUpdated}}</th>
+              <th scope="col">{{.Str.ThUpdated}}</th>
+              <th scope="col" class="actions-heading">{{.Str.ThActions}}</th>
             </tr>
           </thead>
           <tbody>
             {{range .Rows}}
             <tr>
               <td class="cell-name">
-                <a href="/downloads/{{.Hash}}">{{.Name}}</a>
+                <a class="task-title" href="/downloads/{{.Hash}}" title="{{.Name}}">{{.Name}}</a>
                 <span class="cell-meta"><code>{{.HashPrefix}}</code></span>
                 {{if .Error}}<span class="cell-error">{{.Error}}</span>{{end}}
               </td>
@@ -54,11 +67,70 @@
               <td class="cell-progress">{{template "route-strip" .Route}}</td>
               <td class="cell-category">{{.Category}}</td>
               <td class="cell-age">{{printf $.Str.AgoFormat .Age}}</td>
+              <td class="cell-actions">
+                <div class="task-actions">
+                  {{if .CanPause}}
+                  <form action="/downloads/{{.Hash}}/pause" method="post" data-confirm="{{$.Str.ConfirmPause}}">
+                    <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+                    <input type="hidden" name="return_to" value="{{$.Path}}">
+                    <button class="task-control task-control-primary" type="submit" aria-label="{{$.Str.ActionPause}}" title="{{$.Str.ActionPause}}">
+                      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.25 3.25v9.5M10.75 3.25v9.5"></path></svg>
+                    </button>
+                  </form>
+                  {{else if .CanResume}}
+                  <form action="/downloads/{{.Hash}}/start" method="post">
+                    <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+                    <input type="hidden" name="return_to" value="{{$.Path}}">
+                    <button class="task-control task-control-primary" type="submit" aria-label="{{$.Str.ActionResume}}" title="{{$.Str.ActionResume}}">
+                      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5.25 3.25 7 4.75-7 4.75z"></path></svg>
+                    </button>
+                  </form>
+                  {{end}}
+                  {{if .CanRemove}}
+                  <button class="task-control" type="button" data-dialog-open="delete-{{.Hash}}" aria-label="{{$.Str.ActionMore}}" title="{{$.Str.ActionMore}}">
+                    <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r=".8"></circle><circle cx="8" cy="8" r=".8"></circle><circle cx="13" cy="8" r=".8"></circle></svg>
+                  </button>
+                  <dialog class="delete-dialog" id="delete-{{.Hash}}" aria-labelledby="delete-title-{{.Hash}}">
+                    <div class="delete-dialog-header">
+                      <div>
+                        <span class="dialog-eyebrow">{{$.Str.ActionMore}}</span>
+                        <h2 id="delete-title-{{.Hash}}">{{$.Str.DeleteChoiceTitle}}</h2>
+                      </div>
+                      <button class="dialog-close" type="button" data-dialog-close aria-label="Close">×</button>
+                    </div>
+                    <p class="delete-task-name" title="{{.Name}}">{{.Name}}</p>
+                    <div class="delete-options">
+                      <form action="/downloads/{{.Hash}}/remove" method="post" data-confirm="{{$.Str.ConfirmRemove}}">
+                        <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+                        <input type="hidden" name="return_to" value="{{$.Path}}">
+                        <input type="hidden" name="delete_files" value="false">
+                        <button class="delete-option" type="submit">{{$.Str.ActionRemove}}</button>
+                      </form>
+                      <form action="/downloads/{{.Hash}}/remove" method="post" data-confirm="{{$.Str.ConfirmRemoveFiles}}">
+                        <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+                        <input type="hidden" name="return_to" value="{{$.Path}}">
+                        <input type="hidden" name="delete_files" value="true">
+                        <button class="delete-option is-danger" type="submit">{{$.Str.ActionRemoveFiles}}</button>
+                      </form>
+                    </div>
+                    <p class="delete-note">{{$.Str.RemovalNote}}</p>
+                  </dialog>
+                  {{end}}
+                </div>
+              </td>
             </tr>
             {{end}}
           </tbody>
         </table>
       </div>
+      <nav class="pagination" aria-label="Pagination">
+        <span class="pagination-status">{{printf .Str.PaginationFormat .PageStart .PageEnd .TotalRows}}</span>
+        <div class="pagination-actions">
+          {{if .HasPrevious}}<a class="pagination-link" href="{{.PreviousURL}}">{{.Str.PreviousPage}}</a>{{else}}<span class="pagination-link is-disabled">{{.Str.PreviousPage}}</span>{{end}}
+          <span class="pagination-page">{{.PageNumber}} / {{.TotalPages}}</span>
+          {{if .HasNext}}<a class="pagination-link" href="{{.NextURL}}">{{.Str.NextPage}}</a>{{else}}<span class="pagination-link is-disabled">{{.Str.NextPage}}</span>{{end}}
+        </div>
+      </nav>
       {{else}}
       <section class="empty-state" aria-labelledby="empty-title">
         <h2 id="empty-title">{{.Str.EmptyTitle}}</h2>

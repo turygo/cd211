@@ -15,6 +15,7 @@ const cancelDownload = `-- name: CancelDownload :execrows
 UPDATE downloads
 SET
     state = 'CANCEL_REQUESTED',
+    pause_requested = 0,
     phase_started_at = ?1,
     next_run_at = ?1,
     updated_at = ?1,
@@ -55,7 +56,7 @@ func (q *Queries) DeleteDownloadFiles(ctx context.Context, downloadHash string) 
 }
 
 const getDownload = `-- name: GetDownload :one
-SELECT hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_source_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version
+SELECT hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_source_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version, pause_requested
 FROM downloads
 WHERE hash = ?1
 `
@@ -94,6 +95,7 @@ func (q *Queries) GetDownload(ctx context.Context, hash string) (Download, error
 		&i.CompletedAt,
 		&i.RemovedAt,
 		&i.RowVersion,
+		&i.PauseRequested,
 	)
 	return i, err
 }
@@ -265,7 +267,7 @@ func (q *Queries) InsertDownloadFile(ctx context.Context, arg InsertDownloadFile
 }
 
 const listAllVisibleDownloads = `-- name: ListAllVisibleDownloads :many
-SELECT hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_source_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version
+SELECT hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_source_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version, pause_requested
 FROM downloads
 WHERE removed_at IS NULL OR (state = 'DELETE_REQUESTED' AND last_error IS NOT NULL)
 ORDER BY created_at DESC, hash ASC
@@ -311,6 +313,7 @@ func (q *Queries) ListAllVisibleDownloads(ctx context.Context) ([]Download, erro
 			&i.CompletedAt,
 			&i.RemovedAt,
 			&i.RowVersion,
+			&i.PauseRequested,
 		); err != nil {
 			return nil, err
 		}
@@ -361,7 +364,7 @@ func (q *Queries) ListDownloadFiles(ctx context.Context, downloadHash string) ([
 }
 
 const listVisibleDownloads = `-- name: ListVisibleDownloads :many
-SELECT hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_source_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version
+SELECT hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_source_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version, pause_requested
 FROM downloads
 WHERE category = ?1
   AND (removed_at IS NULL OR (state = 'DELETE_REQUESTED' AND last_error IS NOT NULL))
@@ -408,6 +411,7 @@ func (q *Queries) ListVisibleDownloads(ctx context.Context, category string) ([]
 			&i.CompletedAt,
 			&i.RemovedAt,
 			&i.RowVersion,
+			&i.PauseRequested,
 		); err != nil {
 			return nil, err
 		}
@@ -451,10 +455,44 @@ func (q *Queries) NextDue(ctx context.Context, now sql.NullTime) (sql.NullTime, 
 	return next_due, err
 }
 
+const pauseDownload = `-- name: PauseDownload :execrows
+UPDATE downloads
+SET
+    state = 'CANCEL_REQUESTED',
+    pause_requested = 1,
+    phase_started_at = ?1,
+    next_run_at = ?1,
+    updated_at = ?1,
+    row_version = row_version + 1
+WHERE hash = ?2
+  AND state IN (
+      'ACCEPTED',
+      'SUBMITTING_OFFLINE',
+      'WAITING_OFFLINE',
+      'SUBMITTING_COPY',
+      'WAITING_COPY',
+      'VERIFYING_LOCAL'
+  )
+`
+
+type PauseDownloadParams struct {
+	Now  time.Time `json:"now"`
+	Hash string    `json:"hash"`
+}
+
+func (q *Queries) PauseDownload(ctx context.Context, arg PauseDownloadParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, pauseDownload, arg.Now, arg.Hash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const requestDelete = `-- name: RequestDelete :execrows
 UPDATE downloads
 SET
     state = 'DELETE_REQUESTED',
+    pause_requested = 0,
     delete_files_requested = CASE
         WHEN delete_files_requested = 1 OR ?1 = 1 THEN 1
         ELSE 0
@@ -570,6 +608,7 @@ SET
     lease_owner = NULL,
     attempt_count = 0,
     delete_files_requested = 0,
+    pause_requested = 0,
     created_at = ?20,
     updated_at = ?21,
     completed_at = NULL,
@@ -659,13 +698,16 @@ const startDownload = `-- name: StartDownload :execrows
 UPDATE downloads
 SET
     state = CASE
-        WHEN last_upstream_status = 'revive:retained_content'
-             AND content_path IS NOT NULL
-             AND cloud_source_path IS NOT NULL
+        WHEN cloud_source_path IS NOT NULL
              AND is_multi_file IS NOT NULL
+             AND (content_path IS NOT NULL OR last_upstream_status IN ('copy:COMPLETED', 'revive:retained_content'))
         THEN 'VERIFYING_LOCAL'
+        WHEN cloud_source_path IS NOT NULL
+             AND is_multi_file IS NOT NULL
+        THEN 'SUBMITTING_COPY'
         ELSE 'ACCEPTED'
     END,
+    pause_requested = 0,
     phase_started_at = ?1,
     next_run_at = ?1,
     lease_until = NULL,

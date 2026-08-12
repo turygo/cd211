@@ -399,6 +399,9 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 }
 
 func (s *Scheduler) cancel(ctx context.Context, d *domain.Download, now time.Time) (string, error) {
+	if d.PauseRequested {
+		return s.pause(ctx, d, now)
+	}
 	var err error
 	op := "cancel_offline"
 	if d.CloudSourcePath != "" {
@@ -412,6 +415,39 @@ func (s *Scheduler) cancel(ctx context.Context, d *domain.Download, now time.Tim
 	markCleanupCancelled(d)
 	d.State, d.LastError, d.AttemptCount, d.NextRunAt = domain.StateCancelled, "", 0, nil
 	return op, nil
+}
+
+func (s *Scheduler) pause(ctx context.Context, d *domain.Download, now time.Time) (string, error) {
+	if d.ContentPath != "" || d.LastUpstreamStatus == domain.UpstreamCopyCompleted {
+		d.State, d.LastError, d.AttemptCount, d.NextRunAt = domain.StateStopped, "", 0, nil
+		return "pause_verified_copy", nil
+	}
+	if d.CloudSourcePath == "" {
+		if err := s.cloud.CancelOffline(ctx, d.CloudFolder, d.Hash); err != nil && !notFound(err) {
+			return "pause_offline", s.cleanupFailure(d, err, "cancel_offline")
+		}
+		d.OfflineProgress, d.CopyProgress, d.QbitProgress = 0, 0, 0
+		d.LastUpstreamStatus = ""
+		d.State, d.LastError, d.AttemptCount, d.NextRunAt = domain.StateStopped, "", 0, nil
+		return "pause_offline", nil
+	}
+	if err := s.cloud.CancelCopy(ctx, d.CloudSourcePath, d.SavePath); err != nil && !notFound(err) {
+		return "pause_copy", s.cleanupFailure(d, err, "cancel_copy")
+	}
+	destinationName := d.DestinationName
+	if destinationName == "" {
+		destinationName = d.Name
+	}
+	if err := s.files.Delete(filepath.Join(d.SavePath, destinationName), d.SavePath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		d.LastError = "local deletion failed"
+		d.AttemptCount++
+		d.NextRunAt = nil
+		return "pause_copy", nil
+	}
+	d.CopyProgress, d.QbitProgress = 0, 0.9
+	d.LastUpstreamStatus = domain.UpstreamOfflineFinished
+	d.State, d.LastError, d.AttemptCount, d.NextRunAt = domain.StateStopped, "", 0, nil
+	return "pause_copy", nil
 }
 
 func (s *Scheduler) delete(ctx context.Context, d *domain.Download, now time.Time) (string, error) {

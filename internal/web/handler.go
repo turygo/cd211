@@ -32,9 +32,11 @@ import (
 )
 
 const (
-	formLimit          int64 = 64 << 10
-	cloudStatusTimeout       = 500 * time.Millisecond
-	minPasswordLength        = 8
+	formLimit               int64 = 64 << 10
+	cloudStatusTimeout            = 500 * time.Millisecond
+	minPasswordLength             = 8
+	downloadPageSize              = 25
+	maxDownloadSearchLength       = 200
 )
 
 //go:embed templates/*.html static/app.css static/app.js
@@ -48,6 +50,7 @@ type Repository interface {
 	ListCategories(context.Context) ([]domain.Category, error)
 	UpsertCategory(context.Context, domain.Category) (domain.Category, error)
 	Start(context.Context, string, time.Time) error
+	Pause(context.Context, string, time.Time) error
 	Retry(context.Context, string, domain.State, time.Time) error
 	Cancel(context.Context, string, time.Time) error
 	RequestDelete(context.Context, []string, bool, time.Time) error
@@ -197,6 +200,7 @@ func New(config Config, credentials Credentials, repo Repository, sessions *sess
 	mux.Handle("POST /settings/api-token/rotate", h.auth(h.apiTokenRotate, true))
 	mux.Handle("POST /settings/api-token/revoke", h.auth(h.apiTokenRevoke, true))
 	mux.Handle("POST /downloads/{hash}/start", h.auth(h.start, true))
+	mux.Handle("POST /downloads/{hash}/pause", h.auth(h.pause, true))
 	mux.Handle("POST /downloads/{hash}/retry", h.auth(h.retry, true))
 	mux.Handle("POST /downloads/{hash}/cancel", h.auth(h.cancel, true))
 	mux.Handle("POST /downloads/{hash}/remove", h.auth(h.remove, true))
@@ -261,7 +265,7 @@ func routeMethod(requestPath, requestMethod string) (string, bool) {
 	}
 	if len(parts) == 3 && parts[0] == "downloads" && parts[1] != "" {
 		switch parts[2] {
-		case "start", "retry", "cancel", "remove":
+		case "start", "pause", "retry", "cancel", "remove":
 			return http.MethodPost, true
 		}
 	}
@@ -474,30 +478,14 @@ func sidCookie(value string, expired, secure bool) *http.Cookie {
 }
 
 func (h *handler) downloads(w http.ResponseWriter, r *http.Request) {
-	query := r.URL.Query()
-	viewValues, hasView := query["view"]
-	if hasView && len(viewValues) != 1 {
-		plain(w, http.StatusBadRequest, "Bad Request\n")
-		return
-	}
-	view := "all"
-	if hasView {
-		view = viewValues[0]
-	}
-	if !validDownloadView(view) {
-		plain(w, http.StatusBadRequest, "Bad Request\n")
-		return
-	}
-	categoryValues, hasCategory := query["category"]
-	if hasCategory && len(categoryValues) != 1 {
+	options, ok := parseDownloadListOptions(r.URL.Query())
+	if !ok {
 		plain(w, http.StatusBadRequest, "Bad Request\n")
 		return
 	}
 	var category *string
-	selectedCategory := ""
-	if hasCategory && categoryValues[0] != "" {
-		selectedCategory = categoryValues[0]
-		category = &selectedCategory
+	if options.Category != "" {
+		category = &options.Category
 	}
 	downloads, err := h.repo.ListDownloads(r.Context(), category)
 	if err != nil {
@@ -512,13 +500,82 @@ func (h *handler) downloads(w http.ResponseWriter, r *http.Request) {
 	cloudContext, cancel := context.WithTimeout(r.Context(), cloudStatusTimeout)
 	cloudOnline := h.cloudStatus.Check(cloudContext) == nil
 	cancel()
-	page, err := buildDownloadsView(downloads, categories, view, selectedCategory, h.authSession(r).CSRFToken, h.clock.Now().UTC(), cloudOnline, requestLang(r))
+	page, err := buildDownloadsView(
+		downloads, categories, options, h.authSession(r).CSRFToken,
+		h.clock.Now().UTC(), cloudOnline, requestLang(r),
+	)
 	if err != nil {
 		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 		return
 	}
-	page.Path = r.URL.RequestURI()
+	page.Path = downloadListURL(options, page.PageNumber)
 	h.render(w, http.StatusOK, "downloads", page)
+}
+
+type downloadListOptions struct {
+	View     string
+	Category string
+	Search   string
+	Page     int
+}
+
+func parseDownloadListOptions(query url.Values) (downloadListOptions, bool) {
+	options := downloadListOptions{View: "all", Page: 1}
+	if values, exists := query["view"]; exists {
+		if len(values) != 1 || !validDownloadView(values[0]) {
+			return downloadListOptions{}, false
+		}
+		options.View = values[0]
+	}
+	if values, exists := query["category"]; exists {
+		if len(values) != 1 {
+			return downloadListOptions{}, false
+		}
+		options.Category = values[0]
+	}
+	if values, exists := query["q"]; exists {
+		if len(values) != 1 {
+			return downloadListOptions{}, false
+		}
+		options.Search = strings.TrimSpace(values[0])
+		if len(options.Search) > maxDownloadSearchLength || !utf8.ValidString(options.Search) {
+			return downloadListOptions{}, false
+		}
+	}
+	if values, exists := query["page"]; exists {
+		if len(values) != 1 {
+			return downloadListOptions{}, false
+		}
+		page, err := strconv.Atoi(values[0])
+		if err != nil || page < 1 {
+			return downloadListOptions{}, false
+		}
+		options.Page = page
+	}
+	if !validDownloadView(options.View) {
+		return downloadListOptions{}, false
+	}
+	return options, true
+}
+
+func downloadListURL(options downloadListOptions, page int) string {
+	query := make(url.Values)
+	if options.View != "all" {
+		query.Set("view", options.View)
+	}
+	if options.Category != "" {
+		query.Set("category", options.Category)
+	}
+	if options.Search != "" {
+		query.Set("q", options.Search)
+	}
+	if page > 1 {
+		query.Set("page", strconv.Itoa(page))
+	}
+	if encoded := query.Encode(); encoded != "" {
+		return "/?" + encoded
+	}
+	return "/"
 }
 
 func (h *handler) detail(w http.ResponseWriter, r *http.Request) {
@@ -1063,6 +1120,15 @@ func (h *handler) start(w http.ResponseWriter, r *http.Request) {
 	}, false)
 }
 
+func (h *handler) pause(w http.ResponseWriter, r *http.Request) {
+	h.mutateDownload(w, r, func(download domain.Download, now time.Time) error {
+		if !canPause(download) {
+			return store.ErrInvalidTransition
+		}
+		return h.repo.Pause(r.Context(), download.Hash, now)
+	}, false)
+}
+
 func (h *handler) retry(w http.ResponseWriter, r *http.Request) {
 	h.mutateDownload(w, r, func(download domain.Download, now time.Time) error {
 		if !canRetry(download) {
@@ -1099,6 +1165,15 @@ func (h *handler) mutateDownload(w http.ResponseWriter, r *http.Request, mutatio
 		plain(w, http.StatusBadRequest, "Bad Request\n")
 		return
 	}
+	defaultReturn := "/downloads/" + hash
+	if remove {
+		defaultReturn = "/"
+	}
+	returnTo, ok := downloadMutationReturnTo(r, defaultReturn)
+	if !ok {
+		plain(w, http.StatusBadRequest, "Bad Request\n")
+		return
+	}
 	download, err := h.repo.GetDownload(r.Context(), hash)
 	if err != nil {
 		repositoryError(w, err)
@@ -1114,11 +1189,26 @@ func (h *handler) mutateDownload(w http.ResponseWriter, r *http.Request, mutatio
 		return
 	}
 	h.waker.Wake()
-	if remove {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
-		return
+	http.Redirect(w, r, returnTo, http.StatusSeeOther)
+}
+
+func downloadMutationReturnTo(r *http.Request, fallback string) (string, bool) {
+	values, exists := r.PostForm["return_to"]
+	if !exists {
+		return fallback, true
 	}
-	http.Redirect(w, r, "/downloads/"+download.Hash, http.StatusSeeOther)
+	if len(values) != 1 {
+		return "", false
+	}
+	target, err := url.ParseRequestURI(values[0])
+	if err != nil || target.IsAbs() || target.Host != "" || target.Path != "/" || target.Fragment != "" {
+		return "", false
+	}
+	options, ok := parseDownloadListOptions(target.Query())
+	if !ok {
+		return "", false
+	}
+	return downloadListURL(options, options.Page), true
 }
 
 func (h *handler) authSession(r *http.Request) session.Session {

@@ -300,9 +300,10 @@ func (s *Store) SetCategory(ctx context.Context, hash, category string, now time
 	return nil
 }
 
-// Start schedules a stopped download; starting an accepted download is
-// idempotent. Only a real STOPPED -> ACCEPTED|VERIFYING_LOCAL transition
-// emits download.state_changed.
+// Start schedules a stopped download and is idempotent while that start is
+// entering its first resumable phase. Only a real STOPPED ->
+// ACCEPTED|SUBMITTING_COPY|VERIFYING_LOCAL transition emits
+// download.state_changed.
 func (s *Store) Start(ctx context.Context, hash string, now time.Time) error {
 	if now.IsZero() {
 		return errors.New("start time is required")
@@ -323,8 +324,8 @@ func (s *Store) Start(ctx context.Context, hash string, now time.Time) error {
 		if getErr != nil {
 			return getErr
 		}
-		if download.State == domain.StateAccepted ||
-			(download.State == domain.StateVerifyingLocal && download.LastUpstreamStatus == domain.UpstreamRetainedContent) {
+		if download.State == domain.StateAccepted || download.State == domain.StateSubmittingCopy ||
+			download.State == domain.StateVerifyingLocal {
 			return nil
 		}
 		return ErrInvalidTransition
@@ -408,6 +409,66 @@ func (s *Store) Retry(ctx context.Context, hash string, target domain.State, now
 	}
 	if err := s.commitEventTx(tx, !cleanup); err != nil {
 		return fmt.Errorf("commit retry: %w", err)
+	}
+	return nil
+}
+
+// Pause requests cleanup of active upstream work while retaining enough
+// evidence to resume the workflow from its last completed stage.
+func (s *Store) Pause(ctx context.Context, hash string, now time.Time) error {
+	if now.IsZero() {
+		return errors.New("pause time is required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin pause: %w", err)
+	}
+	queries := s.queries.WithTx(tx)
+	beforeRow, err := queries.GetDownload(ctx, hash)
+	if err != nil {
+		_ = tx.Rollback()
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("read pause download: %w", err)
+	}
+	before, err := downloadFromDB(beforeRow)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	updated, err := queries.PauseDownload(ctx, storedb.PauseDownloadParams{Now: now, Hash: hash})
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("pause download: %w", err)
+	}
+	if updated == 0 {
+		_ = tx.Rollback()
+		row, getErr := s.GetDownload(ctx, hash)
+		if getErr != nil {
+			return getErr
+		}
+		if row.State == domain.StateCancelRequested && row.PauseRequested {
+			return nil
+		}
+		return ErrInvalidTransition
+	}
+	row, err := queries.GetDownload(ctx, hash)
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("read paused download: %w", err)
+	}
+	download, err := downloadFromDB(row)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := emitDownloadEvent(ctx, queries, outbox.EventTypeStateChanged, before.State, download); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := s.commitEventTx(tx, true); err != nil {
+		return fmt.Errorf("commit pause: %w", err)
 	}
 	return nil
 }
@@ -682,7 +743,9 @@ func categoryFromDB(row storedb.Category) (domain.Category, error) {
 // transitions such as Retry can observe rows that are momentarily mid-phase.
 // Callers that need the full domain invariants must use downloadFromDB.
 func downloadRow(row storedb.Download) (domain.Download, error) {
-	if row.IsMultiFile.Valid && row.IsMultiFile.Int64 != 0 && row.IsMultiFile.Int64 != 1 || row.DeleteFilesRequested != 0 && row.DeleteFilesRequested != 1 {
+	if row.IsMultiFile.Valid && row.IsMultiFile.Int64 != 0 && row.IsMultiFile.Int64 != 1 ||
+		row.DeleteFilesRequested != 0 && row.DeleteFilesRequested != 1 ||
+		row.PauseRequested != 0 && row.PauseRequested != 1 {
 		return domain.Download{}, errors.New("stored download boolean is invalid")
 	}
 	sourceKind := domain.SourceKind(row.SourceKind)
@@ -697,7 +760,7 @@ func downloadRow(row storedb.Download) (domain.Download, error) {
 		TotalSize: row.TotalSize, State: state, OfflineProgress: row.OfflineProgress, CopyProgress: row.CopyProgress, QbitProgress: row.QbitProgress,
 		LastUpstreamStatus: nullString(row.LastUpstreamStatus), LastError: nullString(row.LastError),
 		PhaseStartedAt: row.PhaseStartedAt, NextRunAt: nullTime(row.NextRunAt), LeaseUntil: nullTime(row.LeaseUntil), LeaseOwner: nullString(row.LeaseOwner),
-		AttemptCount: row.AttemptCount, DeleteFilesRequested: row.DeleteFilesRequested == 1,
+		AttemptCount: row.AttemptCount, DeleteFilesRequested: row.DeleteFilesRequested == 1, PauseRequested: row.PauseRequested == 1,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, CompletedAt: nullTime(row.CompletedAt), RemovedAt: nullTime(row.RemovedAt), RowVersion: row.RowVersion,
 	}
 	if row.IsMultiFile.Valid {
@@ -752,7 +815,8 @@ func commitClaimParams(claim Claim, download domain.Download) storedb.CommitClai
 		OfflineProgress: download.OfflineProgress, CopyProgress: download.CopyProgress, QbitProgress: download.QbitProgress,
 		LastUpstreamStatus: nullableString(download.LastUpstreamStatus), LastError: nullableString(download.LastError),
 		PhaseStartedAt: download.PhaseStartedAt, NextRunAt: nullableTime(download.NextRunAt), AttemptCount: download.AttemptCount,
-		DeleteFilesRequested: boolInteger(download.DeleteFilesRequested), UpdatedAt: download.UpdatedAt, CompletedAt: nullableTime(download.CompletedAt), RemovedAt: nullableTime(download.RemovedAt),
+		DeleteFilesRequested: boolInteger(download.DeleteFilesRequested), PauseRequested: boolInteger(download.PauseRequested),
+		UpdatedAt: download.UpdatedAt, CompletedAt: nullableTime(download.CompletedAt), RemovedAt: nullableTime(download.RemovedAt),
 		Hash: claim.Download.Hash, ExpectedState: string(claim.State), LeaseOwner: sql.NullString{String: claim.Owner, Valid: true}, ExpectedRowVersion: claim.Version,
 	}
 }

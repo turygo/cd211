@@ -116,6 +116,44 @@ func TestRepositoryListsAndIntents(t *testing.T) {
 	}
 }
 
+func TestStartResumesFromLastCompletedStage(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name      string
+		seed      string
+		status    string
+		content   string
+		wantState domain.State
+	}{
+		{"copy", "4", domain.UpstreamOfflineFinished, "", domain.StateSubmittingCopy},
+		{"verification", "5", domain.UpstreamCopyCompleted, "", domain.StateVerifyingLocal},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := testStore(t)
+			submission := testSubmission(test.seed, now)
+			multi := false
+			submission.Download.State = domain.StateStopped
+			submission.Download.NextRunAt = nil
+			submission.Download.CloudSourcePath = "/cloud/downloads/download-" + test.seed
+			submission.Download.IsMultiFile = &multi
+			submission.Download.LastUpstreamStatus = test.status
+			submission.Download.ContentPath = test.content
+			if _, inserted, err := store.CreateSubmission(ctx, submission); err != nil || !inserted {
+				t.Fatalf("CreateSubmission(): inserted=%t err=%v", inserted, err)
+			}
+			if err := store.Start(ctx, submission.Download.Hash, now.Add(time.Minute)); err != nil {
+				t.Fatalf("Start(): %v", err)
+			}
+			resumed, err := store.GetDownload(ctx, submission.Download.Hash)
+			if err != nil || resumed.State != test.wantState || resumed.PauseRequested {
+				t.Fatalf("resumed download = (%+v, %v), want %s", resumed, err, test.wantState)
+			}
+		})
+	}
+}
+
 func TestCleanupFailureRemainsVisibleAndRetryable(t *testing.T) {
 	ctx := context.Background()
 	store := testStore(t)
@@ -157,13 +195,17 @@ func TestUserIntentPreservesLiveLeaseUntilExternalOperationEnds(t *testing.T) {
 		seed      string
 		mutate    func(*Store, context.Context, string, time.Time) error
 		wantState domain.State
+		wantPause bool
 	}{
+		{"pause", "6", func(store *Store, ctx context.Context, hash string, now time.Time) error {
+			return store.Pause(ctx, hash, now)
+		}, domain.StateCancelRequested, true},
 		{"cancel", "7", func(store *Store, ctx context.Context, hash string, now time.Time) error {
 			return store.Cancel(ctx, hash, now)
-		}, domain.StateCancelRequested},
+		}, domain.StateCancelRequested, false},
 		{"delete", "8", func(store *Store, ctx context.Context, hash string, now time.Time) error {
 			return store.RequestDelete(ctx, []string{hash}, true, now)
-		}, domain.StateDeleteRequested},
+		}, domain.StateDeleteRequested, false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -188,8 +230,8 @@ func TestUserIntentPreservesLiveLeaseUntilExternalOperationEnds(t *testing.T) {
 				t.Fatalf("superseded external commit = %v, want ErrClaimLost", err)
 			}
 			cleanup, err := store.ClaimDue(ctx, "cleanup", now.Add(time.Minute), time.Minute)
-			if err != nil || cleanup == nil || cleanup.Download.State != test.wantState {
-				t.Fatalf("cleanup after lease = (%+v, %v), want %s", cleanup, err, test.wantState)
+			if err != nil || cleanup == nil || cleanup.Download.State != test.wantState || cleanup.Download.PauseRequested != test.wantPause {
+				t.Fatalf("cleanup after lease = (%+v, %v), want %s pause=%t", cleanup, err, test.wantState, test.wantPause)
 			}
 		})
 	}

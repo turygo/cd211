@@ -65,6 +65,7 @@ func TestCanTransitionExhaustive(t *testing.T) {
 		},
 		StateStopped: {
 			StateAccepted:        true,
+			StateSubmittingCopy:  true,
 			StateVerifyingLocal:  true,
 			StateCancelRequested: true,
 			StateDeleteRequested: true,
@@ -112,6 +113,7 @@ func TestCanTransitionExhaustive(t *testing.T) {
 			StateVerifyingLocal:    true,
 		},
 		StateCancelRequested: {
+			StateStopped:         true,
 			StateCancelled:       true,
 			StateDeleteRequested: true,
 		},

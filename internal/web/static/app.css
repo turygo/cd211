@@ -37,6 +37,8 @@
 
 * { box-sizing: border-box; }
 
+[hidden] { display: none !important; }
+
 html { height: 100%; }
 
 body {
@@ -251,6 +253,10 @@ a:hover { color: var(--accent-hover); }
   margin-bottom: 16px;
 }
 
+.download-filters { align-items: end; }
+.search-field { flex: 1 1 260px; max-width: 420px; }
+.search-field input { width: 100%; }
+
 .filter-field {
   display: flex;
   flex-direction: column;
@@ -263,6 +269,7 @@ a:hover { color: var(--accent-hover); }
 /* ---------- Controls ---------- */
 
 input[type="text"],
+input[type="search"],
 input[type="password"],
 select {
   appearance: none;
@@ -333,6 +340,18 @@ input:focus, select:focus {
 
 .table-wrap { overflow-x: auto; }
 
+.download-table {
+  min-width: 980px;
+  table-layout: fixed;
+}
+
+.download-table .col-name { width: 30%; }
+.download-table .col-state { width: 150px; }
+.download-table .col-progress { width: 230px; }
+.download-table .col-category { width: 110px; }
+.download-table .col-age { width: 100px; }
+.download-table .col-actions { width: 86px; }
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -358,8 +377,18 @@ td {
 
 tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
 
-.cell-name { min-width: 260px; }
-.cell-name a { font-weight: 510; overflow-wrap: anywhere; }
+.cell-name {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.task-title {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 510;
+}
 
 .cell-meta {
   display: block;
@@ -383,6 +412,203 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
 .cell-progress .stage-status { display: none; }
 .cell-progress .stage-strip { gap: 6px; }
 .cell-index, .cell-size, .col-size { font-family: var(--font-mono); font-size: 12px; white-space: nowrap; }
+
+.actions-heading {
+  position: sticky;
+  right: 0;
+  z-index: 2;
+  background: var(--bg-primary);
+  box-shadow: -12px 0 16px -16px rgba(0, 0, 0, 0.9);
+  text-align: right;
+}
+
+.cell-actions {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  vertical-align: middle;
+  background: var(--bg-primary);
+  box-shadow: -12px 0 16px -16px rgba(0, 0, 0, 0.9);
+}
+
+tbody tr:hover .cell-actions { background: #0d0e10; }
+
+.task-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.task-actions form { margin: 0; }
+
+.task-control {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  place-items: center;
+  color: var(--text-tertiary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: color 0.1s ease, background-color 0.1s ease, border-color 0.1s ease;
+}
+
+.task-control:hover {
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  border-color: var(--border-strong);
+}
+
+.task-control-primary {
+  color: #a1a8f0;
+  border-color: rgba(94, 106, 210, 0.32);
+  background: rgba(94, 106, 210, 0.08);
+}
+
+.task-control-primary:hover {
+  color: #c3c8ff;
+  border-color: rgba(94, 106, 210, 0.56);
+  background: rgba(94, 106, 210, 0.18);
+}
+
+.task-control svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.4;
+}
+
+.task-control svg circle { fill: currentColor; stroke: none; }
+
+.delete-dialog {
+  width: min(400px, calc(100vw - 32px));
+  margin: auto;
+  padding: 18px;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.62);
+}
+
+.delete-dialog::backdrop {
+  background: rgba(3, 4, 5, 0.72);
+  backdrop-filter: blur(2px);
+}
+
+.delete-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.dialog-eyebrow {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--text-quaternary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.delete-dialog h2 {
+  margin: 0;
+  font-size: 17px;
+  line-height: 23px;
+}
+
+.dialog-close {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--text-tertiary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font: inherit;
+  font-size: 20px;
+}
+
+.dialog-close:hover { color: var(--text-primary); background: var(--bg-elevated); }
+
+.delete-task-name {
+  margin: 14px 0;
+  padding: 9px 10px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.delete-options {
+  display: grid;
+  gap: 8px;
+}
+
+.delete-option {
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 10px;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 510;
+  text-align: left;
+}
+
+.delete-option:hover { color: var(--text-primary); border-color: rgba(226, 228, 231, 0.3); }
+.delete-option.is-danger { color: var(--danger); background: rgba(235, 87, 87, 0.06); border-color: rgba(235, 87, 87, 0.32); }
+.delete-option.is-danger:hover { background: rgba(235, 87, 87, 0.12); border-color: rgba(235, 87, 87, 0.52); }
+
+.delete-note {
+  margin: 12px 0 0;
+  color: var(--text-quaternary);
+  font-size: 11px;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 12px 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.pagination-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pagination-link {
+  min-width: 62px;
+  padding: 4px 8px;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  text-align: center;
+}
+
+.pagination-link:hover { color: var(--text-primary); background: var(--bg-elevated); }
+.pagination-link.is-disabled { color: var(--text-quaternary); border-color: var(--border); cursor: default; }
+.pagination-page { min-width: 54px; color: var(--text-quaternary); font-family: var(--font-mono); text-align: center; }
 .cell-size, .col-size { text-align: right; }
 
 /* ---------- State badge ---------- */
@@ -1181,6 +1407,9 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
   .cell-progress .stage-head { display: none; }
   .cell-progress, .col-progress { min-width: 130px; width: 130px; }
   .cell-name { min-width: 180px; }
+  .download-table { min-width: 860px; }
+  .download-table .col-name { width: 220px; }
+  .download-table .col-state { width: 130px; }
 }
 
 @media (max-width: 768px) {
@@ -1204,6 +1433,8 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
 
   .page-header { flex-wrap: wrap; }
   .filter-bar { flex-wrap: wrap; }
+  .search-field { flex-basis: 100%; max-width: none; }
+  .pagination { align-items: flex-start; flex-direction: column; }
   .detail-list div { grid-template-columns: 1fr; gap: 2px; }
 
   .path-flow-track {

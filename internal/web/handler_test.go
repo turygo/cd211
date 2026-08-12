@@ -77,6 +77,13 @@ func (repo *recordingRepository) Start(ctx context.Context, hash string, now tim
 	return repo.Store.Start(ctx, hash, now)
 }
 
+func (repo *recordingRepository) Pause(ctx context.Context, hash string, now time.Time) error {
+	if repo.actionError != nil {
+		return repo.actionError
+	}
+	return repo.Store.Pause(ctx, hash, now)
+}
+
 func (repo *recordingRepository) Retry(ctx context.Context, hash string, target domain.State, now time.Time) error {
 	repo.retryTargets = append(repo.retryTargets, target)
 	if repo.actionError != nil {
@@ -206,7 +213,10 @@ func (fixture *webFixture) post(target string, values url.Values) *httptest.Resp
 
 func (fixture *webFixture) seedDownload(seed string, target domain.State, configure func(*domain.Download)) domain.Download {
 	fixture.t.Helper()
-	hash := strings.Repeat(seed, 40)
+	hash := seed
+	if len(hash) != 40 {
+		hash = strings.Repeat(seed, 40)
+	}
 	now := fixture.clock.now.Add(-10 * time.Minute)
 	download := domain.Download{
 		Hash: hash, Name: "release-" + seed, SourceKind: domain.SourceMagnet,
@@ -537,6 +547,44 @@ func TestDashboardFiltersRouteEvidenceRedactionAndCloudStatus(t *testing.T) {
 	}
 }
 
+func TestDashboardSearchPaginationAndInlineReturn(t *testing.T) {
+	fixture := newWebFixture(t)
+	var last domain.Download
+	for index := 1; index <= 30; index++ {
+		hash := fmt.Sprintf("%040x", index)
+		last = fixture.seedDownload(hash, domain.StateStopped, func(download *domain.Download) {
+			download.Name = fmt.Sprintf("alpha-release-%02d-with-a-long-title", index)
+		})
+	}
+
+	first := fixture.request(http.MethodGet, "/?q=alpha", nil, true)
+	requireStatus(t, first, http.StatusOK)
+	firstBody := first.Body.String()
+	if count := strings.Count(firstBody, `class="task-title"`); count != downloadPageSize {
+		t.Fatalf("first page rows = %d, want %d", count, downloadPageSize)
+	}
+	requireContains(t, firstBody, "30 shown", "1–25 of 30", `title="alpha-release-01-with-a-long-title"`, `href="/?page=2&amp;q=alpha"`)
+
+	second := fixture.request(http.MethodGet, "/?q=alpha&page=2", nil, true)
+	requireStatus(t, second, http.StatusOK)
+	if count := strings.Count(second.Body.String(), `class="task-title"`); count != 5 {
+		t.Fatalf("second page rows = %d, want 5", count)
+	}
+	requireContains(t, second.Body.String(), "26–30 of 30")
+
+	byHash := fixture.request(http.MethodGet, "/?q="+last.Hash, nil, true)
+	requireStatus(t, byHash, http.StatusOK)
+	if count := strings.Count(byHash.Body.String(), `class="task-title"`); count != 1 {
+		t.Fatalf("hash search rows = %d, want 1", count)
+	}
+
+	resumed := fixture.post("/downloads/"+last.Hash+"/start", url.Values{"return_to": {"/?q=alpha&page=2"}})
+	requireStatus(t, resumed, http.StatusSeeOther)
+	if location := resumed.Header().Get("Location"); location != "/?page=2&q=alpha" {
+		t.Errorf("inline action location = %q", location)
+	}
+}
+
 func TestCompletedIsOnlyVerifiedRoute(t *testing.T) {
 	fixture := newWebFixture(t)
 	states := []struct {
@@ -569,10 +617,10 @@ func TestDetailIsRedactedAndExposesOnlyLegalActions(t *testing.T) {
 		present []string
 		absent  []string
 	}{
-		{"a", domain.StateStopped, []string{"/start", "/cancel", "delete_files\" value=\"false", "delete_files\" value=\"true"}, []string{"/retry"}},
-		{"b", domain.StateFailed, []string{"/retry", "delete_files\" value=\"false"}, []string{"/start", "/cancel"}},
-		{"c", domain.StateWaitingCopy, []string{"/cancel", "delete_files\" value=\"true"}, []string{"/start", "/retry"}},
-		{"d", domain.StateCompleted, []string{"delete_files\" value=\"false", "is-verified"}, []string{"/start", "/retry", "/cancel"}},
+		{"a", domain.StateStopped, []string{"/start", "delete_files\" value=\"false", "delete_files\" value=\"true"}, []string{"/retry", "/pause"}},
+		{"b", domain.StateFailed, []string{"/retry", "delete_files\" value=\"false"}, []string{"/start", "/pause"}},
+		{"c", domain.StateWaitingCopy, []string{"/pause", "delete_files\" value=\"true"}, []string{"/start", "/retry", "/cancel"}},
+		{"d", domain.StateCompleted, []string{"delete_files\" value=\"false", "is-verified"}, []string{"/start", "/retry", "/pause"}},
 	}
 	for _, item := range cases {
 		download := fixture.seedDownload(item.seed, item.state, func(download *domain.Download) {
@@ -597,6 +645,17 @@ func TestActionsUseRealRepositoryAndWake(t *testing.T) {
 		stored, _ := fixture.store.GetDownload(context.Background(), download.Hash)
 		if stored.State != domain.StateAccepted || fixture.waker.count != 1 {
 			t.Errorf("start state/wake = %s/%d", stored.State, fixture.waker.count)
+		}
+	})
+
+	t.Run("pause", func(t *testing.T) {
+		fixture := newWebFixture(t)
+		download := fixture.seedDownload("b", domain.StateWaitingOffline, nil)
+		response := fixture.post("/downloads/"+download.Hash+"/pause", nil)
+		requireStatus(t, response, http.StatusSeeOther)
+		stored, _ := fixture.store.GetDownload(context.Background(), download.Hash)
+		if stored.State != domain.StateCancelRequested || !stored.PauseRequested || fixture.waker.count != 1 {
+			t.Errorf("pause state/intent/wake = %s/%t/%d", stored.State, stored.PauseRequested, fixture.waker.count)
 		}
 	})
 

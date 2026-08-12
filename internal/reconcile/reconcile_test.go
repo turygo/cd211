@@ -495,6 +495,75 @@ func TestCancelDeleteAndCancellationDoNotResumeWorkflow(t *testing.T) {
 	}
 }
 
+func TestPauseStopsUpstreamWorkAndRetainsResumeEvidence(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+
+	t.Run("offline", func(t *testing.T) {
+		clock := &fakeClock{now: now}
+		repo := &fakeRepository{}
+		cloud, files := defaults()
+		cancelled := 0
+		cloud.cancelOffline = func(context.Context, string, string) error { cancelled++; return nil }
+		s := testScheduler(t, clock, repo, cloud, files)
+		d := baseDownload(domain.StateCancelRequested, now)
+		d.CloudSourcePath = ""
+		d.PauseRequested = true
+		d.OfflineProgress, d.QbitProgress = 0.4, 0.16
+		d = step(t, s, repo, d)
+		if d.State != domain.StateStopped || !d.PauseRequested || cancelled != 1 ||
+			d.OfflineProgress != 0 || d.QbitProgress != 0 || d.LastUpstreamStatus != "" || d.NextRunAt != nil {
+			t.Fatalf("offline pause = %#v", d)
+		}
+	})
+
+	t.Run("copy", func(t *testing.T) {
+		clock := &fakeClock{now: now}
+		repo := &fakeRepository{}
+		cloud, files := defaults()
+		cancelled, deleted := 0, 0
+		cloud.cancelCopy = func(context.Context, string, string) error { cancelled++; return nil }
+		files.delete = func(content, save string) error {
+			deleted++
+			if content != "/downloads/payload" || save != "/downloads" {
+				t.Fatalf("pause delete roots = %q, %q", content, save)
+			}
+			return nil
+		}
+		s := testScheduler(t, clock, repo, cloud, files)
+		d := baseDownload(domain.StateCancelRequested, now)
+		d.PauseRequested = true
+		d.LastUpstreamStatus = domain.UpstreamCopyScanning
+		d.CopyProgress, d.QbitProgress = 0.5, 0.95
+		d = step(t, s, repo, d)
+		if d.State != domain.StateStopped || cancelled != 1 || deleted != 1 ||
+			d.LastUpstreamStatus != domain.UpstreamOfflineFinished || d.CopyProgress != 0 || d.QbitProgress != 0.9 {
+			t.Fatalf("copy pause = %#v", d)
+		}
+	})
+
+	t.Run("completed copy", func(t *testing.T) {
+		clock := &fakeClock{now: now}
+		repo := &fakeRepository{}
+		cloud, files := defaults()
+		cloud.cancelCopy = func(context.Context, string, string) error {
+			t.Fatal("completed copy was cancelled")
+			return nil
+		}
+		files.delete = func(string, string) error {
+			t.Fatal("completed copy was deleted")
+			return nil
+		}
+		s := testScheduler(t, clock, repo, cloud, files)
+		d := baseDownload(domain.StateCancelRequested, now)
+		d.PauseRequested = true
+		d.LastUpstreamStatus = domain.UpstreamCopyCompleted
+		d = step(t, s, repo, d)
+		if d.State != domain.StateStopped || d.LastUpstreamStatus != domain.UpstreamCopyCompleted {
+			t.Fatalf("completed copy pause = %#v", d)
+		}
+	})
+}
+
 func TestWakeCoalescesAndWaitUsesTimerOrWake(t *testing.T) {
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	clock := &fakeClock{now: now}

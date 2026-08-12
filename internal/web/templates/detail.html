@@ -52,7 +52,7 @@
         <div class="action-bar">
           {{if .CanStart}}<form action="/downloads/{{.Hash}}/start" method="post"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="button button-primary" type="submit">{{.Str.ActionStart}}</button></form>{{end}}
           {{if .CanRetry}}<form action="/downloads/{{.Hash}}/retry" method="post"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="button button-primary" type="submit">{{.Str.ActionRetry}}</button></form>{{end}}
-          {{if .CanCancel}}<form action="/downloads/{{.Hash}}/cancel" method="post" data-confirm="{{.Str.ConfirmCancel}}"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="button button-secondary" type="submit">{{.Str.ActionCancel}}</button></form>{{end}}
+          {{if .CanPause}}<form action="/downloads/{{.Hash}}/pause" method="post" data-confirm="{{.Str.ConfirmPause}}"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="button button-secondary" type="submit">{{.Str.ActionPause}}</button></form>{{end}}
           {{if .CanRemove}}
           <form action="/downloads/{{.Hash}}/remove" method="post" data-confirm="{{.Str.ConfirmRemove}}">
             <input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="delete_files" value="false"><button class="button button-secondary" type="submit">{{.Str.ActionRemove}}</button>

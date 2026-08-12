@@ -131,6 +131,7 @@ SET
     lease_owner = NULL,
     attempt_count = 0,
     delete_files_requested = 0,
+    pause_requested = 0,
     created_at = sqlc.arg(created_at),
     updated_at = sqlc.arg(updated_at),
     completed_at = NULL,
@@ -151,13 +152,16 @@ WHERE hash = sqlc.arg(hash);
 UPDATE downloads
 SET
     state = CASE
-        WHEN last_upstream_status = 'revive:retained_content'
-             AND content_path IS NOT NULL
-             AND cloud_source_path IS NOT NULL
+        WHEN cloud_source_path IS NOT NULL
              AND is_multi_file IS NOT NULL
+             AND (content_path IS NOT NULL OR last_upstream_status IN ('copy:COMPLETED', 'revive:retained_content'))
         THEN 'VERIFYING_LOCAL'
+        WHEN cloud_source_path IS NOT NULL
+             AND is_multi_file IS NOT NULL
+        THEN 'SUBMITTING_COPY'
         ELSE 'ACCEPTED'
     END,
+    pause_requested = 0,
     phase_started_at = sqlc.arg(now),
     next_run_at = sqlc.arg(now),
     lease_until = NULL,
@@ -195,10 +199,30 @@ WHERE hash = sqlc.arg(hash)
   AND state IN ('CANCEL_REQUESTED', 'DELETE_REQUESTED')
   AND last_error IS NOT NULL;
 
+-- name: PauseDownload :execrows
+UPDATE downloads
+SET
+    state = 'CANCEL_REQUESTED',
+    pause_requested = 1,
+    phase_started_at = sqlc.arg(now),
+    next_run_at = sqlc.arg(now),
+    updated_at = sqlc.arg(now),
+    row_version = row_version + 1
+WHERE hash = sqlc.arg(hash)
+  AND state IN (
+      'ACCEPTED',
+      'SUBMITTING_OFFLINE',
+      'WAITING_OFFLINE',
+      'SUBMITTING_COPY',
+      'WAITING_COPY',
+      'VERIFYING_LOCAL'
+  );
+
 -- name: CancelDownload :execrows
 UPDATE downloads
 SET
     state = 'CANCEL_REQUESTED',
+    pause_requested = 0,
     phase_started_at = sqlc.arg(now),
     next_run_at = sqlc.arg(now),
     updated_at = sqlc.arg(now),
@@ -218,6 +242,7 @@ WHERE hash = sqlc.arg(hash)
 UPDATE downloads
 SET
     state = 'DELETE_REQUESTED',
+    pause_requested = 0,
     delete_files_requested = CASE
         WHEN delete_files_requested = 1 OR sqlc.arg(delete_files_requested) = 1 THEN 1
         ELSE 0

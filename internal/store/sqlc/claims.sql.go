@@ -26,7 +26,7 @@ WHERE hash = (
     ORDER BY candidate.next_run_at ASC, candidate.created_at ASC, candidate.hash ASC
     LIMIT 1
 )
-RETURNING hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_source_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version
+RETURNING hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_source_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version, pause_requested
 `
 
 type ClaimDueParams struct {
@@ -69,6 +69,7 @@ func (q *Queries) ClaimDue(ctx context.Context, arg ClaimDueParams) (Download, e
 		&i.CompletedAt,
 		&i.RemovedAt,
 		&i.RowVersion,
+		&i.PauseRequested,
 	)
 	return i, err
 }
@@ -93,16 +94,17 @@ SET
     next_run_at = ?15,
     attempt_count = ?16,
     delete_files_requested = ?17,
-    updated_at = ?18,
-    completed_at = ?19,
-    removed_at = ?20,
+    pause_requested = ?18,
+    updated_at = ?19,
+    completed_at = ?20,
+    removed_at = ?21,
     lease_until = NULL,
     lease_owner = NULL,
     row_version = row_version + 1
-WHERE hash = ?21
-  AND state = ?22
-  AND lease_owner = ?23
-  AND row_version = ?24
+WHERE hash = ?22
+  AND state = ?23
+  AND lease_owner = ?24
+  AND row_version = ?25
 `
 
 type CommitClaimParams struct {
@@ -123,6 +125,7 @@ type CommitClaimParams struct {
 	NextRunAt            sql.NullTime   `json:"next_run_at"`
 	AttemptCount         int64          `json:"attempt_count"`
 	DeleteFilesRequested int64          `json:"delete_files_requested"`
+	PauseRequested       int64          `json:"pause_requested"`
 	UpdatedAt            time.Time      `json:"updated_at"`
 	CompletedAt          sql.NullTime   `json:"completed_at"`
 	RemovedAt            sql.NullTime   `json:"removed_at"`
@@ -151,6 +154,7 @@ func (q *Queries) CommitClaim(ctx context.Context, arg CommitClaimParams) (int64
 		arg.NextRunAt,
 		arg.AttemptCount,
 		arg.DeleteFilesRequested,
+		arg.PauseRequested,
 		arg.UpdatedAt,
 		arg.CompletedAt,
 		arg.RemovedAt,

@@ -83,7 +83,8 @@ func CanTransition(from, to State) bool {
 	case StateAccepted:
 		return to == StateSubmittingOffline || activeExit(to)
 	case StateStopped:
-		return to == StateAccepted || to == StateVerifyingLocal || to == StateCancelRequested || to == StateDeleteRequested
+		return to == StateAccepted || to == StateSubmittingCopy || to == StateVerifyingLocal ||
+			to == StateCancelRequested || to == StateDeleteRequested
 	case StateSubmittingOffline:
 		return to == StateWaitingOffline || activeExit(to)
 	case StateWaitingOffline:
@@ -105,7 +106,7 @@ func CanTransition(from, to State) bool {
 			return false
 		}
 	case StateCancelRequested:
-		return to == StateCancelled || to == StateDeleteRequested
+		return to == StateStopped || to == StateCancelled || to == StateDeleteRequested
 	case StateDeleteRequested:
 		return to == StateDeleted
 	case StateDeleted:

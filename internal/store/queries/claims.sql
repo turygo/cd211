@@ -35,6 +35,7 @@ SET
     next_run_at = sqlc.arg(next_run_at),
     attempt_count = sqlc.arg(attempt_count),
     delete_files_requested = sqlc.arg(delete_files_requested),
+    pause_requested = sqlc.arg(pause_requested),
     updated_at = sqlc.arg(updated_at),
     completed_at = sqlc.arg(completed_at),
     removed_at = sqlc.arg(removed_at),

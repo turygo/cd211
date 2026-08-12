@@ -20,6 +20,7 @@ const langCookie = "LANG"
 type StateLabels struct {
 	Accepted          string
 	Stopped           string
+	Pausing           string
 	SubmittingOffline string
 	WaitingOffline    string
 	SubmittingCopy    string
@@ -51,28 +52,33 @@ type Strings struct {
 	LoginFailed string
 
 	// Downloads list
-	TitleDownloads   string
-	ShownFormat      string // printf with row count
-	CloudOnline      string
-	CloudUnavailable string
-	FilterView       string
-	FilterCategory   string
-	Apply            string
-	AllCategories    string
-	ViewActive       string
-	ViewCompleted    string
-	ViewFailed       string
-	ViewCancelled    string
-	ViewAll          string
-	ThName           string
-	ThState          string
-	ThProgress       string
-	ThCategory       string
-	ThUpdated        string
-	AgoFormat        string // printf with age like "5m"
-	EmptyTitle       string
-	EmptyBody        string
-	States           StateLabels
+	TitleDownloads    string
+	ShownFormat       string // printf with row count
+	CloudOnline       string
+	CloudUnavailable  string
+	FilterView        string
+	FilterCategory    string
+	Apply             string
+	SearchLabel       string
+	SearchPlaceholder string
+	AllCategories     string
+	ViewActive        string
+	ViewCompleted     string
+	ViewFailed        string
+	ViewCancelled     string
+	ViewAll           string
+	ThName            string
+	ThState           string
+	ThProgress        string
+	ThCategory        string
+	ThUpdated         string
+	ThActions         string
+	AgoFormat         string // printf with age like "5m"
+	EmptyTitle        string
+	EmptyBody         string
+	PaginationFormat  string // printf with first row, last row, and total count
+	PreviousPage      string
+	States            StateLabels
 
 	// Route stages
 	Stage115           string
@@ -108,6 +114,11 @@ type Strings struct {
 	Attempts           string
 	RecordedError      string
 	ActionStart        string
+	ActionPause        string
+	ActionResume       string
+	ActionMore         string
+	DeleteChoiceTitle  string
+	ConfirmPause       string
 	ActionRetry        string
 	ActionCancel       string
 	ActionRemove       string
@@ -365,30 +376,36 @@ var stringsEN = Strings{
 	SignIn:      "Sign in",
 	LoginFailed: "The username or password did not match.",
 
-	TitleDownloads:   "Downloads",
-	ShownFormat:      "%d shown",
-	CloudOnline:      "CloudDrive2 online",
-	CloudUnavailable: "CloudDrive2 unavailable",
-	FilterView:       "View",
-	FilterCategory:   "Category",
-	Apply:            "Apply",
-	AllCategories:    "All categories",
-	ViewActive:       "Active",
-	ViewCompleted:    "Completed",
-	ViewFailed:       "Failed",
-	ViewCancelled:    "Cancelled",
-	ViewAll:          "All records",
-	ThName:           "Name",
-	ThState:          "State",
-	ThProgress:       "Progress",
-	ThCategory:       "Category",
-	ThUpdated:        "Updated",
-	AgoFormat:        "%s ago",
-	EmptyTitle:       "No downloads match this filter.",
-	EmptyBody:        "Pick another view or category, or submit a release from Sonarr or Radarr.",
+	TitleDownloads:    "Downloads",
+	ShownFormat:       "%d shown",
+	CloudOnline:       "CloudDrive2 online",
+	CloudUnavailable:  "CloudDrive2 unavailable",
+	FilterView:        "View",
+	FilterCategory:    "Category",
+	Apply:             "Apply",
+	SearchLabel:       "Search",
+	SearchPlaceholder: "Name or hash",
+	AllCategories:     "All categories",
+	ViewActive:        "Active",
+	ViewCompleted:     "Completed",
+	ViewFailed:        "Failed",
+	ViewCancelled:     "Cancelled",
+	ViewAll:           "All records",
+	ThName:            "Name",
+	ThState:           "State",
+	ThProgress:        "Progress",
+	ThCategory:        "Category",
+	ThUpdated:         "Updated",
+	ThActions:         "Actions",
+	AgoFormat:         "%s ago",
+	EmptyTitle:        "No downloads match this filter.",
+	EmptyBody:         "Pick another view or category, or submit a release from Sonarr or Radarr.",
+	PaginationFormat:  "%d–%d of %d",
+	PreviousPage:      "Previous",
 	States: StateLabels{
 		Accepted:          "Accepted",
-		Stopped:           "Stopped",
+		Stopped:           "Paused",
+		Pausing:           "Pausing",
 		SubmittingOffline: "Submitting offline download",
 		WaitingOffline:    "Waiting for offline download",
 		SubmittingCopy:    "Submitting copy",
@@ -433,11 +450,16 @@ var stringsEN = Strings{
 	CompletedLabel:     "Completed",
 	Attempts:           "Attempts",
 	RecordedError:      "Recorded error",
-	ActionStart:        "Start",
+	ActionStart:        "Continue",
+	ActionPause:        "Pause",
+	ActionResume:       "Continue",
 	ActionRetry:        "Retry",
 	ActionCancel:       "Cancel",
+	ActionMore:         "More actions",
+	DeleteChoiceTitle:  "Delete task",
 	ActionRemove:       "Remove record",
 	ActionRemoveFiles:  "Remove + local files",
+	ConfirmPause:       "Pause this task? Active CloudDrive work will be stopped safely.",
 	ConfirmCancel:      "Cancel active work for this transfer?",
 	ConfirmRemove:      "Remove this record? The 115 cloud copy is retained.",
 	ConfirmRemoveFiles: "Remove this record and delete its local files? The 115 cloud copy is retained.",
@@ -682,30 +704,36 @@ var stringsZH = Strings{
 	SignIn:      "登录",
 	LoginFailed: "用户名或密码不正确。",
 
-	TitleDownloads:   "下载任务",
-	ShownFormat:      "共 %d 条",
-	CloudOnline:      "CloudDrive2 在线",
-	CloudUnavailable: "CloudDrive2 不可用",
-	FilterView:       "视图",
-	FilterCategory:   "分类",
-	Apply:            "应用",
-	AllCategories:    "全部分类",
-	ViewActive:       "进行中",
-	ViewCompleted:    "已完成",
-	ViewFailed:       "已失败",
-	ViewCancelled:    "已取消",
-	ViewAll:          "全部记录",
-	ThName:           "名称",
-	ThState:          "状态",
-	ThProgress:       "进度",
-	ThCategory:       "分类",
-	ThUpdated:        "更新时间",
-	AgoFormat:        "%s 前",
-	EmptyTitle:       "没有符合筛选条件的下载任务。",
-	EmptyBody:        "可尝试切换视图或分类，也可以从 Sonarr 或 Radarr 提交新任务。",
+	TitleDownloads:    "下载任务",
+	ShownFormat:       "共 %d 条",
+	CloudOnline:       "CloudDrive2 在线",
+	CloudUnavailable:  "CloudDrive2 不可用",
+	FilterView:        "视图",
+	FilterCategory:    "分类",
+	Apply:             "应用",
+	SearchLabel:       "搜索",
+	SearchPlaceholder: "任务名称或哈希",
+	AllCategories:     "全部分类",
+	ViewActive:        "进行中",
+	ViewCompleted:     "已完成",
+	ViewFailed:        "已失败",
+	ViewCancelled:     "已取消",
+	ViewAll:           "全部记录",
+	ThName:            "名称",
+	ThState:           "状态",
+	ThProgress:        "进度",
+	ThCategory:        "分类",
+	ThUpdated:         "更新时间",
+	ThActions:         "操作",
+	AgoFormat:         "%s 前",
+	EmptyTitle:        "没有符合筛选条件的下载任务。",
+	EmptyBody:         "可尝试切换视图或分类，也可以从 Sonarr 或 Radarr 提交新任务。",
+	PaginationFormat:  "第 %d–%d 条，共 %d 条",
+	PreviousPage:      "上一页",
 	States: StateLabels{
 		Accepted:          "待处理",
-		Stopped:           "已停止",
+		Stopped:           "已暂停",
+		Pausing:           "正在暂停",
 		SubmittingOffline: "正在提交离线下载",
 		WaitingOffline:    "等待离线下载",
 		SubmittingCopy:    "正在提交复制任务",
@@ -749,11 +777,16 @@ var stringsZH = Strings{
 	CompletedLabel:     "完成时间",
 	Attempts:           "尝试次数",
 	RecordedError:      "错误信息",
-	ActionStart:        "开始",
+	ActionStart:        "继续",
+	ActionPause:        "暂停",
+	ActionResume:       "继续",
 	ActionRetry:        "重试",
 	ActionCancel:       "取消",
-	ActionRemove:       "删除记录",
+	ActionMore:         "更多操作",
+	DeleteChoiceTitle:  "删除任务",
+	ActionRemove:       "仅删除任务记录",
 	ActionRemoveFiles:  "删除记录和本地文件",
+	ConfirmPause:       "确定要暂停这个任务吗？系统会安全停止正在进行的 CloudDrive 任务。",
 	ConfirmCancel:      "确定要取消这个任务吗？",
 	ConfirmRemove:      "确定要删除这条记录吗？115 网盘中的副本会保留。",
 	ConfirmRemoveFiles: "确定要删除这条记录及其本地文件吗？115 网盘中的副本会保留。",

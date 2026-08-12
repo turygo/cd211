@@ -8,6 +8,15 @@ section using the release version and date.
 
 ## [Unreleased]
 
+### Added
+
+- Added safe per-task pause and resume controls, with explicit record-only or record-and-local-files deletion choices.
+- Added download name/hash search and 25-row pagination that preserve the active list filters after task actions.
+
+### Changed
+
+- Kept long download names to one line with ellipsis truncation and full-title hover text.
+
 ## [0.3.3] - 2026-08-12
 
 ### Changed

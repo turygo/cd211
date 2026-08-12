@@ -63,6 +63,7 @@ type Download struct {
 	LeaseOwner           string
 	AttemptCount         int64
 	DeleteFilesRequested bool
+	PauseRequested       bool
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
 	CompletedAt          *time.Time
