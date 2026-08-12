@@ -8,9 +8,16 @@ section using the release version and date.
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-08-12
+
 ### Changed
 
+- Reworked the Chinese and English READMEs around user value, current setup, automation features, and a new dashboard hero image.
 - Updated Docker CI and publishing actions to Node.js 24-based major versions.
+
+### Fixed
+
+- Filled unknown download sizes from CloudDrive2 offline task metadata without overwriting known totals.
 
 ## [0.3.2] - 2026-08-11
 
