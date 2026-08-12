@@ -42,6 +42,7 @@ type Strings struct {
 	NavCategories string
 	SignOut       string
 	SwitchLang    string // label of the OTHER language, used on the toggle link
+	SwitchTheme   string
 
 	// Login
 	TitleSignIn string
@@ -368,6 +369,7 @@ var stringsEN = Strings{
 	NavCategories: "Categories",
 	SignOut:       "Sign out",
 	SwitchLang:    "中文",
+	SwitchTheme:   "Switch color theme",
 
 	TitleSignIn: "Sign in",
 	LoginHint:   "Sign in with the operator password set during initial setup.",
@@ -696,6 +698,7 @@ var stringsZH = Strings{
 	NavCategories: "分类管理",
 	SignOut:       "退出登录",
 	SwitchLang:    "English",
+	SwitchTheme:   "切换配色主题",
 
 	TitleSignIn: "登录",
 	LoginHint:   "请使用初始设置时设定的操作员密码登录。",

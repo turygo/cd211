@@ -8,6 +8,10 @@ section using the release version and date.
 
 ## [Unreleased]
 
+### Added
+
+- Added a system-aware light theme with an accessible dashboard toggle and saved user preference.
+
 ## [0.3.4] - 2026-08-12
 
 ### Added

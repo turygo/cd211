@@ -1,5 +1,49 @@
 "use strict";
 
+const themeStorageKey = "cd211-theme";
+const lightThemeQuery = window.matchMedia("(prefers-color-scheme: light)");
+let savedTheme = null;
+
+try {
+  const value = window.localStorage.getItem(themeStorageKey);
+  if (value === "dark" || value === "light") {
+    savedTheme = value;
+  }
+} catch {
+  // Storage can be unavailable in privacy-restricted browser contexts.
+}
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+}
+
+applyTheme(savedTheme || (lightThemeQuery.matches ? "light" : "dark"));
+
+for (const toggle of document.querySelectorAll("[data-theme-toggle]")) {
+  toggle.addEventListener("click", () => {
+    savedTheme = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+    applyTheme(savedTheme);
+    try {
+      window.localStorage.setItem(themeStorageKey, savedTheme);
+    } catch {
+      // The active page still switches theme when persistence is unavailable.
+    }
+  });
+}
+
+lightThemeQuery.addEventListener("change", (event) => {
+  if (!savedTheme) {
+    applyTheme(event.matches ? "light" : "dark");
+  }
+});
+
+window.addEventListener("storage", (event) => {
+  if (event.key === themeStorageKey && (event.newValue === "dark" || event.newValue === "light")) {
+    savedTheme = event.newValue;
+    applyTheme(savedTheme);
+  }
+});
+
 for (const form of document.querySelectorAll("form[data-confirm]")) {
   form.addEventListener("submit", (event) => {
     const message = form.getAttribute("data-confirm");

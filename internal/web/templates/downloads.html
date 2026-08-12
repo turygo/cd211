@@ -10,7 +10,18 @@
           <h1>{{.Str.TitleDownloads}}</h1>
           <span class="record-count">{{printf .Str.ShownFormat .TotalRows}}</span>
         </div>
-        <span class="status-chip {{.CloudStatusClass}}"><span class="status-dot" aria-hidden="true"></span>{{.CloudStatus}}</span>
+        <div class="page-header-actions">
+          <span class="status-chip {{.CloudStatusClass}}"><span class="status-dot" aria-hidden="true"></span>{{.CloudStatus}}</span>
+          <button class="theme-toggle" type="button" data-theme-toggle aria-label="{{.Str.SwitchTheme}}" title="{{.Str.SwitchTheme}}">
+            <svg class="theme-icon-sun" viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="8" cy="8" r="2.75"></circle>
+              <path d="M8 1.25v1.5M8 13.25v1.5M1.25 8h1.5M13.25 8h1.5M3.23 3.23l1.06 1.06M11.71 11.71l1.06 1.06M12.77 3.23l-1.06 1.06M4.29 11.71l-1.06 1.06"></path>
+            </svg>
+            <svg class="theme-icon-moon" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M13.36 10.42A5.75 5.75 0 0 1 5.58 2.64a5.75 5.75 0 1 0 7.78 7.78Z"></path>
+            </svg>
+          </button>
+        </div>
       </header>
 
       <form class="filter-bar download-filters" action="/" method="get" data-auto-submit>
