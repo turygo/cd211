@@ -8,6 +8,8 @@ section using the release version and date.
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-08-12
+
 ### Added
 
 - Added durable structured problem codes for download failures, with localized English/Chinese warnings for automatic retries that show the next retry time and corrective guidance for terminal failures.
