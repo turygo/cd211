@@ -72,7 +72,7 @@
               <td class="cell-name">
                 <a class="task-title" href="/downloads/{{.Hash}}" title="{{.Name}}">{{.Name}}</a>
                 <span class="cell-meta"><code>{{.HashPrefix}}</code></span>
-                {{if .Error}}<span class="cell-error">{{.Error}}</span>{{end}}
+                {{if .Error}}<span class="cell-error{{if .ErrorIsWarning}} is-warning{{end}}">{{.Error}}</span>{{end}}
               </td>
               <td><span class="state-badge" data-state="{{.InternalState}}">{{.StateLabel}}</span></td>
               <td class="cell-progress">{{template "route-strip" .Route}}</td>

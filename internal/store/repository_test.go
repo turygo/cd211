@@ -189,6 +189,57 @@ func TestCleanupFailureRemainsVisibleAndRetryable(t *testing.T) {
 	}
 }
 
+func TestRetryProblemPersistenceAndClear(t *testing.T) {
+	ctx := context.Background()
+	store := testStore(t)
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	submission := testSubmission("a", now)
+	if _, inserted, err := store.CreateSubmission(ctx, submission); err != nil || !inserted {
+		t.Fatalf("CreateSubmission(): inserted=%t err=%v", inserted, err)
+	}
+	claim, err := store.ClaimDue(ctx, "retrying", now, time.Minute)
+	if err != nil || claim == nil {
+		t.Fatalf("ClaimDue() = (%+v, %v)", claim, err)
+	}
+	retried := claim.Download
+	retried.LastError = domain.ProblemText(domain.ProblemCloudCopyNotReady)
+	retried.LastErrorCode = string(domain.ProblemCloudCopyNotReady)
+	retried.AttemptCount = 3
+	nextRun := now.Add(4 * time.Minute)
+	retried.NextRunAt = &nextRun
+	retried.UpdatedAt = now.Add(time.Second)
+	if err := store.CommitClaim(ctx, *claim, retried); err != nil {
+		t.Fatalf("CommitClaim(retry bookkeeping): %v", err)
+	}
+	stored, err := store.GetDownload(ctx, retried.Hash)
+	if err != nil || stored.LastErrorCode != string(domain.ProblemCloudCopyNotReady) ||
+		stored.LastError != domain.ProblemText(domain.ProblemCloudCopyNotReady) ||
+		stored.AttemptCount != 3 || stored.NextRunAt == nil || !stored.NextRunAt.Equal(nextRun) {
+		t.Fatalf("retry problem did not survive SQLite round trip: (%+v, %v)", stored, err)
+	}
+
+	failureClaim, err := store.ClaimDue(ctx, "fail", nextRun, time.Minute)
+	if err != nil || failureClaim == nil {
+		t.Fatalf("ClaimDue(fail) = (%+v, %v)", failureClaim, err)
+	}
+	failed := failureClaim.Download
+	failed.State = domain.StateFailed
+	failed.LastError = domain.ProblemText(domain.ProblemCloudCopyNotReadyTimeout)
+	failed.LastErrorCode = string(domain.ProblemCloudCopyNotReadyTimeout)
+	failed.NextRunAt = nil
+	failed.UpdatedAt = now.Add(2 * time.Minute)
+	if err := store.CommitClaim(ctx, *failureClaim, failed); err != nil {
+		t.Fatalf("CommitClaim(failed): %v", err)
+	}
+	if err := store.Retry(ctx, failed.Hash, domain.StateAccepted, now.Add(3*time.Minute)); err != nil {
+		t.Fatalf("Retry(): %v", err)
+	}
+	retried, err = store.GetDownload(ctx, failed.Hash)
+	if err != nil || retried.LastError != "" || retried.LastErrorCode != "" || retried.AttemptCount != 0 || retried.NextRunAt == nil {
+		t.Fatalf("Retry did not clear code and text: (%+v, %v)", retried, err)
+	}
+}
+
 func TestUserIntentPreservesLiveLeaseUntilExternalOperationEnds(t *testing.T) {
 	tests := []struct {
 		name      string

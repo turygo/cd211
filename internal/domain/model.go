@@ -57,6 +57,7 @@ type Download struct {
 	QbitProgress         float64
 	LastUpstreamStatus   string
 	LastError            string
+	LastErrorCode        string
 	PhaseStartedAt       time.Time
 	NextRunAt            *time.Time
 	LeaseUntil           *time.Time

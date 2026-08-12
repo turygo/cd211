@@ -901,7 +901,7 @@ func classifyTestError(err error) testFailureKind {
 	switch cloudErr.Kind {
 	case clouddrive.ErrorUnauthorized:
 		return failureAuth
-	case clouddrive.ErrorTransient:
+	case clouddrive.ErrorTemporary:
 		if tlsFailure(err) {
 			return failureTLS
 		}

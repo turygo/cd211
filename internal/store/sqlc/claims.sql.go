@@ -26,7 +26,7 @@ WHERE hash = (
     ORDER BY candidate.next_run_at ASC, candidate.created_at ASC, candidate.hash ASC
     LIMIT 1
 )
-RETURNING hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_source_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version, pause_requested
+RETURNING hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_source_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version, pause_requested, last_error_code
 `
 
 type ClaimDueParams struct {
@@ -70,6 +70,7 @@ func (q *Queries) ClaimDue(ctx context.Context, arg ClaimDueParams) (Download, e
 		&i.RemovedAt,
 		&i.RowVersion,
 		&i.PauseRequested,
+		&i.LastErrorCode,
 	)
 	return i, err
 }
@@ -90,21 +91,22 @@ SET
     qbit_progress = ?11,
     last_upstream_status = ?12,
     last_error = ?13,
-    phase_started_at = ?14,
-    next_run_at = ?15,
-    attempt_count = ?16,
-    delete_files_requested = ?17,
-    pause_requested = ?18,
-    updated_at = ?19,
-    completed_at = ?20,
-    removed_at = ?21,
+    last_error_code = ?14,
+    phase_started_at = ?15,
+    next_run_at = ?16,
+    attempt_count = ?17,
+    delete_files_requested = ?18,
+    pause_requested = ?19,
+    updated_at = ?20,
+    completed_at = ?21,
+    removed_at = ?22,
     lease_until = NULL,
     lease_owner = NULL,
     row_version = row_version + 1
-WHERE hash = ?22
-  AND state = ?23
-  AND lease_owner = ?24
-  AND row_version = ?25
+WHERE hash = ?23
+  AND state = ?24
+  AND lease_owner = ?25
+  AND row_version = ?26
 `
 
 type CommitClaimParams struct {
@@ -121,6 +123,7 @@ type CommitClaimParams struct {
 	QbitProgress         float64        `json:"qbit_progress"`
 	LastUpstreamStatus   sql.NullString `json:"last_upstream_status"`
 	LastError            sql.NullString `json:"last_error"`
+	LastErrorCode        sql.NullString `json:"last_error_code"`
 	PhaseStartedAt       time.Time      `json:"phase_started_at"`
 	NextRunAt            sql.NullTime   `json:"next_run_at"`
 	AttemptCount         int64          `json:"attempt_count"`
@@ -150,6 +153,7 @@ func (q *Queries) CommitClaim(ctx context.Context, arg CommitClaimParams) (int64
 		arg.QbitProgress,
 		arg.LastUpstreamStatus,
 		arg.LastError,
+		arg.LastErrorCode,
 		arg.PhaseStartedAt,
 		arg.NextRunAt,
 		arg.AttemptCount,

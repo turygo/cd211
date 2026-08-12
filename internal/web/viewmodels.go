@@ -82,6 +82,7 @@ type DownloadRow struct {
 	Copy           string
 	Age            string
 	Error          string
+	ErrorIsWarning bool
 	CloudSource    string
 	ContentPath    string
 	Route          RouteView
@@ -125,6 +126,7 @@ type DetailView struct {
 	NextRunAt       string
 	AttemptCount    int64
 	Error           string
+	ErrorIsWarning  bool
 	Route           RouteView
 	Files           []FileView
 	CanStart        bool
@@ -277,6 +279,7 @@ func buildDownloadRow(download domain.Download, projection domain.Projection, no
 	if len(download.Hash) < 8 {
 		return DownloadRow{}, errors.New("download hash is too short")
 	}
+	message, warning := problemError(download, str)
 	return DownloadRow{
 		Hash:           download.Hash,
 		HashPrefix:     download.Hash[:8],
@@ -289,7 +292,8 @@ func buildDownloadRow(download domain.Download, projection domain.Projection, no
 		Offline:        percent(download.OfflineProgress),
 		Copy:           percent(download.CopyProgress),
 		Age:            displayAge(now, download.UpdatedAt),
-		Error:          safeError(download, str),
+		Error:          message,
+		ErrorIsWarning: warning,
 		CloudSource:    displayPath(download.CloudSourcePath, str),
 		ContentPath:    displayPath(download.ContentPath, str),
 		Route:          buildRoute(download, str),
@@ -305,6 +309,7 @@ func buildDetailView(download domain.Download, files []domain.DownloadFile, csrf
 		return DetailView{}, err
 	}
 	str := tr(lang)
+	message, warning := problemError(download, str)
 	page := DetailView{
 		PageMeta:        pageMeta(download.Name, "downloads", csrfToken, lang),
 		Hash:            download.Hash,
@@ -326,7 +331,8 @@ func buildDetailView(download domain.Download, files []domain.DownloadFile, csrf
 		CompletedAt:     displayOptionalTime(download.CompletedAt, str.NotCompleted, str),
 		NextRunAt:       displayOptionalTime(download.NextRunAt, str.NotScheduled, str),
 		AttemptCount:    download.AttemptCount,
-		Error:           safeError(download, str),
+		Error:           message,
+		ErrorIsWarning:  warning,
 		Route:           buildRoute(download, str),
 		CanStart:        download.State == domain.StateStopped,
 		CanRetry:        canRetry(download),
@@ -557,15 +563,48 @@ func canCancel(state domain.State) bool {
 	}
 }
 
-func safeError(download domain.Download, str *Strings) string {
-	errorText := domain.SanitizeDownloadError(download)
-	if errorText == "" {
-		return ""
+// problemError renders the operator-facing problem for a download. Known
+// durable problem codes are localized; a known problem on a non-terminal
+// download with a scheduled retry is a warning whose text states that CD211
+// retries automatically and shows the next retry time. Legacy or unknown
+// codes fall back to the sanitized stored text, preserving the message and
+// severity of rows written before problem codes existed.
+func problemError(download domain.Download, str *Strings) (message string, warning bool) {
+	code := domain.ProblemCode(download.LastErrorCode)
+	if !code.Valid() || code == domain.ProblemLegacy {
+		errorText := domain.SanitizeDownloadError(download)
+		if errorText == "" {
+			return "", false
+		}
+		if errorText == domain.RedactedErrorText {
+			return str.RedactedError, false
+		}
+		return errorText, false
 	}
-	if errorText == domain.RedactedErrorText {
-		return str.RedactedError
+	message = str.Problems[code]
+	if message == "" {
+		message = domain.ProblemText(code)
 	}
-	return errorText
+	if activeWorkflowState(download.State) && download.NextRunAt != nil {
+		warning = true
+		message += " " + fmt.Sprintf(str.RetryScheduledFormat, displayTime(*download.NextRunAt, str))
+	}
+	return message, warning
+}
+
+// activeWorkflowState reports whether the row is an active download workflow
+// phase whose problem is retried automatically by the reconciler. Cleanup
+// intent states (CANCEL_REQUESTED / DELETE_REQUESTED) keep their blocked-error
+// presentation and Retry control even when they carry scheduled retry
+// bookkeeping.
+func activeWorkflowState(state domain.State) bool {
+	switch state {
+	case domain.StateAccepted, domain.StateSubmittingOffline, domain.StateWaitingOffline,
+		domain.StateSubmittingCopy, domain.StateWaitingCopy, domain.StateVerifyingLocal:
+		return true
+	default:
+		return false
+	}
 }
 
 func displayAge(now, updated time.Time) string {

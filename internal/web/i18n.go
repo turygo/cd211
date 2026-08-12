@@ -1,6 +1,10 @@
 package web
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/turygo/cd211/internal/domain"
+)
 
 // Lang selects the operator interface language.
 type Lang string
@@ -169,6 +173,15 @@ type Strings struct {
 	NotCompleted  string
 	Uncategorized string
 	RedactedError string
+
+	// Durable download problems
+	// Problems maps stable problem codes to localized operator messages.
+	// RetryingTitle heads the warning notice for an automatic retry;
+	// RetryScheduledFormat renders the automatic-retry statement with the
+	// scheduled next-run time.
+	RetryingTitle        string
+	RetryScheduledFormat string // printf with RFC3339 next-run time
+	Problems             map[domain.ProblemCode]string
 
 	// Password page
 	NavPassword          string
@@ -506,6 +519,32 @@ var stringsEN = Strings{
 	Uncategorized: "Uncategorized",
 	RedactedError: "Protected upstream details were redacted.",
 
+	RetryingTitle:        "Retrying automatically",
+	RetryScheduledFormat: "CD211 will retry automatically. Next retry %s.",
+	Problems: map[domain.ProblemCode]string{
+		domain.ProblemCloudUnreachable:            "CloudDrive2 is unreachable.",
+		domain.ProblemCloudUnreachableTimeout:     "CloudDrive2 stayed unreachable until the copy deadline. Refresh the CloudDrive2 mount and check its connection, then Retry.",
+		domain.ProblemCloudAuthenticationRequired: "CloudDrive2 requires authentication.",
+		domain.ProblemCloudAuthenticationTimeout:  "CloudDrive2 kept rejecting the credentials until the copy deadline. Check the CloudDrive2 login credentials, then Retry.",
+		domain.ProblemCloudCopyNotReady:           "The 115 offline download finished, but CloudDrive2 has not accepted the copy yet. If this persists, refresh the 115 mount and verify the cloud category and NAS staging paths.",
+		domain.ProblemCloudCopyNotReadyTimeout:    "CloudDrive2 did not accept the copy before the deadline. Refresh the 115 mount and verify the cloud category and NAS staging paths, then Retry.",
+		domain.ProblemCloudFolderUnavailable:      "The 115 category folder is unavailable. Check the cloud root and category configuration, then Retry.",
+		domain.ProblemCloudRequestRejected:        "CloudDrive2 rejected the request. Check the configuration, then Retry.",
+		domain.ProblemCloudResponseInvalid:        "CloudDrive2 returned an invalid response. Retry to try the operation again.",
+		domain.ProblemOfflineSubmissionRejected:   "115 rejected the offline download submission. Check the source, then Retry.",
+		domain.ProblemOfflineDownloadFailed:       "The 115 offline download failed. Retry to submit it again.",
+		domain.ProblemOfflineTimeout:              "The 115 offline download did not finish before the deadline. Check the source, then Retry.",
+		domain.ProblemCopyTaskFailed:              "The CloudDrive2 copy task failed. Retry to submit the copy again.",
+		domain.ProblemCopyTimeout:                 "The copy did not finish before the deadline. Refresh the 115 mount and verify the cloud category and NAS staging paths, then Retry.",
+		domain.ProblemDestinationConflict:         "Another download reserved the same destination. Resolve the conflict, then Retry.",
+		domain.ProblemDestinationCollision:        "Content already exists at the destination. Remove it, then Retry.",
+		domain.ProblemLocalVerificationFailed:     "Local content verification failed. Check the shared staging folder, then Retry.",
+		domain.ProblemLocalVerificationTimeout:    "The local content did not appear before the verification deadline. Refresh the 115 mount and the staging folder, then Retry.",
+		domain.ProblemLocalDeleteFailed:           "Local content could not be deleted. Check the staging folder permissions, then Retry.",
+		domain.ProblemWorkflowOperationTimeout:    "A workflow operation exceeded its deadline. CD211 will retry automatically.",
+		domain.ProblemInternalWorkflowError:       "An internal workflow error occurred. Retry to continue.",
+	},
+
 	NavPassword:          "Change password",
 	TitlePassword:        "Change password",
 	PasswordLede:         "The username stays admin. Sonarr and Radarr sign in with the same password, so update their qBittorrent download client entry after changing it.",
@@ -833,6 +872,32 @@ var stringsZH = Strings{
 	NotCompleted:  "未完成",
 	Uncategorized: "未分类",
 	RedactedError: "上游错误包含敏感信息，已脱敏。",
+
+	RetryingTitle:        "自动重试中",
+	RetryScheduledFormat: "CD211 会自动重试。下次重试时间：%s。",
+	Problems: map[domain.ProblemCode]string{
+		domain.ProblemCloudUnreachable:            "无法连接 CloudDrive2。",
+		domain.ProblemCloudUnreachableTimeout:     "复制任务已超时，此前始终无法连接 CloudDrive2。请刷新 CloudDrive2 挂载并检查网络连接，然后重试。",
+		domain.ProblemCloudAuthenticationRequired: "CloudDrive2 拒绝了登录请求。",
+		domain.ProblemCloudAuthenticationTimeout:  "复制任务已超时，CloudDrive2 始终拒绝登录请求。请检查 CloudDrive2 的用户名和密码，然后重试。",
+		domain.ProblemCloudCopyNotReady:           "115 离线下载已完成，但 CloudDrive2 尚未接受复制任务。若该状态持续，请刷新 115 挂载，并确认 115 分类目录和共享暂存目录配置正确。",
+		domain.ProblemCloudCopyNotReadyTimeout:    "等待 CloudDrive2 接受复制任务已超时。请刷新 115 挂载，并确认 115 分类目录和共享暂存目录配置正确，然后重试。",
+		domain.ProblemCloudFolderUnavailable:      "115 分类目录不可用。请检查 115 离线下载根目录和分类配置，然后重试。",
+		domain.ProblemCloudRequestRejected:        "CloudDrive2 拒绝了请求。请检查配置，然后重试。",
+		domain.ProblemCloudResponseInvalid:        "CloudDrive2 返回的响应无效。请重试。",
+		domain.ProblemOfflineSubmissionRejected:   "115 拒绝了离线下载任务。请检查下载来源，然后重试。",
+		domain.ProblemOfflineDownloadFailed:       "115 离线下载失败。请重试，CD211 将重新提交任务。",
+		domain.ProblemOfflineTimeout:              "115 离线下载已超时。请检查下载来源，然后重试。",
+		domain.ProblemCopyTaskFailed:              "CloudDrive2 复制任务失败。请重试，CD211 将重新提交复制任务。",
+		domain.ProblemCopyTimeout:                 "CloudDrive2 复制任务已超时。请刷新 115 挂载，并确认 115 分类目录和共享暂存目录配置正确，然后重试。",
+		domain.ProblemDestinationConflict:         "另一个下载任务已占用相同的目标路径。请先解决任务冲突，然后重试。",
+		domain.ProblemDestinationCollision:        "目标路径下已存在同名内容。请移除该内容，然后重试。",
+		domain.ProblemLocalVerificationFailed:     "本地内容校验失败。请检查共享暂存目录，然后重试。",
+		domain.ProblemLocalVerificationTimeout:    "等待本地内容写入共享暂存目录已超时。请刷新 115 挂载并检查共享暂存目录，然后重试。",
+		domain.ProblemLocalDeleteFailed:           "无法删除本地内容。请检查暂存目录权限，然后重试。",
+		domain.ProblemWorkflowOperationTimeout:    "当前处理步骤已超时。CD211 会自动重试。",
+		domain.ProblemInternalWorkflowError:       "CD211 内部处理出错。请重试。",
+	},
 
 	NavPassword:          "修改密码",
 	TitlePassword:        "修改密码",

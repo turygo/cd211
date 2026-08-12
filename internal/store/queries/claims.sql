@@ -31,6 +31,7 @@ SET
     qbit_progress = sqlc.arg(qbit_progress),
     last_upstream_status = sqlc.arg(last_upstream_status),
     last_error = sqlc.arg(last_error),
+    last_error_code = sqlc.arg(last_error_code),
     phase_started_at = sqlc.arg(phase_started_at),
     next_run_at = sqlc.arg(next_run_at),
     attempt_count = sqlc.arg(attempt_count),

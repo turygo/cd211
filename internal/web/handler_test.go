@@ -325,6 +325,58 @@ func (fixture *webFixture) seedDownload(seed string, target domain.State, config
 	return stored
 }
 
+// seedProblem advances a download through the given transitions, committing a
+// durable structured problem on the final one. It mirrors seedDownload but
+// keeps control of the final NextRunAt, which the retrying-warning
+// presentation depends on.
+func (fixture *webFixture) seedProblem(seed string, states []domain.State, code domain.ProblemCode, nextRun *time.Time) domain.Download {
+	fixture.t.Helper()
+	hash := strings.Repeat(seed, 40)
+	now := fixture.clock.now
+	download := domain.Download{
+		Hash: hash, Name: "release-" + seed, SourceKind: domain.SourceMagnet,
+		SubmissionURI: "magnet:?xt=urn:btih:" + hash,
+		Category:      "movies", CloudFolder: "/cloud/movies/release-" + seed,
+		SavePath:        filepath.Join(fixture.localRoot, "movies"),
+		CloudSourcePath: "/cloud/movies/release-" + seed,
+		OfflineProgress: 1, CopyProgress: 0.9, QbitProgress: 0.9,
+		LastUpstreamStatus: domain.UpstreamOfflineFinished,
+		State:              domain.StateAccepted, PhaseStartedAt: now, NextRunAt: &now,
+		CreatedAt: now.Add(-time.Hour), UpdatedAt: now,
+	}
+	created, inserted, err := fixture.store.CreateSubmission(context.Background(), domain.Submission{Download: download})
+	if err != nil || !inserted {
+		fixture.t.Fatalf("CreateSubmission(%s): inserted=%t err=%v", seed, inserted, err)
+	}
+	for index, state := range states {
+		due := now.Add(time.Duration(index) * time.Second)
+		claim, err := fixture.store.ClaimDue(context.Background(), "seed-"+seed, due, time.Minute)
+		if err != nil || claim == nil {
+			fixture.t.Fatalf("ClaimDue(%s -> %s): claim=%+v err=%v", seed, state, claim, err)
+		}
+		next := claim.Download
+		next.State = state
+		next.UpdatedAt = due
+		next.PhaseStartedAt = due
+		if index == len(states)-1 {
+			next.LastErrorCode = string(code)
+			next.LastError = domain.ProblemText(code)
+			next.AttemptCount = 1
+			next.NextRunAt = nextRun
+		} else {
+			next.NextRunAt = &due
+		}
+		if err := fixture.store.CommitClaim(context.Background(), *claim, next); err != nil {
+			fixture.t.Fatalf("CommitClaim(%s -> %s): %v", seed, state, err)
+		}
+	}
+	stored, err := fixture.store.GetDownload(context.Background(), created.Hash)
+	if err != nil {
+		fixture.t.Fatalf("GetDownload(%s): %v", seed, err)
+	}
+	return stored
+}
+
 func (fixture *webFixture) seedCategory(name string, enabled bool) domain.Category {
 	fixture.t.Helper()
 	created := fixture.clock.now.Add(-24 * time.Hour)
@@ -718,6 +770,88 @@ func TestActionsUseRealRepositoryAndWake(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestProblemWarningVsFailurePresentation(t *testing.T) {
+	fixture := newWebFixture(t)
+	nextRun := fixture.clock.now.Add(4 * time.Minute)
+	retrying := fixture.seedProblem("1", []domain.State{domain.StateSubmittingOffline, domain.StateWaitingOffline, domain.StateSubmittingCopy}, domain.ProblemCloudCopyNotReady, &nextRun)
+	failed := fixture.seedDownload("2", domain.StateFailed, func(download *domain.Download) {
+		download.LastErrorCode = string(domain.ProblemCloudCopyNotReadyTimeout)
+		download.LastError = domain.ProblemText(domain.ProblemCloudCopyNotReadyTimeout)
+	})
+
+	// The retrying row is a warning: it states the automatic retry, the
+	// scheduled next run, and the persistent-failure action, and never
+	// renders internal operation terms.
+	list := fixture.request(http.MethodGet, "/", nil, true)
+	requireStatus(t, list, http.StatusOK)
+	listBody := list.Body.String()
+	requireContains(t, listBody, "The 115 offline download finished, but CloudDrive2 has not accepted the copy yet.", "If this persists, refresh the 115 mount and verify the cloud category and NAS staging paths.", "CD211 will retry automatically. Next retry", nextRun.UTC().Format(time.RFC3339))
+	requireAbsent(t, listBody, "find_file", "add_copy", "permanent", "invalid_response", "cloud_copy_not_ready")
+
+	detail := fixture.request(http.MethodGet, "/downloads/"+retrying.Hash, nil, true)
+	requireStatus(t, detail, http.StatusOK)
+	detailBody := detail.Body.String()
+	requireContains(t, detailBody, "notice-warning", "Retrying automatically", "If this persists, refresh the 115 mount", "CD211 will retry automatically. Next retry")
+	// A retrying active download has no Retry CTA.
+	requireAbsent(t, detailBody, ">Retry</button>")
+
+	// A terminal failure is an error with the corrective action and Retry.
+	failedDetail := fixture.request(http.MethodGet, "/downloads/"+failed.Hash, nil, true)
+	requireStatus(t, failedDetail, http.StatusOK)
+	failedBody := failedDetail.Body.String()
+	requireContains(t, failedBody, "notice-error", ">Retry</button>", "Refresh the 115 mount and verify the cloud category and NAS staging paths")
+	requireAbsent(t, failedBody, "notice-warning", "cloud_copy_not_ready_timeout", "find_file", "add_copy", "permanent", "invalid_response")
+}
+
+func TestProblemLocalizationChinese(t *testing.T) {
+	fixture := newWebFixture(t)
+	nextRun := fixture.clock.now.Add(2 * time.Minute)
+	retrying := fixture.seedProblem("3", []domain.State{domain.StateSubmittingOffline, domain.StateWaitingOffline, domain.StateSubmittingCopy}, domain.ProblemCloudCopyNotReady, &nextRun)
+
+	request := httptest.NewRequest(http.MethodGet, "/downloads/"+retrying.Hash, nil)
+	request.AddCookie(&http.Cookie{Name: "SID", Value: fixture.sid})
+	request.AddCookie(&http.Cookie{Name: langCookie, Value: string(LangZH)})
+	response := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(response, request)
+	requireStatus(t, response, http.StatusOK)
+	body := response.Body.String()
+	requireContains(t, body, "自动重试中", "115 离线下载已完成，但 CloudDrive2 尚未接受复制任务", "刷新 115 挂载", "CD211 会自动重试。下次重试时间：")
+	requireAbsent(t, body, "find_file", "add_copy", "permanent", "invalid_response", "cloud_copy_not_ready")
+}
+
+func TestLegacyProblemRendersStoredText(t *testing.T) {
+	fixture := newWebFixture(t)
+	download := fixture.seedDownload("4", domain.StateFailed, func(download *domain.Download) {
+		download.LastErrorCode = string(domain.ProblemLegacy)
+		download.LastError = "local deletion failed"
+	})
+	detail := fixture.request(http.MethodGet, "/downloads/"+download.Hash, nil, true)
+	requireStatus(t, detail, http.StatusOK)
+	body := detail.Body.String()
+	requireContains(t, body, "notice-error", "local deletion failed")
+	requireAbsent(t, body, "notice-warning", "cloud_copy_not_ready")
+}
+
+func TestCleanupFailurePresentationIsTerminalError(t *testing.T) {
+	fixture := newWebFixture(t)
+	// A structured cleanup failure retains CANCEL_REQUESTED with the problem
+	// and scheduled retry bookkeeping; it must render as a blocked error with
+	// the Retry control, never as an automatic-retry warning.
+	nextRun := fixture.clock.now.Add(2 * time.Minute)
+	blocked := fixture.seedProblem("c", []domain.State{domain.StateCancelRequested}, domain.ProblemCloudRequestRejected, &nextRun)
+
+	detail := fixture.request(http.MethodGet, "/downloads/"+blocked.Hash, nil, true)
+	requireStatus(t, detail, http.StatusOK)
+	body := detail.Body.String()
+	requireContains(t, body, "notice-error", "CloudDrive2 rejected the request. Check the configuration, then Retry.", ">Retry</button>")
+	requireAbsent(t, body, "notice-warning", "Retrying automatically", "will retry automatically", "CD211 会自动重试")
+
+	list := fixture.request(http.MethodGet, "/?view=failed", nil, true)
+	requireStatus(t, list, http.StatusOK)
+	requireContains(t, list.Body.String(), "CloudDrive2 rejected the request. Check the configuration, then Retry.")
+	requireAbsent(t, list.Body.String(), "will retry automatically")
 }
 
 func TestFailedCleanupRemainsVisibleAndRetryable(t *testing.T) {

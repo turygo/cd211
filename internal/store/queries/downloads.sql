@@ -19,6 +19,7 @@ INSERT INTO downloads (
     qbit_progress,
     last_upstream_status,
     last_error,
+    last_error_code,
     phase_started_at,
     next_run_at,
     lease_until,
@@ -50,6 +51,7 @@ INSERT INTO downloads (
     sqlc.arg(qbit_progress),
     sqlc.arg(last_upstream_status),
     sqlc.arg(last_error),
+    sqlc.arg(last_error_code),
     sqlc.arg(phase_started_at),
     sqlc.arg(next_run_at),
     sqlc.arg(lease_until),
@@ -125,6 +127,7 @@ SET
     qbit_progress = sqlc.arg(qbit_progress),
     last_upstream_status = sqlc.narg(last_upstream_status),
     last_error = NULL,
+    last_error_code = NULL,
     phase_started_at = sqlc.arg(phase_started_at),
     next_run_at = sqlc.arg(next_run_at),
     lease_until = NULL,
@@ -153,11 +156,9 @@ UPDATE downloads
 SET
     state = CASE
         WHEN cloud_source_path IS NOT NULL
-             AND is_multi_file IS NOT NULL
              AND (content_path IS NOT NULL OR last_upstream_status IN ('copy:COMPLETED', 'revive:retained_content'))
         THEN 'VERIFYING_LOCAL'
         WHEN cloud_source_path IS NOT NULL
-             AND is_multi_file IS NOT NULL
         THEN 'SUBMITTING_COPY'
         ELSE 'ACCEPTED'
     END,
@@ -176,6 +177,7 @@ UPDATE downloads
 SET
     state = sqlc.arg(state),
     last_error = NULL,
+    last_error_code = NULL,
     attempt_count = 0,
     phase_started_at = sqlc.arg(now),
     next_run_at = sqlc.arg(now),
@@ -190,6 +192,7 @@ WHERE hash = sqlc.arg(hash)
 UPDATE downloads
 SET
     last_error = NULL,
+    last_error_code = NULL,
     attempt_count = 0,
     phase_started_at = sqlc.arg(now),
     next_run_at = sqlc.arg(now),

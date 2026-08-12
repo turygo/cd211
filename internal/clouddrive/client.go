@@ -31,9 +31,22 @@ import (
 type ErrorKind string
 
 const (
-	ErrorTransient       ErrorKind = "transient"
-	ErrorPermanent       ErrorKind = "permanent"
-	ErrorUnauthorized    ErrorKind = "unauthorized"
+	// ErrorTemporary covers transport, deadline, and resource observations
+	// that are safe to retry.
+	ErrorTemporary ErrorKind = "temporary"
+	// ErrorNotFound is a verified gRPC NotFound.
+	ErrorNotFound ErrorKind = "not_found"
+	// ErrorUnauthorized covers Unauthenticated and PermissionDenied.
+	ErrorUnauthorized ErrorKind = "unauthorized"
+	// ErrorRejected covers InvalidArgument, FailedPrecondition,
+	// AlreadyExists, OutOfRange, and successful RPCs whose result reports
+	// failure. It describes a refusal, never absence.
+	ErrorRejected ErrorKind = "rejected"
+	// ErrorInvalidInput covers local pre-RPC validation failures: the caller
+	// supplied a path, hash, or other value that cannot be sent safely.
+	ErrorInvalidInput ErrorKind = "invalid_input"
+	// ErrorInvalidResponse covers malformed, nil, or internally inconsistent
+	// replies that cannot be trusted.
 	ErrorInvalidResponse ErrorKind = "invalid_response"
 )
 
@@ -135,7 +148,7 @@ func Dial(address, username, password string, timeout time.Duration, allowInsecu
 	address = strings.TrimSpace(address)
 	host, _, err := net.SplitHostPort(address)
 	if err != nil || host == "" {
-		return nil, newError("authenticate", ErrorPermanent, nil)
+		return nil, newError("authenticate", ErrorInvalidInput, nil)
 	}
 	transport := credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12, ServerName: host})
 	if allowInsecure {
@@ -156,7 +169,7 @@ func Dial(address, username, password string, timeout time.Duration, allowInsecu
 func New(rpc rpcClient, closer io.Closer, username, password string, timeout time.Duration, now func() time.Time) (*Client, error) {
 	username = strings.TrimSpace(username)
 	if rpc == nil || closer == nil || now == nil || username == "" || strings.TrimSpace(password) == "" || timeout <= 0 {
-		return nil, newError("authenticate", ErrorPermanent, nil)
+		return nil, newError("authenticate", ErrorInvalidInput, nil)
 	}
 	return &Client{rpc: rpc, closer: closer, username: username, password: password, timeout: timeout, now: now}, nil
 }
@@ -183,7 +196,7 @@ func (c *Client) Check(ctx context.Context) error {
 		return newError("system_status", ErrorInvalidResponse, nil)
 	}
 	if !response.IsLogin || !response.SystemReady || response.GetHasError() {
-		return newError("system_status", ErrorTransient, nil)
+		return newError("system_status", ErrorTemporary, nil)
 	}
 	return nil
 }
@@ -199,7 +212,7 @@ func (c *Client) Authenticate(ctx context.Context) error {
 func (c *Client) FindFile(ctx context.Context, fullPath string) (*pb.CloudDriveFile, error) {
 	fullPath, ok := cleanAbsolutePath(fullPath)
 	if !ok || fullPath == "/" {
-		return nil, newError("find_file", ErrorPermanent, nil)
+		return nil, newError("find_file", ErrorInvalidInput, nil)
 	}
 	callCtx, cancel, err := c.authorizedContext(ctx)
 	if err != nil {
@@ -226,7 +239,7 @@ func (c *Client) FindFile(ctx context.Context, fullPath string) (*pb.CloudDriveF
 func (c *Client) ListDirectories(ctx context.Context, fullPath string) ([]Directory, error) {
 	fullPath, ok := cleanAbsolutePath(fullPath)
 	if !ok {
-		return nil, newError("list_directories", ErrorPermanent, nil)
+		return nil, newError("list_directories", ErrorInvalidInput, nil)
 	}
 	callCtx, cancel, err := c.authorizedContext(ctx)
 	if err != nil {
@@ -282,11 +295,11 @@ func (c *Client) CreateDirectory(ctx context.Context, parentPath, name string) (
 	parentPath, parentOK := cleanAbsolutePath(parentPath)
 	name = strings.TrimSpace(name)
 	if !parentOK || name == "" || name == "." || name == ".." || path.Base(name) != name {
-		return Directory{}, newError("create_folder", ErrorPermanent, nil)
+		return Directory{}, newError("create_folder", ErrorInvalidInput, nil)
 	}
 	fullPath := path.Join(parentPath, name)
 	if fullPath == parentPath {
-		return Directory{}, newError("create_folder", ErrorPermanent, nil)
+		return Directory{}, newError("create_folder", ErrorInvalidInput, nil)
 	}
 	if err := c.ensureCloudFolder(ctx, fullPath); err != nil {
 		return Directory{}, err
@@ -297,7 +310,7 @@ func (c *Client) CreateDirectory(ctx context.Context, parentPath, name string) (
 func (c *Client) EnsureOffline(ctx context.Context, spec OfflineSpec) (OfflineTask, error) {
 	folder, ok := cleanAbsolutePath(spec.CloudFolder)
 	if !ok || !validLowerInfoHash(spec.Hash) || strings.TrimSpace(spec.SubmissionURI) == "" {
-		return OfflineTask{}, newError("add_offline", ErrorPermanent, nil)
+		return OfflineTask{}, newError("add_offline", ErrorInvalidInput, nil)
 	}
 	if err := c.ensureCloudFolder(ctx, folder); err != nil {
 		return OfflineTask{}, err
@@ -318,7 +331,7 @@ func (c *Client) EnsureOffline(ctx context.Context, spec OfflineSpec) (OfflineTa
 		return OfflineTask{}, newError("add_offline", ErrorInvalidResponse, nil)
 	}
 	if !result.Success {
-		return c.recheckOffline(ctx, folder, spec.Hash, newError("add_offline", ErrorPermanent, nil))
+		return c.recheckOffline(ctx, folder, spec.Hash, newError("add_offline", ErrorRejected, nil))
 	}
 	task, found, inspectErr := c.InspectOffline(ctx, folder, spec.Hash)
 	if inspectErr != nil {
@@ -332,21 +345,30 @@ func (c *Client) EnsureOffline(ctx context.Context, spec OfflineSpec) (OfflineTa
 
 // ensureCloudFolder creates the offline target folder when CloudDrive2 does not
 // have it yet, because listing or adding offline files under a missing folder
-// fails permanently. Only the leaf is created: a missing parent means CloudRoot
-// itself is misconfigured, and silently building that tree on the cloud drive
-// would hide the mistake.
+// fails permanently. Only a verified not-found lookup may create the leaf; a
+// temporary, auth, rejected, invalid-input, or protocol error is not evidence
+// of absence and must never trigger CreateFolder. Only the leaf is created: a
+// missing parent means CloudRoot itself is misconfigured, and silently
+// building that tree on the cloud drive would hide the mistake.
 func (c *Client) ensureCloudFolder(ctx context.Context, folder string) error {
-	switch file, err := c.FindFile(ctx, folder); {
-	case err == nil && file.GetIsDirectory():
-		return nil
-	case err == nil:
-		return newError("create_folder", ErrorPermanent, nil)
+	file, err := c.FindFile(ctx, folder)
+	if err == nil {
+		if file.GetIsDirectory() {
+			return nil
+		}
+		// A file where the category folder belongs is a durable
+		// configuration conflict, not a missing folder.
+		return newError("create_folder", ErrorRejected, nil)
 	}
-	// path.Dir only equals the input at the filesystem root, which has no parent
-	// to create the folder in.
+	var cloudErr *Error
+	if !errors.As(err, &cloudErr) || cloudErr.Kind != ErrorNotFound {
+		return err
+	}
+	// path.Dir only equals the input at the filesystem root, which has no
+	// parent to create the folder in.
 	parent, name := path.Dir(folder), path.Base(folder)
 	if parent == folder {
-		return newError("create_folder", ErrorPermanent, nil)
+		return newError("create_folder", ErrorInvalidInput, nil)
 	}
 	callCtx, cancel, err := c.authorizedContext(ctx)
 	if err != nil {
@@ -361,7 +383,7 @@ func (c *Client) ensureCloudFolder(ctx context.Context, folder string) error {
 		return newError("create_folder", ErrorInvalidResponse, nil)
 	}
 	if !result.GetResult().GetSuccess() {
-		return c.recheckCloudFolder(ctx, folder, newError("create_folder", ErrorPermanent, nil))
+		return c.recheckCloudFolder(ctx, folder, newError("create_folder", ErrorRejected, nil))
 	}
 	return nil
 }
@@ -392,7 +414,7 @@ func (c *Client) recheckOffline(ctx context.Context, folder, hash string, origin
 func (c *Client) InspectOffline(ctx context.Context, cloudFolder, hash string) (OfflineTask, bool, error) {
 	folder, ok := cleanAbsolutePath(cloudFolder)
 	if !ok || !validLowerInfoHash(hash) {
-		return OfflineTask{}, false, newError("list_offline", ErrorPermanent, nil)
+		return OfflineTask{}, false, newError("list_offline", ErrorInvalidInput, nil)
 	}
 	callCtx, cancel, err := c.authorizedContext(ctx)
 	if err != nil {
@@ -434,7 +456,7 @@ func (c *Client) InspectOffline(ctx context.Context, cloudFolder, hash string) (
 func (c *Client) CancelOffline(ctx context.Context, cloudFolder, hash string) error {
 	folder, ok := cleanAbsolutePath(cloudFolder)
 	if !ok || !validLowerInfoHash(hash) {
-		return newError("cancel_offline", ErrorPermanent, nil)
+		return newError("cancel_offline", ErrorInvalidInput, nil)
 	}
 	callCtx, cancel, err := c.authorizedContext(ctx)
 	if err != nil {
@@ -459,7 +481,7 @@ func (c *Client) CancelOffline(ctx context.Context, cloudFolder, hash string) er
 		if !found {
 			return nil
 		}
-		return newError("cancel_offline", ErrorPermanent, nil)
+		return newError("cancel_offline", ErrorRejected, nil)
 	}
 	return nil
 }
@@ -468,7 +490,7 @@ func (c *Client) EnsureCopy(ctx context.Context, spec CopySpec) (CopyTask, error
 	source, sourceOK := cleanAbsolutePath(spec.SourcePath)
 	destination, destinationOK := cleanAbsolutePath(spec.DestinationPath)
 	if !sourceOK || !destinationOK {
-		return CopyTask{}, newError("add_copy", ErrorPermanent, nil)
+		return CopyTask{}, newError("add_copy", ErrorInvalidInput, nil)
 	}
 	if task, found, err := c.InspectCopy(ctx, source, destination); err != nil || found {
 		return task, err
@@ -486,7 +508,7 @@ func (c *Client) EnsureCopy(ctx context.Context, spec CopySpec) (CopyTask, error
 		return CopyTask{}, newError("add_copy", ErrorInvalidResponse, nil)
 	}
 	if !result.Success {
-		return c.recheckCopy(ctx, source, destination, newResultError("add_copy", ErrorPermanent, result.GetErrorMessage()))
+		return c.recheckCopy(ctx, source, destination, newResultError("add_copy", ErrorRejected, result.GetErrorMessage()))
 	}
 	task, found, inspectErr := c.InspectCopy(ctx, source, destination)
 	if inspectErr != nil {
@@ -516,7 +538,7 @@ func (c *Client) InspectCopy(ctx context.Context, sourcePath, destinationPath st
 	source, sourceOK := cleanAbsolutePath(sourcePath)
 	destination, destinationOK := cleanAbsolutePath(destinationPath)
 	if !sourceOK || !destinationOK {
-		return CopyTask{}, false, newError("list_copy", ErrorPermanent, nil)
+		return CopyTask{}, false, newError("list_copy", ErrorInvalidInput, nil)
 	}
 	callCtx, cancel, err := c.authorizedContext(ctx)
 	if err != nil {
@@ -561,7 +583,7 @@ func (c *Client) CancelCopy(ctx context.Context, sourcePath, destinationPath str
 	source, sourceOK := cleanAbsolutePath(sourcePath)
 	destination, destinationOK := cleanAbsolutePath(destinationPath)
 	if !sourceOK || !destinationOK {
-		return newError("cancel_copy", ErrorPermanent, nil)
+		return newError("cancel_copy", ErrorInvalidInput, nil)
 	}
 	callCtx, cancel, err := c.authorizedContext(ctx)
 	if err != nil {
@@ -650,7 +672,7 @@ func newResultError(operation string, kind ErrorKind, detail string) error {
 
 func classify(err error) ErrorKind {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return ErrorTransient
+		return ErrorTemporary
 	}
 	grpcStatus, ok := status.FromError(err)
 	if !ok {
@@ -658,11 +680,13 @@ func classify(err error) ErrorKind {
 	}
 	switch grpcStatus.Code() {
 	case codes.Canceled, codes.DeadlineExceeded, codes.Unavailable, codes.ResourceExhausted, codes.Aborted, codes.Internal, codes.Unknown:
-		return ErrorTransient
+		return ErrorTemporary
 	case codes.Unauthenticated, codes.PermissionDenied:
 		return ErrorUnauthorized
-	case codes.InvalidArgument, codes.FailedPrecondition, codes.AlreadyExists, codes.NotFound, codes.OutOfRange:
-		return ErrorPermanent
+	case codes.NotFound:
+		return ErrorNotFound
+	case codes.InvalidArgument, codes.FailedPrecondition, codes.AlreadyExists, codes.OutOfRange:
+		return ErrorRejected
 	default:
 		return ErrorInvalidResponse
 	}

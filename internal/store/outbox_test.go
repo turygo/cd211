@@ -363,6 +363,74 @@ func TestDownloadEventEmission(t *testing.T) {
 	})
 }
 
+func TestSameStateRetryBookkeepingEmitsNoEvent(t *testing.T) {
+	// A retrying observation that stays in the same state must not emit
+	// download.failed; only a transition to FAILED does.
+	ctx := context.Background()
+	store := testStore(t)
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	sub := testSubmission("b", now)
+	if _, inserted, err := store.CreateSubmission(ctx, sub); err != nil || !inserted {
+		t.Fatalf("CreateSubmission(): inserted=%t err=%v", inserted, err)
+	}
+	claim, err := store.ClaimDue(ctx, "retrying", now, time.Minute)
+	if err != nil || claim == nil {
+		t.Fatalf("ClaimDue() = (%+v, %v)", claim, err)
+	}
+	next := claim.Download
+	next.LastError = domain.ProblemText(domain.ProblemCloudCopyNotReady)
+	next.LastErrorCode = string(domain.ProblemCloudCopyNotReady)
+	next.AttemptCount = 1
+	nextRun := now.Add(time.Minute)
+	next.NextRunAt = &nextRun
+	next.UpdatedAt = now.Add(time.Second)
+	if err := store.CommitClaim(ctx, *claim, next); err != nil {
+		t.Fatalf("CommitClaim(same-state retry): %v", err)
+	}
+	if events := eventsForDownload(t, store, sub.Download.Hash); len(events) != 1 || events[0].Type != outbox.EventTypeCreated {
+		t.Fatalf("same-state retry bookkeeping emitted %d events, want only created", len(events))
+	}
+}
+
+func TestFailedEventPayloadKeepsV1Shape(t *testing.T) {
+	// The webhook v1 download envelope must not grow additive problem fields:
+	// only the safe English error text is carried for terminal failures.
+	ctx := context.Background()
+	store := testStore(t)
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	sub := testSubmission("c", now)
+	if _, inserted, err := store.CreateSubmission(ctx, sub); err != nil || !inserted {
+		t.Fatalf("CreateSubmission(): inserted=%t err=%v", inserted, err)
+	}
+	claim, err := store.ClaimDue(ctx, "fail", now, time.Minute)
+	if err != nil || claim == nil {
+		t.Fatalf("ClaimDue() = (%+v, %v)", claim, err)
+	}
+	failed := claim.Download
+	failed.State = domain.StateFailed
+	failed.LastError = domain.ProblemText(domain.ProblemCopyTaskFailed)
+	failed.LastErrorCode = string(domain.ProblemCopyTaskFailed)
+	failed.NextRunAt = nil
+	failed.UpdatedAt = now.Add(time.Second)
+	if err := store.CommitClaim(ctx, *claim, failed); err != nil {
+		t.Fatalf("CommitClaim(failed): %v", err)
+	}
+	events := eventsForDownload(t, store, sub.Download.Hash)
+	failedEvent := events[len(events)-1]
+	if failedEvent.Type != outbox.EventTypeFailed {
+		t.Fatalf("last event = %s, want failed", failedEvent.Type)
+	}
+	data := unmarshalPayload(t, failedEvent.Payload)["data"].(map[string]any)
+	for _, field := range []string{"error_code", "next_retry_at"} {
+		if _, present := data[field]; present {
+			t.Errorf("v1 payload contains additive field %q", field)
+		}
+	}
+	if data["error"] != domain.ProblemText(domain.ProblemCopyTaskFailed) {
+		t.Errorf("failed payload error = %v, want canonical text", data["error"])
+	}
+}
+
 func TestCommitClaimTerminalFanoutAndAtomicity(t *testing.T) {
 	ctx := context.Background()
 	store := testStore(t)

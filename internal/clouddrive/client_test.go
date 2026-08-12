@@ -113,12 +113,12 @@ func TestCheckCloudDriveAvailability(t *testing.T) {
 		hasError := true
 		return &pb.CloudDriveSystemInfo{IsLogin: true, SystemReady: true, HasError: &hasError}, nil
 	}
-	assertErrorKind(t, client.Check(context.Background()), "system_status", ErrorTransient)
+	assertErrorKind(t, client.Check(context.Background()), "system_status", ErrorTemporary)
 
 	rpc.systemInfo = func(context.Context, *emptypb.Empty) (*pb.CloudDriveSystemInfo, error) {
 		return nil, status.Error(codes.Unavailable, "private upstream detail")
 	}
-	assertErrorKind(t, client.Check(context.Background()), "system_status", ErrorTransient)
+	assertErrorKind(t, client.Check(context.Background()), "system_status", ErrorTemporary)
 }
 
 func TestAuthenticationMetadataCacheBoundaryConcurrentAndTimeout(t *testing.T) {
@@ -362,14 +362,14 @@ func TestEnsureOfflineCreatesMissingCloudFolder(t *testing.T) {
 		}
 	})
 
-	t.Run("a file where the folder belongs is permanent", func(t *testing.T) {
+	t.Run("a file where the folder belongs is rejected", func(t *testing.T) {
 		rpc, created, adds, _ := newFolderRPC()
 		rpc.findFile = func(_ context.Context, _ *pb.FindFileByPathRequest) (*pb.CloudDriveFile, error) {
 			return &pb.CloudDriveFile{Name: "folder", FullPathName: "/cloud/folder"}, nil
 		}
 		client := newTestClient(t, rpc, func() time.Time { return base })
 		_, err := client.EnsureOffline(context.Background(), spec)
-		assertErrorKind(t, err, "create_folder", ErrorPermanent)
+		assertErrorKind(t, err, "create_folder", ErrorRejected)
 		if *created != 0 || *adds != 0 {
 			t.Fatalf("created = %d, adds = %d, want 0 and 0", *created, *adds)
 		}
@@ -397,11 +397,51 @@ func TestEnsureOfflineCreatesMissingCloudFolder(t *testing.T) {
 		}
 		client := newTestClient(t, rpc, func() time.Time { return base })
 		_, err := client.EnsureOffline(context.Background(), spec)
-		assertErrorKind(t, err, "create_folder", ErrorPermanent)
+		assertErrorKind(t, err, "create_folder", ErrorRejected)
 		if *adds != 0 {
 			t.Fatalf("adds = %d, want 0", *adds)
 		}
 	})
+}
+
+func TestEnsureCloudFolderDoesNotCreateOnNonNotFoundLookupErrors(t *testing.T) {
+	base := time.Date(2026, 8, 6, 0, 0, 0, 0, time.UTC)
+	spec := OfflineSpec{SubmissionURI: "magnet:?xt=urn:btih:x", CloudFolder: "/cloud/folder", Hash: testHash}
+	kinds := []struct {
+		name string
+		err  error
+	}{
+		{"temporary", status.Error(codes.Unavailable, "private upstream detail")},
+		{"unauthorized", status.Error(codes.PermissionDenied, "forbidden")},
+		{"rejected", status.Error(codes.InvalidArgument, "bad request")},
+		{"invalid response", errors.New("non-grpc failure")},
+	}
+	for _, item := range kinds {
+		t.Run(item.name, func(t *testing.T) {
+			created, adds := 0, 0
+			rpc := &fakeRPC{}
+			rpc.getToken = func(_ context.Context, _ *pb.GetTokenRequest) (*pb.JWTToken, error) { return token(base), nil }
+			rpc.findFile = func(_ context.Context, _ *pb.FindFileByPathRequest) (*pb.CloudDriveFile, error) {
+				return nil, item.err
+			}
+			rpc.createFolder = func(_ context.Context, _ *pb.CreateFolderRequest) (*pb.CreateFolderResult, error) {
+				created++
+				return &pb.CreateFolderResult{Result: &pb.FileOperationResult{Success: true}}, nil
+			}
+			rpc.addOffline = func(_ context.Context, _ *pb.AddOfflineFileRequest) (*pb.FileOperationResult, error) {
+				adds++
+				return &pb.FileOperationResult{Success: true}, nil
+			}
+			client := newTestClient(t, rpc, func() time.Time { return base })
+			_, err := client.EnsureOffline(context.Background(), spec)
+			if err == nil {
+				t.Fatalf("EnsureOffline succeeded for a %s lookup error", item.name)
+			}
+			if created != 0 || adds != 0 {
+				t.Fatalf("created = %d, adds = %d, want 0 and 0: a %s lookup error is not evidence of absence", created, adds, item.name)
+			}
+		})
+	}
 }
 
 func TestCopyRequestsMappingAndCrashAdoption(t *testing.T) {
@@ -455,8 +495,8 @@ func TestCopyRequestsMappingAndCrashAdoption(t *testing.T) {
 	}
 	rejectedClient := newTestClient(t, rejectedRPC, func() time.Time { return base })
 	_, err = rejectedClient.EnsureCopy(context.Background(), CopySpec{SourcePath: "/src/item", DestinationPath: "/dst"})
-	assertErrorKind(t, err, "add_copy", ErrorPermanent)
-	if got, want := err.Error(), "clouddrive add_copy: permanent: destination directory not found"; got != want {
+	assertErrorKind(t, err, "add_copy", ErrorRejected)
+	if got, want := err.Error(), "clouddrive add_copy: rejected: destination directory not found"; got != want {
 		t.Fatalf("EnsureCopy rejection error = %q, want %q", got, want)
 	}
 
@@ -533,11 +573,11 @@ func TestSafeErrorsNilResponsesStatusClassificationAndClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = client.FindFile(context.Background(), "/file")
-	assertErrorKind(t, err, "find_file", ErrorTransient)
+	assertErrorKind(t, err, "find_file", ErrorTemporary)
 	if errors.Is(err, errors.New("private request")) {
 		t.Fatal("unexpected unrelated error match")
 	}
-	if err.Error() != "clouddrive find_file: transient" {
+	if err.Error() != "clouddrive find_file: temporary" {
 		t.Fatalf("unsafe error: %q", err)
 	}
 	rpc.findFile = func(_ context.Context, _ *pb.FindFileByPathRequest) (*pb.CloudDriveFile, error) { return nil, nil }
@@ -547,7 +587,12 @@ func TestSafeErrorsNilResponsesStatusClassificationAndClose(t *testing.T) {
 		return nil, status.Error(codes.InvalidArgument, "bad request")
 	}
 	_, err = client.FindFile(context.Background(), "/file")
-	assertErrorKind(t, err, "find_file", ErrorPermanent)
+	assertErrorKind(t, err, "find_file", ErrorRejected)
+	rpc.findFile = func(_ context.Context, _ *pb.FindFileByPathRequest) (*pb.CloudDriveFile, error) {
+		return nil, status.Error(codes.NotFound, "missing")
+	}
+	_, err = client.FindFile(context.Background(), "/file")
+	assertErrorKind(t, err, "find_file", ErrorNotFound)
 	rpc.findFile = func(_ context.Context, _ *pb.FindFileByPathRequest) (*pb.CloudDriveFile, error) {
 		return nil, status.Error(codes.PermissionDenied, "forbidden")
 	}
@@ -562,7 +607,7 @@ func TestSafeErrorsNilResponsesStatusClassificationAndClose(t *testing.T) {
 		}}}, nil
 	}
 	err = client.CancelOffline(context.Background(), "/folder", testHash)
-	assertErrorKind(t, err, "cancel_offline", ErrorPermanent)
+	assertErrorKind(t, err, "cancel_offline", ErrorRejected)
 	if err := client.Close(); err != nil {
 		t.Fatal(err)
 	}

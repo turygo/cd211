@@ -17,7 +17,7 @@
         {{template "route-strip" .Route}}
       </section>
 
-      {{if .Error}}<div class="notice notice-error"><strong>{{.Str.RecordedError}}</strong><p>{{.Error}}</p></div>{{end}}
+      {{if .Error}}<div class="notice {{if .ErrorIsWarning}}notice-warning{{else}}notice-error{{end}}" role="{{if .ErrorIsWarning}}status{{else}}alert{{end}}"><strong>{{if .ErrorIsWarning}}{{.Str.RetryingTitle}}{{else}}{{.Str.RecordedError}}{{end}}</strong><p>{{.Error}}</p></div>{{end}}
 
       <div class="panel-grid">
         <section class="panel" aria-labelledby="paths-title">

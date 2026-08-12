@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/pressly/goose/v3"
+	"github.com/turygo/cd211/internal/domain"
 	"github.com/turygo/cd211/internal/outbox"
 	storedb "github.com/turygo/cd211/internal/store/sqlc"
 	_ "modernc.org/sqlite"
@@ -94,6 +95,54 @@ func TestOpenMigratesLegacyDomainEventsSequence(t *testing.T) {
 		delivery.FirstAttemptAt == nil || !delivery.FirstAttemptAt.Equal(claimedAt) || delivery.LeaseUntil == nil ||
 		!delivery.LeaseUntil.Equal(claimedAt.Add(leaseDuration)) {
 		t.Errorf("claimed delivery = %+v, want persisted lease state", delivery)
+	}
+}
+
+func TestLastErrorCodeMigrationBackfillsLegacy(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "legacy-errors.sqlite")
+	db := openDatabaseAtMigration(t, databasePath, 7)
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	withError := testSubmission("a", now)
+	withError.Download.LastError = "local deletion failed"
+	clean := testSubmission("b", now)
+	for _, submission := range []domain.Submission{withError, clean} {
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO downloads (
+				hash, name, source_kind, submission_uri, category, cloud_folder, save_path,
+				total_size, state, offline_progress, copy_progress, qbit_progress,
+				last_error, phase_started_at, next_run_at, attempt_count, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?, 0, ?, ?)
+		`, submission.Download.Hash, submission.Download.Name, string(submission.Download.SourceKind),
+			submission.Download.SubmissionURI, submission.Download.Category, submission.Download.CloudFolder,
+			submission.Download.SavePath, submission.Download.TotalSize, string(submission.Download.State),
+			nullableString(submission.Download.LastError), submission.Download.PhaseStartedAt,
+			nullableTime(submission.Download.NextRunAt), submission.Download.CreatedAt, submission.Download.UpdatedAt,
+		); err != nil {
+			t.Fatalf("insert legacy error fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy error fixture database: %v", err)
+	}
+
+	store, err := Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("Open(legacy error database) error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
+
+	legacy, err := store.GetDownload(ctx, withError.Download.Hash)
+	if err != nil || legacy.LastErrorCode != string(domain.ProblemLegacy) || legacy.LastError != "local deletion failed" {
+		t.Fatalf("legacy row = (%+v, %v), want legacy code with stored text", legacy, err)
+	}
+	cleanRow, err := store.GetDownload(ctx, clean.Download.Hash)
+	if err != nil || cleanRow.LastErrorCode != "" {
+		t.Fatalf("clean row = (%+v, %v), want no problem code", cleanRow, err)
 	}
 }
 

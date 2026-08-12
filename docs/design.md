@@ -161,7 +161,7 @@ CD211 is one process with six internal components:
 - Mounted at `/api/v1` in the configured runtime. The setup-mode mux answers every `/api/v1/*` path with an unauthenticated JSON 503 until first-run setup completes.
 - Authentication is the single system-generated global API token, read from the store on every request so generate, rotate, and revoke apply immediately. Only `Authorization: Bearer <token>` is accepted; SID cookies and the admin password are ignored. Missing or invalid tokens receive the same JSON 401 with `Cache-Control: no-store`, and token material is never logged.
 - `POST /api/v1/downloads` accepts a strict JSON magnet body `{magnet, category, stopped}` or a multipart form with a `torrent` file plus `category`/`stopped`, through the same shared submission service as the qBittorrent adapter (Section 11.4). New and revived submissions answer 201 with a `Location` header; an existing active row answers 200 unchanged. The body is `{created, download}`.
-- `GET /api/v1/downloads/{hash}` returns the query model: persisted uppercase state, projected progress, `row_version` as version, terminal/outcome mapping, sanitized error, timestamps, content path, and `links`. A `DELETED` row remains queryable; a never-existing hash is 404. `submission_uri`, raw sources, tracker passkeys, and cloud credentials are never exposed.
+- `GET /api/v1/downloads/{hash}` returns the query model: persisted uppercase state, projected progress, `row_version` as version, terminal/outcome mapping, sanitized error, timestamps, content path, and `links`. Additive nullable `error_code` and `next_retry_at` fields carry the durable problem code and the scheduled retry time when present; existing response semantics remain compatible. A `DELETED` row remains queryable; a never-existing hash is 404. `submission_uri`, raw sources, tracker passkeys, and cloud credentials are never exposed.
 - `GET /api/v1/downloads/{hash}/wait?timeout=1s..25s` is terminal-only: it answers 200 with the model once the download reaches `COMPLETED`, `FAILED`, `CANCELLED`, or `DELETED`, and 204 with the `X-CD211-Download-Version` header on timeout or runtime shutdown. `STOPPED` and all request/in-progress states stay non-terminal. Waiters observe the process-owned event signal (Section 7.5) without holding a database transaction.
 - `GET /api/v1/events` pulls `download.completed` and `download.failed` events with strict `cursor`/`types`/`hash`/`limit`/`wait` parameters. The cursor is an opaque base64url versioned cursor over the monotonic `domain_events.sequence`; omitting it starts at the oldest retained event and the literal `latest` starts after the current high-water. Each scan snapshots the signal, reads the high-water, and lists matching rows with index-backed queries; pages are `{items, next_cursor, has_more}` and advance over hidden types without rescanning. Delivery is at-least-once and the immutable event ID is the idempotency key; failed-event errors are sanitized, including frozen paths. `wait` long-polls up to 25s on the shared signal.
 - The native surface has no control endpoints: it does not retry, cancel, delete, or mutate categories, and no events are delivered inbound. Like the rest of the service it is for trusted-LAN deployments; long polls share the single-token deployment boundary and provide no public or multi-tenant abuse resistance.
@@ -385,6 +385,10 @@ The reconciler submits a copy from the persisted cloud source path to the frozen
 
 Crash recovery first looks for an existing copy task with the same source path and destination path. An existing task is adopted instead of duplicated.
 
+The destination name is reserved once the finished offline task supplies the safe name; the reservation no longer requires file metadata, because magnet submissions only learn their file-vs-folder shape from the verified local copy. Pre-copy collision detection clears the reserved destination first: uploaded torrents keep strict expected verification, while a magnet treats any safe existing regular file or directory at the destination as a collision regardless of type.
+
+Copy submission is operation-aware: temporary transport, authentication, not-found, and rejected observations keep the download non-terminal and schedule the persisted exponential backoff, while invalid input and invalid responses fail immediately with an actionable structured problem. An explicit upstream `CopyTask` state `FAILED` is terminal immediately.
+
 #### `WAITING_COPY -> VERIFYING_LOCAL`
 
 - `Pending`, `Scanning`, or `Scanned`: persist copy progress and poll later.
@@ -404,7 +408,7 @@ CD211 resolves the candidate beneath the frozen save path and verifies:
 - it is not the category save root itself;
 - the expected torrent root or single-file name matches the downloaded content.
 
-The exact verified path is saved as `content_path`. Only then is the qBittorrent state reported as completed.
+The exact verified path is saved as `content_path`. Only then is the qBittorrent state reported as completed. Uploaded torrents verify against their persisted expected kind; a magnet has no expected kind, so the same root-confined, symlink-rejecting check accepts only a regular file or a directory and persists the observed `is_multi_file`, measured size, and content path before completing.
 
 ### 9.4 Retry and Timeout Policy
 
@@ -426,7 +430,7 @@ CloudDrive2 copy: 72 hours
 Local verification: 10 minutes
 ```
 
-These values are configured in the setup wizard and the Settings page (`timeouts.offline`, `timeouts.copy`, `timeouts.verify`; Section 8.1). Explicit 115 or copy errors fail immediately. A timeout enters `FAILED` with the last observed upstream state.
+These values are configured in the setup wizard and the Settings page (`timeouts.offline`, `timeouts.copy`, `timeouts.verify`; Section 8.1). An explicit 115 failure or an explicit `CopyTask` `FAILED` enters `FAILED` immediately; copy submission readiness and rejection are bounded retries within the copy deadline. A timeout enters `FAILED` with a terminal problem code derived from the last durable retry observation, so a sustained not-ready, unreachable, or authentication condition does not degrade to a generic timeout.
 
 Manual Retry resumes from the earliest safe phase encoded by persisted upstream evidence; it does not blindly submit the whole workflow again. Cleanup failures preserve `CANCEL_REQUESTED` or `DELETE_REQUESTED` and Retry resumes that same cleanup intent.
 
@@ -681,7 +685,7 @@ Before `COMPLETED`, `content_path` is empty. At `COMPLETED`, it is the verified 
 
 `save_path` is normalized as a directory path and must not equal the completed `content_path`.
 
-When total size or transfer rate is unknown, `size` is `0` until metadata becomes available and `eta` is qBittorrent's unknown sentinel `8640000`. CD211 does not invent a transfer rate. Uploaded `.torrent` files provide size immediately; magnet submissions stay size-unknown for longer, because CloudDrive2 reports a directory as zero bytes and so cannot supply the size of a multi-file torrent. Local verification therefore measures the staged content — the file itself, or the sum of the regular files in the tree — and that measurement replaces whatever earlier value was recorded. A completed download always reports its real size, which matters because Sonarr and Radarr use `size` when deciding a download is finished and can be cleaned up.
+When total size or transfer rate is unknown, `size` is `0` until metadata becomes available and `eta` is qBittorrent's unknown sentinel `8640000`. CD211 does not invent a transfer rate. Uploaded `.torrent` files provide size and file-vs-folder shape immediately; magnet submissions carry neither. CloudDrive2 reports a directory as zero bytes and a magnet has no file metadata at all, so CD211 never asks CloudDrive2 for directory metadata to decide the shape of a magnet. Instead the verified local copy is the authority: before completion, the staged candidate is checked with the same root confinement, symlink rejection, and safe-name validation as strict verification, accepting only a regular file or a directory, and the observed kind, measured size, and content path are persisted. A completed download always reports its real size, which matters because Sonarr and Radarr use `size` when deciding a download is finished and can be cleaned up.
 
 ### 11.6 Torrent Properties and Files
 
@@ -798,7 +802,8 @@ offline_progress           real not null default 0
 copy_progress              real not null default 0
 qbit_progress              real not null default 0
 last_upstream_status       text
-last_error                 text
+last_error                 text                 -- safe default English text, compatibility fallback
+last_error_code            text                 -- stable problem code; legacy for pre-code rows
 phase_started_at           timestamp not null
 next_run_at                timestamp
 lease_until                timestamp
@@ -1010,15 +1015,16 @@ Successful cancellation is recorded durably so a later removal does not repeat i
 
 ## 15. Failure Semantics
 
-Failures are classified as follows:
+Failures are classified as follows; every persisted failure carries a stable problem code plus safe English text, and the problem codes are the authoritative external values (`cloud_unreachable`, `cloud_copy_not_ready`, `copy_task_failed`, `destination_collision`, `local_verification_failed`, and the other catalog codes — never internal operations such as `find_file` or `add_copy`):
 
 | Class | Examples | Behavior |
 |---|---|---|
 | Input | invalid magnet, malformed torrent, v2-only torrent | Reject add request; no row committed |
 | Configuration | category path invalid, local mount missing | Persist `FAILED`; operator must fix and retry |
-| Upstream permanent | 115 status `ERROR`, copy status `Failed` | Persist `FAILED` immediately |
+| Upstream terminal | 115 status `ERROR`, explicit `CopyTask` `Failed` | Persist `FAILED` immediately |
+| Copy readiness | copy submission not found or rejected | Backoff and retry within the copy deadline; sustained condition ends with the matching timeout code |
 | Transient transport | deadline exceeded, connection refused | Backoff and retry from persisted state |
-| Timeout | phase exceeds configured deadline | Persist `FAILED` with last observed state |
+| Timeout | phase exceeds configured deadline | Persist `FAILED` with the terminal code derived from the last durable problem |
 | Local verification | expected content absent or unsafe path | Retry during verification window, then fail |
 | Deletion safety | resolved path outside allowed root | Do not delete; expose operator-visible error |
 
@@ -1043,7 +1049,7 @@ A single centered card with username and password fields. The username is fixed 
 A dense table, one row per download:
 
 ```text
-Name (link to detail) + hash prefix + redacted last error
+Name (link to detail) + hash prefix + localized problem (warning for automatic retries)
 Internal state badge
 Route progress: 115 OFFLINE / NAS COPY / LOCAL VERIFY segment bars
 Category
@@ -1087,9 +1093,11 @@ Shows:
 - last CloudDrive2 status;
 - offline and copy progress;
 - expected and verified local paths;
-- timestamps, retry count, and last error.
+- timestamps, retry count, and the localized problem.
 
-Raw authenticated URLs and passkeys are never shown.
+A known problem on an active download with a scheduled retry is a warning notice that states CD211 retries automatically and shows the next retry time; a terminal `FAILED` is an error notice with the corrective action and the Retry control. Legacy or unknown problem codes fall back to the sanitized stored message with the severity implied by the state.
+
+Raw authenticated URLs, passkeys, internal operation terms (`find_file`, `add_copy`, `permanent`, `invalid_response`), and raw gRPC messages are never shown.
 
 ### 16.3 Categories
 

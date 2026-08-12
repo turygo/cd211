@@ -209,6 +209,65 @@ func (v *Verifier) Verify(savePath string, expected ExpectedContent) (VerifiedCo
 	return VerifiedContent{Path: candidate, Size: size}, nil
 }
 
+// UnknownContent is the verified shape of magnet content whose file-vs-folder
+// kind is only known from the actual copy on disk.
+type UnknownContent struct {
+	Path      string
+	Size      int64
+	MultiFile bool
+}
+
+// VerifyUnknownType validates the candidate at savePath/name when the
+// expected kind is unknown: a magnet carries no file metadata, so the staged
+// tree itself decides whether the content is one file or a directory. Only a
+// regular file or a directory is accepted; symlinks, root escapes, and
+// FIFO/socket/device/special files are rejected, and the same safe-name
+// validation, root confinement, and size measurement as Verify apply.
+func (v *Verifier) VerifyUnknownType(savePath, name string) (UnknownContent, error) {
+	if err := validateName(name); err != nil {
+		return UnknownContent{}, err
+	}
+
+	saveRoot, err := v.resolveSaveRoot(savePath)
+	if err != nil {
+		return UnknownContent{}, err
+	}
+
+	candidatePath := filepath.Join(filepath.Clean(savePath), name)
+	info, err := os.Lstat(candidatePath)
+	if err != nil {
+		return UnknownContent{}, fmt.Errorf("fsafe: inspect candidate: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return UnknownContent{}, fmt.Errorf("fsafe: candidate must not be a symbolic link")
+	}
+
+	candidate, err := filepath.EvalSymlinks(candidatePath)
+	if err != nil {
+		return UnknownContent{}, fmt.Errorf("fsafe: resolve candidate: %w", err)
+	}
+	candidate = filepath.Clean(candidate)
+	if !strictlyWithin(saveRoot, candidate) || !strictlyWithin(v.localRoot, candidate) {
+		return UnknownContent{}, fmt.Errorf("fsafe: candidate escapes configured roots")
+	}
+
+	info, err = os.Stat(candidate)
+	if err != nil {
+		return UnknownContent{}, fmt.Errorf("fsafe: inspect resolved candidate: %w", err)
+	}
+	if info.IsDir() {
+		size, err := treeSize(candidate)
+		if err != nil {
+			return UnknownContent{}, err
+		}
+		return UnknownContent{Path: candidate, Size: size, MultiFile: true}, nil
+	}
+	if !info.Mode().IsRegular() {
+		return UnknownContent{}, fmt.Errorf("fsafe: candidate is not a regular file or directory")
+	}
+	return UnknownContent{Path: candidate, Size: info.Size(), MultiFile: false}, nil
+}
+
 // treeSize sums the regular files under root. Symlinks are skipped rather than
 // followed, matching Verify's refusal to trust links inside the staging tree.
 func treeSize(root string) (int64, error) {

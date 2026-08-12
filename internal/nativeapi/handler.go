@@ -858,7 +858,9 @@ type submitResponse struct {
 }
 
 // downloadModel is the exact Phase 2 query/submit model. Every field is always
-// present; pointer fields are null when absent.
+// present; pointer fields are null when absent. error_code and next_retry_at
+// are additive: existing consumers keep reading the sanitized error text and
+// the unchanged response semantics.
 type downloadModel struct {
 	Hash        string     `json:"hash"`
 	Name        string     `json:"name"`
@@ -871,6 +873,8 @@ type downloadModel struct {
 	ContentPath *string    `json:"content_path"`
 	TotalSize   int64      `json:"total_size"`
 	Error       *string    `json:"error"`
+	ErrorCode   *string    `json:"error_code"`
+	NextRetryAt *time.Time `json:"next_retry_at"`
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	CompletedAt *time.Time `json:"completed_at"`
@@ -892,6 +896,16 @@ func (h *Handler) model(download domain.Download) downloadModel {
 	if text := domain.SanitizeDownloadError(download); text != "" {
 		errorText = &text
 	}
+	var errorCode *string
+	if download.LastErrorCode != "" {
+		code := download.LastErrorCode
+		errorCode = &code
+	}
+	var nextRetryAt *time.Time
+	if download.NextRunAt != nil && (download.LastError != "" || download.LastErrorCode != "") {
+		utc := download.NextRunAt.UTC()
+		nextRetryAt = &utc
+	}
 	var completedAt *time.Time
 	if download.CompletedAt != nil {
 		utc := download.CompletedAt.UTC()
@@ -909,6 +923,8 @@ func (h *Handler) model(download domain.Download) downloadModel {
 		ContentPath: contentPath,
 		TotalSize:   download.TotalSize,
 		Error:       errorText,
+		ErrorCode:   errorCode,
+		NextRetryAt: nextRetryAt,
 		CreatedAt:   download.CreatedAt.UTC(),
 		UpdatedAt:   download.UpdatedAt.UTC(),
 		CompletedAt: completedAt,

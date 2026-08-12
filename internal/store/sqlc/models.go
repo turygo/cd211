@@ -70,6 +70,7 @@ type Download struct {
 	RemovedAt            sql.NullTime   `json:"removed_at"`
 	RowVersion           int64          `json:"row_version"`
 	PauseRequested       int64          `json:"pause_requested"`
+	LastErrorCode        sql.NullString `json:"last_error_code"`
 }
 
 type DownloadFile struct {

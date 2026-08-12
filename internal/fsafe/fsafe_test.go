@@ -3,6 +3,7 @@ package fsafe
 import (
 	"errors"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -129,6 +130,121 @@ func TestVerifyRejectsSiblingPrefixPath(t *testing.T) {
 
 	if _, err := verifier.Verify(siblingSave, ExpectedContent{Name: "content"}); err == nil {
 		t.Fatal("Verify() accepted sibling-prefix path outside local root")
+	}
+}
+
+func TestVerifyUnknownTypeAcceptsFileAndDirectory(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	save := mkdir(t, filepath.Join(root, "save"))
+	file := writeFile(t, filepath.Join(save, "movie.mkv"), "content")
+	directory := mkdir(t, filepath.Join(save, "album"))
+	writeFile(t, filepath.Join(directory, "track.flac"), "content")
+	writeFile(t, filepath.Join(directory, "cover.jpg"), "xx")
+
+	fileContent, err := verifier.VerifyUnknownType(save, "movie.mkv")
+	if err != nil {
+		t.Fatalf("VerifyUnknownType(file) error = %v", err)
+	}
+	if fileContent.MultiFile || fileContent.Size != int64(len("content")) {
+		t.Fatalf("VerifyUnknownType(file) = %+v, want single file", fileContent)
+	}
+	filePath, err := filepath.EvalSymlinks(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fileContent.Path != filePath {
+		t.Fatalf("VerifyUnknownType(file) path = %q, want %q", fileContent.Path, filePath)
+	}
+
+	directoryContent, err := verifier.VerifyUnknownType(save, "album")
+	if err != nil {
+		t.Fatalf("VerifyUnknownType(directory) error = %v", err)
+	}
+	if !directoryContent.MultiFile || directoryContent.Size != int64(len("content")+len("xx")) {
+		t.Fatalf("VerifyUnknownType(directory) = %+v, want multi-file tree", directoryContent)
+	}
+	directoryPath, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if directoryContent.Path != directoryPath {
+		t.Fatalf("VerifyUnknownType(directory) path = %q, want %q", directoryContent.Path, directoryPath)
+	}
+}
+
+func TestVerifyUnknownTypeRejectsMissingCandidate(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	save := mkdir(t, filepath.Join(root, "save"))
+
+	if _, err := verifier.VerifyUnknownType(save, "missing"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("VerifyUnknownType() error = %v, want not exist", err)
+	}
+}
+
+func TestVerifyUnknownTypeRejectsSymlinkAndEscape(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	save := mkdir(t, filepath.Join(root, "save"))
+	outside := writeFile(t, filepath.Join(t.TempDir(), "outside"), "outside")
+	mustSymlink(t, outside, filepath.Join(save, "escape"))
+	target := writeFile(t, filepath.Join(save, "target"), "content")
+	mustSymlink(t, target, filepath.Join(save, "inside"))
+
+	for _, name := range []string{"escape", "inside"} {
+		if _, err := verifier.VerifyUnknownType(save, name); err == nil {
+			t.Fatalf("VerifyUnknownType() succeeded for symbolic link %q", name)
+		}
+	}
+}
+
+func TestVerifyUnknownTypeRejectsSpecialFile(t *testing.T) {
+	// Darwin's per-test TempDir can exceed the Unix socket sun_path limit,
+	// so anchor the fixture at a short /tmp root and clean it up explicitly.
+	root, err := os.MkdirTemp("/tmp", "cd211-fsafe-")
+	if err != nil {
+		t.Fatalf("MkdirTemp(/tmp): %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(root); err != nil {
+			t.Errorf("RemoveAll(%q): %v", root, err)
+		}
+	})
+	verifier, err := New(root)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	save := mkdir(t, filepath.Join(root, "save"))
+	socketPath := filepath.Join(save, "socket")
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
+	if err != nil {
+		t.Fatalf("ListenUnix: %v", err)
+	}
+	defer listener.Close()
+
+	if _, err := verifier.VerifyUnknownType(save, "socket"); err == nil {
+		t.Fatal("VerifyUnknownType() succeeded for a socket")
+	}
+}
+
+func TestVerifyRejectsStrictKindMismatch(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	save := mkdir(t, filepath.Join(root, "save"))
+	writeFile(t, filepath.Join(save, "payload"), "content")
+	directory := mkdir(t, filepath.Join(save, "album"))
+
+	// Uploaded torrents must keep strict expected verification: a directory
+	// cannot satisfy a single-file expectation and vice versa, even though a
+	// magnet with the same candidate would be accepted by type.
+	if _, err := verifier.Verify(save, ExpectedContent{Name: filepath.Base(directory), MultiFile: false}); err == nil {
+		t.Fatal("Verify() accepted a directory for a single-file torrent")
+	}
+	if _, err := verifier.Verify(save, ExpectedContent{Name: "payload", MultiFile: true}); err == nil {
+		t.Fatal("Verify() accepted a regular file for a multi-file torrent")
+	}
+	if _, err := verifier.VerifyUnknownType(save, "payload"); err != nil {
+		t.Fatalf("VerifyUnknownType(file) error = %v, want type-unknown acceptance", err)
+	}
+	if _, err := verifier.VerifyUnknownType(save, "album"); err != nil {
+		t.Fatalf("VerifyUnknownType(directory) error = %v, want type-unknown acceptance", err)
 	}
 }
 

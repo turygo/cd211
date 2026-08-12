@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/turygo/cd211/internal/clouddrive"
-	"github.com/turygo/cd211/internal/clouddrive/pb"
 	"github.com/turygo/cd211/internal/domain"
 	"github.com/turygo/cd211/internal/fsafe"
 	"github.com/turygo/cd211/internal/store"
@@ -85,7 +84,6 @@ func (r *fakeRepository) NextDue(context.Context, time.Time) (*time.Time, error)
 }
 
 type fakeCloud struct {
-	find           func(context.Context, string) (*pb.CloudDriveFile, error)
 	ensureOffline  func(context.Context, clouddrive.OfflineSpec) (clouddrive.OfflineTask, error)
 	inspectOffline func(context.Context, string, string) (clouddrive.OfflineTask, bool, error)
 	cancelOffline  func(context.Context, string, string) error
@@ -94,9 +92,6 @@ type fakeCloud struct {
 	cancelCopy     func(context.Context, string, string) error
 }
 
-func (c fakeCloud) FindFile(ctx context.Context, path string) (*pb.CloudDriveFile, error) {
-	return c.find(ctx, path)
-}
 func (c fakeCloud) EnsureOffline(ctx context.Context, spec clouddrive.OfflineSpec) (clouddrive.OfflineTask, error) {
 	return c.ensureOffline(ctx, spec)
 }
@@ -117,14 +112,21 @@ func (c fakeCloud) CancelCopy(ctx context.Context, source, destination string) e
 }
 
 type fakeFilesystem struct {
-	verify func(string, fsafe.ExpectedContent) (string, error)
-	size   int64
-	delete func(string, string) error
+	verify            func(string, fsafe.ExpectedContent) (string, error)
+	verifyUnknownType func(string, string) (fsafe.UnknownContent, error)
+	size              int64
+	delete            func(string, string) error
 }
 
 func (f fakeFilesystem) Verify(save string, expected fsafe.ExpectedContent) (fsafe.VerifiedContent, error) {
 	path, err := f.verify(save, expected)
 	return fsafe.VerifiedContent{Path: path, Size: f.size}, err
+}
+func (f fakeFilesystem) VerifyUnknownType(save, name string) (fsafe.UnknownContent, error) {
+	if f.verifyUnknownType == nil {
+		return fsafe.UnknownContent{}, fs.ErrNotExist
+	}
+	return f.verifyUnknownType(save, name)
 }
 func (f fakeFilesystem) Delete(content, save string) error { return f.delete(content, save) }
 
@@ -173,12 +175,13 @@ func TestStructuredLogRedactsProtectedSource(t *testing.T) {
 	}
 	download := baseDownload(domain.StateSubmittingOffline, now)
 	download.SubmissionURI = "magnet:?xt=urn:btih:private&tr=https://tracker.example/passkey-secret"
-	download.LastError = "clouddrive ensure_offline: transient"
+	download.LastError = "CloudDrive2 is unreachable."
+	download.LastErrorCode = string(domain.ProblemCloudUnreachable)
 	download.AttemptCount = 2
 	scheduler.log(download, "ensure_offline", now.Add(-time.Second), "committed")
 
 	entry := output.String()
-	for _, required := range []string{`"hash":"01234567"`, `"state":"SUBMITTING_OFFLINE"`, `"operation":"ensure_offline"`, `"attempt":2`, `"error":"clouddrive ensure_offline: transient"`} {
+	for _, required := range []string{`"hash":"01234567"`, `"state":"SUBMITTING_OFFLINE"`, `"operation":"ensure_offline"`, `"attempt":2`, `"problem":"cloud_unreachable"`, `"error":"CloudDrive2 is unreachable."`} {
 		if !strings.Contains(entry, required) {
 			t.Fatalf("log entry missing %s: %s", required, entry)
 		}
@@ -190,9 +193,6 @@ func TestStructuredLogRedactsProtectedSource(t *testing.T) {
 
 func defaults() (*fakeCloud, *fakeFilesystem) {
 	cloud := fakeCloud{
-		find: func(context.Context, string) (*pb.CloudDriveFile, error) {
-			return &pb.CloudDriveFile{Name: "payload", FileType: pb.CloudDriveFile_File}, nil
-		},
 		ensureOffline: func(_ context.Context, spec clouddrive.OfflineSpec) (clouddrive.OfflineTask, error) {
 			return clouddrive.OfflineTask{InfoHash: spec.Hash, State: clouddrive.OfflineInit}, nil
 		},
@@ -241,25 +241,26 @@ func TestStepBoundsExternalOperationBeforeLeaseExpiry(t *testing.T) {
 	download := baseDownload(domain.StateSubmittingOffline, now)
 	committed := step(t, scheduler, repo, download)
 	if calls != 1 || committed.State != domain.StateSubmittingOffline || committed.AttemptCount != 1 ||
-		committed.NextRunAt == nil || committed.LastError != "reconciler operation timeout" {
+		committed.NextRunAt == nil || committed.LastErrorCode != string(domain.ProblemWorkflowOperationTimeout) {
 		t.Fatalf("bounded operation result = calls:%d download:%+v", calls, committed)
 	}
 }
 
-func TestPermanentCancellationFailureRetainsCleanupIntent(t *testing.T) {
+func TestCleanupRejectionRetainsCleanupIntent(t *testing.T) {
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	clock := &fakeClock{now: now}
 	repo := &fakeRepository{}
 	cloud, files := defaults()
 	cloud.cancelCopy = func(context.Context, string, string) error {
-		return &clouddrive.Error{Operation: "cancel_copy", Kind: clouddrive.ErrorPermanent}
+		return &clouddrive.Error{Operation: "cancel_copy", Kind: clouddrive.ErrorRejected}
 	}
 	scheduler := testScheduler(t, clock, repo, cloud, files)
 	download := baseDownload(domain.StateCancelRequested, now)
 	committed := step(t, scheduler, repo, download)
 	if committed.State != domain.StateCancelRequested || committed.NextRunAt != nil ||
-		committed.LastError != "clouddrive cancel_copy: permanent" {
-		t.Fatalf("permanent cancellation failure discarded intent: %+v", committed)
+		committed.LastErrorCode != string(domain.ProblemCloudRequestRejected) ||
+		committed.LastError != domain.ProblemText(domain.ProblemCloudRequestRejected) {
+		t.Fatalf("cleanup rejection discarded intent: %+v", committed)
 	}
 }
 
@@ -292,7 +293,7 @@ func TestDeleteCancelsOnceThenDeletesDerivedLocalPath(t *testing.T) {
 	if deletedContent != "/downloads/payload" || deletedSave != "/downloads" {
 		t.Fatalf("derived deletion path = %q under %q", deletedContent, deletedSave)
 	}
-	if afterDelete.State != domain.StateDeleteRequested || afterDelete.LastError != "local deletion failed" || afterDelete.NextRunAt != nil {
+	if afterDelete.State != domain.StateDeleteRequested || afterDelete.LastErrorCode != string(domain.ProblemLocalDeleteFailed) || afterDelete.NextRunAt != nil {
 		t.Fatalf("failed local deletion lost cleanup intent: %+v", afterDelete)
 	}
 }
@@ -354,20 +355,21 @@ func TestStepWorkflowAndMissingCopyRecovery(t *testing.T) {
 	cloud.inspectOffline = func(_ context.Context, _ string, hash string) (clouddrive.OfflineTask, bool, error) {
 		return clouddrive.OfflineTask{Name: "payload", InfoHash: hash, SourcePath: "/cloud/payload", State: clouddrive.OfflineFinished, Progress: 1}, true, nil
 	}
-	cloud.find = func(context.Context, string) (*pb.CloudDriveFile, error) {
-		return &pb.CloudDriveFile{Name: "payload", FileType: pb.CloudDriveFile_File, Size: 42}, nil
-	}
 	cloud.inspectCopy = func(context.Context, string, string) (clouddrive.CopyTask, bool, error) {
 		return clouddrive.CopyTask{}, false, nil
 	}
-	verifyCalls := 0
-	// CloudDrive2 claimed 42 bytes above; the staged tree is what counts.
+	unknownTypeCalls := 0
+	files.verifyUnknownType = func(save, name string) (fsafe.UnknownContent, error) {
+		unknownTypeCalls++
+		if unknownTypeCalls == 1 {
+			// Pre-copy collision detection: the destination is clear.
+			return fsafe.UnknownContent{}, fs.ErrNotExist
+		}
+		// The staged tree is what counts for a magnet: kind, path, and size.
+		return fsafe.UnknownContent{Path: "/downloads/payload", Size: 4096, MultiFile: false}, nil
+	}
 	files.size = 4096
 	files.verify = func(string, fsafe.ExpectedContent) (string, error) {
-		verifyCalls++
-		if verifyCalls == 1 {
-			return "", fs.ErrNotExist
-		}
 		return "/downloads/payload", nil
 	}
 	s := testScheduler(t, clock, repo, cloud, files)
@@ -384,9 +386,10 @@ func TestStepWorkflowAndMissingCopyRecovery(t *testing.T) {
 	if d.State != domain.StateSubmittingCopy || d.Name != "payload" || d.CloudSourcePath != "/cloud/payload" {
 		t.Fatalf("finished offline result = %#v", d)
 	}
-	d = step(t, s, repo, d)
-	if d.IsMultiFile == nil || *d.IsMultiFile || d.TotalSize != 42 {
-		t.Fatalf("file metadata = %#v", d)
+	// A magnet carries no file metadata, so no FindFile lookup happens and
+	// IsMultiFile stays unknown until the verified local copy decides.
+	if d.IsMultiFile != nil {
+		t.Fatalf("magnet metadata was invented before local verification: %#v", d)
 	}
 	d = step(t, s, repo, d)
 	if d.DestinationName != "payload" || d.LastUpstreamStatus != "offline:FINISHED" {
@@ -401,7 +404,8 @@ func TestStepWorkflowAndMissingCopyRecovery(t *testing.T) {
 		t.Fatalf("copy submit state = %s", d.State)
 	}
 	d = step(t, s, repo, d)
-	if d.State != domain.StateVerifyingLocal || d.ContentPath != "/downloads/payload" || d.TotalSize != 4096 {
+	if d.State != domain.StateVerifyingLocal || d.IsMultiFile == nil || *d.IsMultiFile ||
+		d.ContentPath != "/downloads/payload" || d.TotalSize != 4096 {
 		t.Fatalf("missing task recovery = %#v", d)
 	}
 	d = step(t, s, repo, d)
@@ -416,16 +420,17 @@ func TestStepFailuresBackoffTimeoutCollisionAndCAS(t *testing.T) {
 	repo := &fakeRepository{}
 	cloud, files := defaults()
 	cloud.ensureOffline = func(context.Context, clouddrive.OfflineSpec) (clouddrive.OfflineTask, error) {
-		return clouddrive.OfflineTask{}, &clouddrive.Error{Operation: "add_offline", Kind: clouddrive.ErrorTransient}
+		return clouddrive.OfflineTask{}, &clouddrive.Error{Operation: "add_offline", Kind: clouddrive.ErrorTemporary}
 	}
 	s := testScheduler(t, clock, repo, cloud, files)
 	d := step(t, s, repo, baseDownload(domain.StateSubmittingOffline, now))
-	if d.State != domain.StateSubmittingOffline || d.AttemptCount != 1 || d.NextRunAt == nil || !d.NextRunAt.Equal(now.Add(30*time.Second)) {
+	if d.State != domain.StateSubmittingOffline || d.AttemptCount != 1 || d.NextRunAt == nil || !d.NextRunAt.Equal(now.Add(30*time.Second)) ||
+		d.LastErrorCode != string(domain.ProblemCloudUnreachable) || d.LastError != domain.ProblemText(domain.ProblemCloudUnreachable) {
 		t.Fatalf("transient backoff = %#v", d)
 	}
 	d.PhaseStartedAt = now.Add(-time.Hour)
 	d = step(t, s, repo, d)
-	if d.State != domain.StateFailed || d.LastError != "offline phase timeout" {
+	if d.State != domain.StateFailed || d.LastErrorCode != string(domain.ProblemOfflineTimeout) {
 		t.Fatalf("timeout = %#v", d)
 	}
 
@@ -435,7 +440,7 @@ func TestStepFailuresBackoffTimeoutCollisionAndCAS(t *testing.T) {
 	collision.DestinationName = collision.Name
 	files.verify = func(string, fsafe.ExpectedContent) (string, error) { return "/downloads/payload", nil }
 	d = step(t, s, repo, collision)
-	if d.State != domain.StateFailed || d.LastError != "destination collision" {
+	if d.State != domain.StateFailed || d.LastErrorCode != string(domain.ProblemDestinationCollision) {
 		t.Fatalf("collision = %#v", d)
 	}
 
@@ -595,7 +600,7 @@ func TestEnsureTerminalTasksAdvanceImmediately(t *testing.T) {
 		download  domain.Download
 		configure func(*fakeCloud)
 		wantState domain.State
-		wantError string
+		wantCode  string
 	}{
 		{
 			name:     "offline finished",
@@ -616,7 +621,7 @@ func TestEnsureTerminalTasksAdvanceImmediately(t *testing.T) {
 				}
 			},
 			wantState: domain.StateFailed,
-			wantError: "offline task error",
+			wantCode:  string(domain.ProblemOfflineDownloadFailed),
 		},
 		{
 			name:     "copy completed",
@@ -637,7 +642,7 @@ func TestEnsureTerminalTasksAdvanceImmediately(t *testing.T) {
 				}
 			},
 			wantState: domain.StateFailed,
-			wantError: "copy task failed",
+			wantCode:  string(domain.ProblemCopyTaskFailed),
 		},
 	}
 	for _, test := range tests {
@@ -646,7 +651,7 @@ func TestEnsureTerminalTasksAdvanceImmediately(t *testing.T) {
 			cloud, files := defaults()
 			test.configure(cloud)
 			got := step(t, testScheduler(t, &fakeClock{now: now}, repo, cloud, files), repo, test.download)
-			if got.State != test.wantState || got.LastError != test.wantError {
+			if got.State != test.wantState || got.LastErrorCode != test.wantCode {
 				t.Fatalf("terminal ensure result = %+v", got)
 			}
 		})
@@ -722,7 +727,7 @@ func TestDestinationReservationConflictFailsWithoutCopy(t *testing.T) {
 	download.DestinationName = ""
 	got := step(t, testScheduler(t, &fakeClock{now: now}, repo, cloud, files), repo, download)
 	if copyCalls != 0 || got.State != domain.StateFailed || got.DestinationName != "" ||
-		got.LastError != "destination path conflicts with another download" || len(repo.commits) != 2 {
+		got.LastErrorCode != string(domain.ProblemDestinationConflict) || len(repo.commits) != 2 {
 		t.Fatalf("destination conflict result = %+v, copy calls=%d commits=%d", got, copyCalls, len(repo.commits))
 	}
 }
@@ -734,6 +739,163 @@ func copySubmission(now time.Time) domain.Download {
 	download.DestinationName = download.Name
 	download.LastUpstreamStatus = destinationClear
 	return download
+}
+
+// magnetCopySubmission is a magnet row in SUBMITTING_COPY whose file-vs-folder
+// kind is still unknown (IsMultiFile == nil) and whose destination has been
+// reserved and preflighted, so the next step submits the copy.
+func magnetCopySubmission(now time.Time) domain.Download {
+	download := baseDownload(domain.StateSubmittingCopy, now)
+	download.DestinationName = download.Name
+	download.LastUpstreamStatus = destinationClear
+	return download
+}
+
+func TestMagnetCopySubmissionRetriesOnNotReady(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	clock := &fakeClock{now: now}
+	repo := &fakeRepository{}
+	cloud, files := defaults()
+	ensureCalls := 0
+	cloud.ensureCopy = func(_ context.Context, spec clouddrive.CopySpec) (clouddrive.CopyTask, error) {
+		ensureCalls++
+		if ensureCalls == 1 {
+			return clouddrive.CopyTask{}, &clouddrive.Error{Operation: "add_copy", Kind: clouddrive.ErrorNotFound}
+		}
+		return clouddrive.CopyTask{}, &clouddrive.Error{Operation: "add_copy", Kind: clouddrive.ErrorRejected}
+	}
+	s := testScheduler(t, clock, repo, cloud, files)
+
+	d := step(t, s, repo, magnetCopySubmission(now))
+	if d.State != domain.StateSubmittingCopy || d.LastErrorCode != string(domain.ProblemCloudCopyNotReady) ||
+		d.LastError != domain.ProblemText(domain.ProblemCloudCopyNotReady) ||
+		d.AttemptCount != 1 || d.NextRunAt == nil || !d.NextRunAt.Equal(now.Add(30*time.Second)) {
+		t.Fatalf("not-found copy submission = %#v", d)
+	}
+	// A rejected submission keeps the same retry semantics.
+	d = step(t, s, repo, d)
+	if d.State != domain.StateSubmittingCopy || d.LastErrorCode != string(domain.ProblemCloudCopyNotReady) ||
+		d.AttemptCount != 2 || d.NextRunAt == nil || !d.NextRunAt.Equal(now.Add(time.Minute)) {
+		t.Fatalf("rejected copy submission = %#v", d)
+	}
+}
+
+func TestMagnetCopySubmissionRetriesThenSucceeds(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	clock := &fakeClock{now: now}
+	repo := &fakeRepository{}
+	cloud, files := defaults()
+	ensureCalls := 0
+	cloud.ensureCopy = func(_ context.Context, spec clouddrive.CopySpec) (clouddrive.CopyTask, error) {
+		ensureCalls++
+		if ensureCalls == 1 {
+			return clouddrive.CopyTask{}, &clouddrive.Error{Operation: "add_copy", Kind: clouddrive.ErrorNotFound}
+		}
+		return clouddrive.CopyTask{SourcePath: spec.SourcePath, DestinationPath: spec.DestinationPath, State: clouddrive.CopyPending}, nil
+	}
+	s := testScheduler(t, clock, repo, cloud, files)
+
+	d := step(t, s, repo, magnetCopySubmission(now))
+	if d.State != domain.StateSubmittingCopy || d.LastErrorCode != string(domain.ProblemCloudCopyNotReady) {
+		t.Fatalf("first submission = %#v", d)
+	}
+	d = step(t, s, repo, d)
+	if d.State != domain.StateWaitingCopy || d.LastErrorCode != "" || d.LastError != "" ||
+		d.AttemptCount != 0 || d.NextRunAt == nil || !d.NextRunAt.Equal(now.Add(10*time.Second)) {
+		t.Fatalf("successful submission did not clear the problem: %#v", d)
+	}
+}
+
+func TestCopyPhaseDeadlineMapsLastProblem(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	tests := []struct {
+		name string
+		code domain.ProblemCode
+		want string
+	}{
+		{"not ready", domain.ProblemCloudCopyNotReady, string(domain.ProblemCloudCopyNotReadyTimeout)},
+		{"unreachable", domain.ProblemCloudUnreachable, string(domain.ProblemCloudUnreachableTimeout)},
+		{"authentication", domain.ProblemCloudAuthenticationRequired, string(domain.ProblemCloudAuthenticationTimeout)},
+		{"no recognized problem", "", string(domain.ProblemCopyTimeout)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo := &fakeRepository{}
+			cloud, files := defaults()
+			s := testScheduler(t, &fakeClock{now: now}, repo, cloud, files)
+			d := magnetCopySubmission(now)
+			d.LastErrorCode, d.LastError = string(test.code), domain.ProblemText(test.code)
+			d.PhaseStartedAt = now.Add(-time.Hour)
+			got := step(t, s, repo, d)
+			if got.State != domain.StateFailed || got.LastErrorCode != test.want || got.NextRunAt != nil {
+				t.Fatalf("deadline result = %#v, want code %s", got, test.want)
+			}
+		})
+	}
+}
+
+func TestMagnetFinalVerificationPersistsTypeAndSize(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	tests := []struct {
+		name    string
+		content fsafe.UnknownContent
+	}{
+		{"single file", fsafe.UnknownContent{Path: "/downloads/payload", Size: 4096, MultiFile: false}},
+		{"directory", fsafe.UnknownContent{Path: "/downloads/payload", Size: 8192, MultiFile: true}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clock := &fakeClock{now: now}
+			repo := &fakeRepository{}
+			cloud, files := defaults()
+			files.verifyUnknownType = func(save, name string) (fsafe.UnknownContent, error) {
+				return test.content, nil
+			}
+			s := testScheduler(t, clock, repo, cloud, files)
+			d := baseDownload(domain.StateVerifyingLocal, now)
+			d.DestinationName = d.Name
+			got := step(t, s, repo, d)
+			if got.State != domain.StateCompleted || got.IsMultiFile == nil || *got.IsMultiFile != test.content.MultiFile ||
+				got.ContentPath != test.content.Path || got.TotalSize != test.content.Size || got.NextRunAt != nil {
+				t.Fatalf("magnet completion = %#v, want multi=%t size=%d", got, test.content.MultiFile, test.content.Size)
+			}
+		})
+	}
+}
+
+func TestMagnetPreflightCollisionRegardlessOfType(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	clock := &fakeClock{now: now}
+	repo := &fakeRepository{}
+	cloud, files := defaults()
+	files.verifyUnknownType = func(string, string) (fsafe.UnknownContent, error) {
+		return fsafe.UnknownContent{Path: "/downloads/payload", Size: 1, MultiFile: false}, nil
+	}
+	s := testScheduler(t, clock, repo, cloud, files)
+
+	d := step(t, s, repo, baseDownload(domain.StateSubmittingCopy, now))
+	if d.DestinationName != "payload" {
+		t.Fatalf("destination reservation = %#v", d)
+	}
+	got := step(t, s, repo, d)
+	if got.State != domain.StateFailed || got.LastErrorCode != string(domain.ProblemDestinationCollision) {
+		t.Fatalf("magnet preflight collision = %#v", got)
+	}
+}
+
+func TestCreateFolderRejectionIsNotSourceRejection(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	clock := &fakeClock{now: now}
+	repo := &fakeRepository{}
+	cloud, files := defaults()
+	cloud.ensureOffline = func(context.Context, clouddrive.OfflineSpec) (clouddrive.OfflineTask, error) {
+		return clouddrive.OfflineTask{}, &clouddrive.Error{Operation: "create_folder", Kind: clouddrive.ErrorRejected}
+	}
+	s := testScheduler(t, clock, repo, cloud, files)
+	d := step(t, s, repo, baseDownload(domain.StateSubmittingOffline, now))
+	if d.State != domain.StateFailed || d.LastErrorCode != string(domain.ProblemCloudFolderUnavailable) || d.NextRunAt != nil {
+		t.Fatalf("create-folder rejection = %#v, want folder guidance not source rejection", d)
+	}
 }
 
 func TestPollStatesAndPermanentFailures(t *testing.T) {
@@ -755,7 +917,7 @@ func TestPollStatesAndPermanentFailures(t *testing.T) {
 		return clouddrive.OfflineTask{Name: "payload", InfoHash: hash, SourcePath: "/cloud/payload", State: clouddrive.OfflineError}, true, nil
 	}
 	d = step(t, s, repo, baseDownload(domain.StateWaitingOffline, now))
-	if d.State != domain.StateFailed || d.LastError != "offline task error" {
+	if d.State != domain.StateFailed || d.LastErrorCode != string(domain.ProblemOfflineDownloadFailed) {
 		t.Fatalf("offline task error = %#v", d)
 	}
 
@@ -774,7 +936,7 @@ func TestPollStatesAndPermanentFailures(t *testing.T) {
 		return clouddrive.CopyTask{SourcePath: source, DestinationPath: destination, State: clouddrive.CopyFailed}, true, nil
 	}
 	d = step(t, s, repo, copyRow)
-	if d.State != domain.StateFailed || d.LastError != "copy task failed" {
+	if d.State != domain.StateFailed || d.LastErrorCode != string(domain.ProblemCopyTaskFailed) {
 		t.Fatalf("copy task error = %#v", d)
 	}
 
@@ -788,16 +950,16 @@ func TestPollStatesAndPermanentFailures(t *testing.T) {
 	}
 	files.verify = func(string, fsafe.ExpectedContent) (string, error) { return "", errors.New("unsafe symlink") }
 	d = step(t, s, repo, verifyRow)
-	if d.State != domain.StateFailed || d.LastError != "local verification failed" {
+	if d.State != domain.StateFailed || d.LastErrorCode != string(domain.ProblemLocalVerificationFailed) {
 		t.Fatalf("unsafe verification = %#v", d)
 	}
 
 	cloud.ensureOffline = func(context.Context, clouddrive.OfflineSpec) (clouddrive.OfflineTask, error) {
-		return clouddrive.OfflineTask{}, &clouddrive.Error{Operation: "add_offline", Kind: clouddrive.ErrorPermanent}
+		return clouddrive.OfflineTask{}, &clouddrive.Error{Operation: "add_offline", Kind: clouddrive.ErrorRejected}
 	}
 	d = step(t, s, repo, baseDownload(domain.StateSubmittingOffline, now))
-	if d.State != domain.StateFailed || d.LastError != "clouddrive add_offline: permanent" || d.NextRunAt != nil {
-		t.Fatalf("permanent cloud failure = %#v", d)
+	if d.State != domain.StateFailed || d.LastErrorCode != string(domain.ProblemOfflineSubmissionRejected) || d.NextRunAt != nil {
+		t.Fatalf("rejected cloud failure = %#v", d)
 	}
 }
 
@@ -814,7 +976,7 @@ func TestBackoffDeleteRetentionAndNextDueTimer(t *testing.T) {
 	d := baseDownload(domain.StateDeleteRequested, now)
 	d.ContentPath, d.DeleteFilesRequested = "/downloads/payload", true
 	d = step(t, s, repo, d)
-	if d.State != domain.StateDeleteRequested || d.LastError != "local deletion failed" || d.NextRunAt != nil || d.ContentPath == "" {
+	if d.State != domain.StateDeleteRequested || d.LastErrorCode != string(domain.ProblemLocalDeleteFailed) || d.NextRunAt != nil || d.ContentPath == "" {
 		t.Fatalf("deletion safety retention = %#v", d)
 	}
 

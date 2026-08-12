@@ -78,6 +78,9 @@ func ValidateDownload(download Download) error {
 	if download.AttemptCount < 0 {
 		return errors.New("attempt count must not be negative")
 	}
+	if !safeProblemCode(download.LastErrorCode) {
+		return errors.New("last error code is invalid")
+	}
 	if download.RowVersion < 0 {
 		return errors.New("row version must not be negative")
 	}

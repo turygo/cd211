@@ -560,7 +560,7 @@ func TestSetupFinishRetestsServerSide(t *testing.T) {
 	sid, csrf := fixture.advanceToReview()
 
 	// The connection now fails; finish must not persist or complete anything.
-	fixture.dial.setCheckErr(&clouddrive.Error{Operation: "system_status", Kind: clouddrive.ErrorTransient})
+	fixture.dial.setCheckErr(&clouddrive.Error{Operation: "system_status", Kind: clouddrive.ErrorTemporary})
 	response := fixture.post("/setup/finish", sid, csrf, url.Values{
 		"timeout_offline": {"24h"}, "timeout_copy": {"72h"}, "timeout_verify": {"10m"},
 	})
@@ -609,9 +609,9 @@ func TestSetupCD2FailureClassification(t *testing.T) {
 		want    string
 	}{
 		{"auth", &clouddrive.Error{Operation: "authenticate", Kind: clouddrive.ErrorUnauthorized}, true, "rejected the username or password"},
-		{"unreachable", &clouddrive.Error{Operation: "system_status", Kind: clouddrive.ErrorTransient}, false, "Could not reach CloudDrive2"},
+		{"unreachable", &clouddrive.Error{Operation: "system_status", Kind: clouddrive.ErrorTemporary}, false, "Could not reach CloudDrive2"},
 		{"tls", errors.New("tls: first record does not look like a TLS handshake"), false, "insecure"},
-		{"other", &clouddrive.Error{Operation: "find_file", Kind: clouddrive.ErrorPermanent}, false, "connection test failed"},
+		{"other", &clouddrive.Error{Operation: "find_file", Kind: clouddrive.ErrorRejected}, false, "connection test failed"},
 	}
 	for _, item := range cases {
 		t.Run(item.name, func(t *testing.T) {

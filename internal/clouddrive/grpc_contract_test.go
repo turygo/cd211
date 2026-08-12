@@ -99,6 +99,10 @@ func (s *grpcContractServer) FindFileByPath(ctx context.Context, req *pb.FindFil
 			return nil, status.Error(codes.NotFound, "folder not found")
 		}
 		return &pb.CloudDriveFile{Name: "folder", FullPathName: "/cloud/folder", IsDirectory: true}, nil
+	case req.ParentPath == "/cloud" && req.Path == "New":
+		// The CreateDirectory leaf does not exist until CreateFolder runs; a
+		// verified not-found lookup is what authorizes creating it.
+		return nil, status.Error(codes.NotFound, "folder not found")
 	default:
 		return nil, status.Error(codes.InvalidArgument, "unexpected find request")
 	}

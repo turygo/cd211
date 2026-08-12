@@ -8,6 +8,21 @@ section using the release version and date.
 
 ## [Unreleased]
 
+### Added
+
+- Added durable structured problem codes for download failures, with localized English/Chinese warnings for automatic retries that show the next retry time and corrective guidance for terminal failures.
+- Added nullable `error_code` and `next_retry_at` fields to the native automation API query model.
+
+### Changed
+
+- Reworked copy submission retry: CloudDrive2 not-ready, unreachable, and authentication observations keep a download non-terminal with persisted backoff, and a phase deadline now maps to a specific terminal code instead of a generic timeout.
+- Magnet submissions no longer depend on CloudDrive2 directory metadata: the verified local copy decides file-vs-directory, size, and content path before completion, while uploaded `.torrent` submissions keep strict expected verification.
+
+### Fixed
+
+- Fixed premature terminal failures when a finished 115 offline task is not yet accepted by the CloudDrive2 copy service: the download now retries with an actionable structured problem instead of failing immediately.
+- Prevented CloudDrive2 folder creation on temporary, authentication, or rejected lookup errors; only a verified not-found lookup creates the leaf folder.
+
 ## [0.3.5] - 2026-08-12
 
 ### Added

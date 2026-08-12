@@ -339,6 +339,101 @@ func claimTransition(t *testing.T, repository *store.Store, now time.Time, state
 	}
 }
 
+func TestNativeErrorCodeAndNextRetryFields(t *testing.T) {
+	t.Parallel()
+	harness := newNativeHarness(t)
+	now := harness.clock.now
+
+	// Fresh submission: the additive fields are null when absent.
+	plainHash := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if response := harness.postJSON(t, map[string]any{"magnet": "magnet:?xt=urn:btih:" + plainHash + "&dn=Plain"}); response.Code != http.StatusCreated {
+		t.Fatalf("submit = %d %q", response.Code, response.Body.String())
+	}
+	plain := decodeObject(t, harness.get(t, "/api/v1/downloads/"+plainHash))
+	if plain["error_code"] != nil || plain["next_retry_at"] != nil {
+		t.Fatalf("fresh model = %#v, want null additive fields", plain)
+	}
+
+	// A normal active row with a scheduled run but no problem reports null
+	// for both additive fields: next_retry_at is retry bookkeeping, not
+	// ordinary polling or phase scheduling.
+	claim, err := harness.repository.ClaimDue(context.Background(), "native-worker", now, time.Minute)
+	if err != nil || claim == nil {
+		t.Fatalf("ClaimDue(poll) = (%+v, %v)", claim, err)
+	}
+	next := claim.Download
+	next.State = domain.StateSubmittingOffline
+	next.UpdatedAt = now
+	next.PhaseStartedAt = now
+	next.NextRunAt = &now
+	if err := harness.repository.CommitClaim(context.Background(), *claim, next); err != nil {
+		t.Fatalf("CommitClaim(submitting offline): %v", err)
+	}
+	polling := decodeObject(t, harness.get(t, "/api/v1/downloads/"+plainHash))
+	if polling["state"] != "SUBMITTING_OFFLINE" || polling["next_retry_at"] != nil || polling["error_code"] != nil {
+		t.Fatalf("polling model = %#v, want null additive fields", polling)
+	}
+
+	// The plain row is still due at now; defer it so the retry branch below
+	// deterministically claims the retry row instead of re-claiming this one.
+	claim, err = harness.repository.ClaimDue(context.Background(), "native-worker", now, time.Minute)
+	if err != nil || claim == nil {
+		t.Fatalf("ClaimDue(defer plain) = (%+v, %v)", claim, err)
+	}
+	deferred := claim.Download
+	farFuture := now.Add(time.Hour)
+	deferred.NextRunAt = &farFuture
+	deferred.UpdatedAt = now
+	if err := harness.repository.CommitClaim(context.Background(), *claim, deferred); err != nil {
+		t.Fatalf("CommitClaim(defer plain): %v", err)
+	}
+
+	// A retrying copy submission carries the durable code and next retry time
+	// while the sanitized error text stays the compatibility fallback.
+	retryHash := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if response := harness.postJSON(t, map[string]any{"magnet": "magnet:?xt=urn:btih:" + retryHash + "&dn=Retrying"}); response.Code != http.StatusCreated {
+		t.Fatalf("retry submit = %d %q", response.Code, response.Body.String())
+	}
+	for _, state := range []domain.State{domain.StateSubmittingOffline, domain.StateWaitingOffline, domain.StateSubmittingCopy} {
+		claim, err := harness.repository.ClaimDue(context.Background(), "native-worker", now, time.Minute)
+		if err != nil || claim == nil {
+			t.Fatalf("ClaimDue(%s) = (%+v, %v)", state, claim, err)
+		}
+		next := claim.Download
+		next.State = state
+		next.UpdatedAt = now
+		next.PhaseStartedAt = now
+		next.NextRunAt = &now
+		if state == domain.StateSubmittingCopy {
+			next.CloudSourcePath = "/cloud/Retrying"
+		}
+		if err := harness.repository.CommitClaim(context.Background(), *claim, next); err != nil {
+			t.Fatalf("CommitClaim(%s): %v", state, err)
+		}
+	}
+	claim, err = harness.repository.ClaimDue(context.Background(), "retrying", now.Add(time.Minute), time.Minute)
+	if err != nil || claim == nil {
+		t.Fatalf("ClaimDue(retrying) = (%+v, %v)", claim, err)
+	}
+	nextRun := now.Add(2 * time.Minute)
+	next = claim.Download
+	next.LastError = domain.ProblemText(domain.ProblemCloudCopyNotReady)
+	next.LastErrorCode = string(domain.ProblemCloudCopyNotReady)
+	next.AttemptCount = 1
+	next.NextRunAt = &nextRun
+	next.UpdatedAt = now.Add(time.Minute)
+	if err := harness.repository.CommitClaim(context.Background(), *claim, next); err != nil {
+		t.Fatalf("CommitClaim(retry observation): %v", err)
+	}
+	retried := decodeObject(t, harness.get(t, "/api/v1/downloads/"+retryHash))
+	if retried["state"] != "SUBMITTING_COPY" || retried["terminal"] != false ||
+		retried["error_code"] != string(domain.ProblemCloudCopyNotReady) ||
+		retried["error"] != domain.ProblemText(domain.ProblemCloudCopyNotReady) ||
+		retried["next_retry_at"] != nextRun.UTC().Format(time.RFC3339Nano) {
+		t.Fatalf("retrying model = %#v", retried)
+	}
+}
+
 func TestNativeDuplicateSubmitReturnsExistingWithoutMutation(t *testing.T) {
 	t.Parallel()
 	harness := newNativeHarness(t)
