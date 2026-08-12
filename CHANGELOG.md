@@ -8,6 +8,8 @@ section using the release version and date.
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-08-12
+
 ### Added
 
 - Added safe per-task pause and resume controls, with explicit record-only or record-and-local-files deletion choices.
