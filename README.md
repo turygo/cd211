@@ -2,46 +2,66 @@
 
 [English](README_EN.md) | 简体中文
 
-CD211 让 Sonarr 和 Radarr 能像使用 qBittorrent 一样，通过 CloudDrive2 使用 115 云下载。
+<p align="center">
+  <img src="docs/assets/cd211-dashboard.png" alt="CD211 下载任务面板">
+</p>
 
-Sonarr 或 Radarr 将磁力链接或 `.torrent` 文件发送给 CD211。CD211 发起 115 云下载，将完成后的内容复制到本地暂存目录，校验本地文件，然后将任务报告为已完成，供 Sonarr 或 Radarr 导入。
+## 让 Sonarr / Radarr 用上 115 云下载
 
-CD211 不是 BitTorrent 客户端，也不会做种。请仅在可信局域网中运行，不要将其 HTTP 端口暴露到公网。
+CD211 提供兼容 qBittorrent Web API 的接口，可作为下载客户端接入 Sonarr 和 Radarr。它将磁力链接或 `.torrent` 文件交给 CloudDrive2，待 115 完成云下载后复制到 NAS 共享目录；本地校验通过后，才向 Sonarr / Radarr 报告完成。
 
-## 功能
+你无需改变现有的媒体自动化流程，也不用再靠零散脚本串联下载、复制和导入。整个流程都可在 Web 界面中查看、重试和管理。
 
-- 兼容 qBittorrent WebAPI 2.11，可接入 Sonarr 和 Radarr。
-- 支持提交磁力链接和 `.torrent` 文件。
-- 通过 CloudDrive2 执行 115 云下载和 NAS 文件复制。
-- 仅在本地文件校验通过后才将任务报告为已完成。
-- 可为不同分类配置独立的云端目录和本地暂存目录。
-- 下载任务和设置在重启后仍会保留。
-- Web 界面支持英文和简体中文。
-- 支持下载筛选，并展示进度、文件列表、历史记录和错误详情。
-- 支持开始、重试、取消、删除记录和删除本地文件。
-- 无需重启 CD211 即可修改 CloudDrive2、路径、超时、分类和密码设置。
-- 通过带签名的 Webhook 推送下载完成和失败事件，支持重试、死信和手动重新投递。
-- 提供基于全局 API 令牌的原生自动化 API：提交磁力链接或种子文件、查询状态、等待任务进入终止状态，以及拉取下载完成/失败事件。
-- 提供 `/healthz` 和 `/readyz` 端点用于容器健康检查。
+## 为什么选择 CD211
 
-删除下载任务不会删除其在 115 中的副本。
+- **保留现有工作流**：在 Sonarr / Radarr 中将 CD211 添加为 qBittorrent 下载客户端即可。
+- **文件就绪后再导入**：115 云下载、复制到 NAS、本地校验全部通过后，任务才会显示为完成。
+- **问题看得见，也能处理**：集中查看任务进度、文件、历史和错误，并可开始、重试、取消或清理任务。
+- **配置不用重启**：CloudDrive2、存储路径、超时、分类和密码均可在 Web 界面修改。
+- **方便接入自动化**：提供原生 API、带签名的 Webhook、失败重试、死信和手动重新投递。
+- **持久化与健康检查**：任务和设置存入 SQLite，并提供容器健康检查端点。
+
+Web 界面支持简体中文和英文。
+
+## 工作方式
+
+```text
+Sonarr / Radarr
+      │  磁力链接或 .torrent
+      ▼
+    CD211 ──► CloudDrive2 ──► 115 云下载
+      ▲                            │
+      │      本地校验 ◄── NAS 复制 ◄┘
+      │
+      └── 文件确认就绪后报告完成
+```
+
+CD211 不是 BitTorrent 客户端，也不会做种。删除 CD211 中的任务不会删除其在 115 中的副本。
+
+## 开始之前
+
+你需要：
+
+- 已挂载 115 且可通过 gRPC 访问的 CloudDrive2。
+- Sonarr、Radarr，或需要调用 CD211 原生 API 的自动化程序。
+- Docker Compose。
+- CloudDrive2、CD211、Sonarr 和 Radarr 均可访问的 NAS 暂存目录。
+
+> [!IMPORTANT]
+> 四个容器必须将同一个宿主机暂存目录挂载到相同的绝对路径，容器内默认为 `/downloads`。CloudDrive2 创建的文件还必须对四个容器共用的用户组开放写权限。
+
+```text
+宿主机暂存目录 -> CloudDrive2: /downloads
+              -> CD211:       /downloads
+              -> Sonarr:      /downloads
+              -> Radarr:      /downloads
+```
+
+CloudDrive2、CD211、Sonarr 和 Radarr 应使用同一个 `PGID`。使用 CloudDrive2 官方镜像时，请通过 `umask 0002` 启动，确保 CD211 能管理复制后的文件。
 
 ## 快速开始
 
-### 1. 准备共享暂存目录
-
-CloudDrive2、CD211、Sonarr 和 Radarr 必须将同一个宿主机目录挂载到相同的绝对路径。项目提供的 Compose 文件使用 `/downloads`：
-
-```text
-宿主机暂存目录 -> CloudDrive2 中的 /downloads
-              -> CD211 中的 /downloads
-              -> Sonarr 中的 /downloads
-              -> Radarr 中的 /downloads
-```
-
-四个容器应使用同一个共享用户组。CloudDrive2 创建的文件必须允许组写入；使用其官方镜像时，请通过 `umask 0002` 启动。
-
-### 2. 启动 CD211
+### 1. 启动 CD211
 
 ```sh
 mkdir -p cd211/downloads
@@ -50,193 +70,138 @@ curl -LO https://raw.githubusercontent.com/turygo/cd211/main/docker-compose.yml
 docker compose up -d
 ```
 
-默认 Compose 配置将 CD211 发布到 `8080` 端口，把 SQLite 数据存储在 `cd211_data` 卷中，并使用 `./downloads` 作为暂存目录。
+默认配置会：
 
-如需让 CD211 以指定用户和用户组运行，请在启动前创建 `.env`：
+- 在 `8080` 端口提供 Web 界面。
+- 将 SQLite 数据保存在 `cd211_data` 卷中。
+- 将 `./downloads` 挂载为容器内的 `/downloads`。
+
+如需指定运行用户和用户组，请在启动前创建 `.env`：
 
 ```dotenv
 PUID=99
 PGID=100
 ```
 
-CloudDrive2、Sonarr 和 Radarr 应使用相同的 `PGID`。
+### 2. 完成首次设置
 
-### 3. 完成首次运行设置
+打开 `http://<cd211-host>:8080`，按向导完成：
 
-打开 `http://<cd211-host>:8080`。设置向导会要求填写：
+1. 为固定用户名 `admin` 设置密码。密码至少 8 个字符，没有默认密码。
+2. 填写 CloudDrive2 的 gRPC 地址、用户名、密码和 TLS 模式。
+3. 选择 115 云下载根目录和 NAS 共享暂存根目录；共享暂存根目录的默认值为 `/downloads`。
+4. 设置云下载、复制和本地校验超时。
 
-1. 固定用户名 `admin` 的管理员密码。密码至少包含 8 个字符，系统没有默认密码。
-2. CloudDrive2 的 gRPC 地址、用户名、密码和 TLS 模式。
-3. 115 云下载根目录和共享暂存根目录。使用项目提供的 Compose 文件时，共享暂存根目录通常为 `/downloads`。
-4. 云下载、复制和本地校验的超时时间。
+可在向导中浏览或创建 CloudDrive2 目录和本地目录。完成设置后，向导会直接进入分类设置。
 
-完成向导后会进入**分类**页面。在这里，需要为 Sonarr 或 Radarr 的每个分类分别设置两个根目录下的子目录。
+### 3. 注册分类
 
-### 4. 注册分类
-
-在 CD211 Web 界面中打开**分类**，注册 Sonarr 或 Radarr 使用的每个分类。
-
-示例：
+为 Sonarr / Radarr 使用的每个分类配置云端和本地子目录：
 
 | 字段 | 电视剧示例 | 电影示例 |
 |---|---|---|
-| 名称 | `tv` | `movies` |
-| 115 分类子目录 | `TV` | `Movies` |
-| 共享暂存子目录 | `tv` | `movies` |
-| 可用状态 | 已启用 | 已启用 |
+| 分类名称 | `tv` | `movies` |
+| 115 子目录 | `TV` | `Movies` |
+| 暂存子目录 | `tv` | `movies` |
+| 状态 | 已启用 | 已启用 |
 
-CD211 会将每个子目录与对应的已配置根目录拼接，并预览完整路径。如果 115 根目录为 `/115open/云下载`，共享暂存根目录为 `/downloads`，以上示例会分别解析为 `/115open/云下载/TV` 和 `/downloads/tv`。分类名称必须与 Sonarr 和 Radarr 中配置的值一致。
+如果 115 根目录是 `/115open/云下载`，共享暂存根目录是 `/downloads`，`tv` 分类将使用 `/115open/云下载/TV` 和 `/downloads/tv`，`movies` 分类将使用 `/115open/云下载/Movies` 和 `/downloads/movies`。
 
-### 5. 将 CD211 添加到 Sonarr 和 Radarr
+分类名称必须与 Sonarr / Radarr 中填写的值一致。修改根目录后，已有任务仍使用提交时确定的路径，新任务使用更新后的路径。
 
-在 Sonarr 或 Radarr 中打开 **Settings → Download Clients → Add → qBittorrent**，然后填写：
+### 4. 接入 Sonarr / Radarr
+
+打开 **Settings → Download Clients → Add → qBittorrent**：
 
 | 字段 | 值 |
 |---|---|
-| Host | Sonarr/Radarr 能够访问 CD211 的主机名或 IP 地址 |
+| Host | Sonarr / Radarr 可访问的 CD211 主机名或 IP 地址 |
 | Port | `8080` |
-| Use SSL | 关闭；仅当你通过自己的反向代理提供 TLS 时开启 |
+| Use SSL | 默认关闭；仅在自建反向代理提供 TLS 时开启 |
 | Username | `admin` |
-| Password | 首次设置时创建的管理员密码 |
-| Category | 已在 CD211 中注册并启用的分类，例如 `tv` 或 `movies` |
+| Password | 首次设置时创建的密码 |
+| Category | 已在 CD211 中启用的分类，例如 `tv` 或 `movies` |
 
-运行 Sonarr/Radarr 连接测试，然后保存下载客户端。
+运行连接测试并保存。之后 Sonarr / Radarr 会像使用 qBittorrent 一样提交和跟踪任务。
 
-## 配置
+## 自动化能力
+
+### 原生 API
+
+在 Web 界面的**设置**页面生成全局 API 令牌，然后使用 `Authorization: Bearer <token>` 调用 `/api/v1`：
+
+| 端点 | 用途 |
+|---|---|
+| `POST /api/v1/downloads` | 提交磁力链接或种子文件 |
+| `GET /api/v1/downloads/{hash}` | 查询任务状态 |
+| `GET /api/v1/downloads/{hash}/wait` | 等待任务进入完成、失败、取消或删除状态 |
+| `GET /api/v1/events` | 拉取下载完成和失败事件 |
+
+可通过 JSON 提交磁力链接，也可通过 multipart 表单上传种子文件。事件接口使用不透明游标，事件可能重复投递；调用方应按事件 ID 去重。
+
+全局令牌只在生成或轮换时显示一次；轮换后旧令牌立即失效，吊销后 API 停用。原生 API 不提供重试、取消或删除端点，这些操作请在 Web 界面完成。
+
+### Webhook
+
+CD211 可在下载完成或失败时发送带 HMAC-SHA256 签名的 Webhook。每个接收端点都可单独选择要接收的事件，并支持：
+
+- 可选 Bearer 认证。
+- 页面内测试投递。
+- 最长 24 小时的指数退避重试。
+- 死信记录和手动重新投递。
+- 投递历史、状态筛选和错误信息脱敏。
+
+接收方应使用原始请求体验证 `X-CD211-Signature`，并按 `X-CD211-Event-ID` 去重。
+
+## 配置参考
 
 ### Docker Compose
 
-项目提供的 [`docker-compose.yml`](docker-compose.yml) 支持以下部署设置：
-
 | 设置 | 默认值 | 修改方式 |
 |---|---:|---|
-| 对外 HTTP 端口 | `8080` | 修改 `ports` 的宿主机端口，例如 `8090:8080` |
+| HTTP 端口 | `8080` | 修改 `ports` 的宿主机端口 |
 | 进程用户 | `PUID=99` | 在 `.env` 中设置 `PUID` |
-| 进程用户组 | `PGID=100` | 在 `.env` 中设置 `PGID`；所有需要访问暂存文件的服务应使用同一个用户组 |
-| SQLite 存储 | 挂载到 `/data` 的命名卷 `cd211_data` | 如有需要，可将卷来源替换为宿主机本地目录 |
-| 暂存存储 | 挂载到 `/downloads` 的 `./downloads` | 将 `./downloads` 替换为共享的宿主机暂存目录 |
+| 进程用户组 | `PGID=100` | 在 `.env` 中设置 `PGID` |
+| SQLite 存储 | `/data` 下的 `cd211_data` 卷 | 可改为宿主机本地目录 |
+| 暂存目录 | `./downloads:/downloads` | 改为四个服务共同使用的宿主机目录 |
 
-SQLite 数据库路径必须位于支持 POSIX 锁的宿主机本地文件系统上。不要将 `/data` 放在 NFS 或 SMB 上。
-
-`PUID` 和 `PGID` 由容器入口脚本处理，CD211 二进制文件本身不会读取环境变量。
+SQLite 数据库必须放在支持 POSIX 锁的宿主机本地文件系统中，不要将 `/data` 放在 NFS 或 SMB 上。
 
 ### 启动参数
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `--http-address` | `:8080` | `[host]:port` 格式的 HTTP 监听地址 |
-| `--database-path` | `/data/cd211.sqlite` | SQLite 数据库的绝对路径 |
+| `--http-address` | `:8080` | HTTP 监听地址，格式为 `[host]:port` |
+| `--database-path` | `/data/cd211.sqlite` | SQLite 数据库绝对路径 |
 
-可通过 Compose 服务的 `command` 字段覆盖参数：
-
-```yaml
-services:
-  cd211:
-    command: ["cd211", "--http-address", ":8080", "--database-path", "/data/cd211.sqlite"]
-```
+CD211 二进制文件不读取环境变量。`PUID` 和 `PGID` 仅由容器入口脚本用于降低进程权限。
 
 ### 应用设置
 
-在首次运行设置期间，或之后通过 Web 界面的**设置**页面配置以下项目：
+以下设置均可在 Web 界面修改并立即用于新任务：
 
-| 设置 | 默认值 | 说明 |
-|---|---:|---|
-| CloudDrive2 地址 | 无 | gRPC 地址，例如 `192.168.1.10:19798` |
-| CloudDrive2 用户名 | 无 | CloudDrive2 账户用户名 |
-| CloudDrive2 密码 | 无 | CloudDrive2 账户密码 |
-| CloudDrive2 不安全连接 | 关闭 | CloudDrive2 提供无 TLS 的明文 gRPC 服务时启用 |
-| 115 云下载根目录 | 无 | 已存在的 115 目录，各分类的下载目录将在其下创建 |
-| 共享暂存根目录 | 无 | CloudDrive2、CD211、Sonarr 和 Radarr 以相同绝对路径共享的、已存在且可写的暂存目录；通常为 `/downloads` |
-| 云下载超时 | `24h` | 115 云下载允许的最长时间 |
-| 复制超时 | `72h` | CloudDrive2 复制允许的最长时间 |
-| 校验超时 | `10m` | 本地文件校验允许的最长时间 |
+- CloudDrive2 地址、用户名、密码和 TLS 模式。
+- 115 云下载根目录和共享暂存根目录。
+- 云下载超时（默认 `24h`）。
+- NAS 复制超时（默认 `72h`）。
+- 本地校验超时（默认 `10m`）。
+- 分类、管理员密码、API 令牌和 Webhook。
 
-超时时间使用 Go 时长格式，例如 `30m`、`24h` 或 `72h`。
+时长按 Go 格式填写，例如 `30m`、`24h` 或 `72h`。
 
-保存应用设置时，CD211 会重新检查 CloudDrive2 连接和两个根目录。修改根目录会保留各分类的子目录，并为之后新提交的任务重新映射完整路径。已有下载任务继续使用其固定路径，CD211 不会移动其文件。
+## 安全与使用限制
 
-### 分类
+- 仅在可信局域网中运行 CD211，不要把 HTTP 端口直接暴露到公网。
+- Web 界面和 Sonarr / Radarr 共用 `admin` 凭据；原生 API 使用单独的全局令牌。
+- 全局 API 令牌不会过期，也不适用于公网或多租户环境。
+- CD211 不下载 BT 数据、不连接 Tracker、不做种，只负责协调 115 云下载、NAS 复制和状态回报。
+- 删除任务不会删除 115 中的文件；删除时可自行选择是否同时删除本地文件。
 
-每个分类包含：
-
-| 设置 | 说明 |
-|---|---|
-| 名称 | Sonarr 或 Radarr 发送的值，例如 `tv` 或 `movies` |
-| 115 分类子目录 | 已配置的 115 根目录下的相对云下载目标路径 |
-| 共享暂存子目录 | 已配置的共享暂存根目录下的相对复制目标路径 |
-| 可用状态 | 已禁用的分类会拒绝新的提交 |
-
-请先在 CD211 Web 界面中配置分类，再在 Sonarr 或 Radarr 中使用。如果 Sonarr 或 Radarr 通过 qBittorrent API 创建了分类，请先在 CD211 中检查自动生成的路径，再开始使用。
-
-### 凭据
-
-- 用户名始终为 `admin`。
-- 管理员密码在首次运行设置时创建，可以通过 Web 界面的**修改密码**页面更改。
-- Web 界面和 Sonarr/Radarr 使用相同的凭据。
-- 修改密码后，请同步更新 Sonarr 和 Radarr 中的 qBittorrent 下载客户端配置。
-- 自动化 API 使用独立于管理员密码的全局 API 令牌（见下文「自动化 API」）：系统生成并仅显示一次，轮换后旧令牌立即失效，吊销后 API 禁用，令牌不会过期。
-
-### 自动化 API
-
-CD211 提供独立于 qBittorrent 兼容接口的原生自动化 API（`/api/v1`），用于提交下载、查询状态、等待任务进入终止状态以及拉取完成/失败事件。所有请求必须携带 `Authorization: Bearer <令牌>` 请求头，且仅支持 Bearer 认证；Web 界面的 SID 会话和管理员密码均不能用于此 API。
-
-在 Web 界面的**设置**页面管理唯一的全局 API 令牌：
-
-- 系统生成**一个**全局令牌，可随时生成、轮换或吊销。生成或轮换后，页面只显示一次新令牌；页面响应包含 `Cache-Control: no-store`，之后无法找回该令牌。
-- 轮换会使旧令牌立即失效；吊销会禁用 API。令牌**不会过期**。
-- SQLite 仅存储令牌的 SHA-256 摘要和令牌提示（末尾字符），从不保存原始令牌。
-- 未携带令牌或令牌无效时，API 返回 `401`；首次运行设置尚未完成时，`/api/v1` 返回 `503`。
-
-端点：
-
-| 端点 | 说明 |
-|---|---|
-| `POST /api/v1/downloads` | 提交下载：使用 JSON 请求体 `{"magnet":"...","category":"movies","stopped":false}`，或使用 multipart 表单中的 `torrent` 文件字段以及 `category`、`stopped` 字段 |
-| `GET /api/v1/downloads/{hash}` | 查询下载状态（40 位十六进制哈希；服务端统一转换为小写） |
-| `GET /api/v1/downloads/{hash}/wait?timeout=1s..25s` | 等待任务进入终止状态；超时返回 `204` |
-| `GET /api/v1/events` | 拉取 `download.completed`/`download.failed` 事件，支持 `cursor`/`types`/`hash`/`limit`/`wait` 参数 |
-
-提交响应为 `{"created","download"}`：创建新任务或恢复已删除的任务时，返回 `201` 和 `Location` 响应头；任务已存在且处于活跃状态时，返回 `200`，且不修改任何字段。下载模型包含以下字段：`hash`、`name`、`category`、`state`、`progress`、`version`、`terminal`、`outcome`、`content_path`、`total_size`、`error`、`created_at`、`updated_at`、`completed_at` 和 `links`。终止结果包括 `completed`、`failed`、`cancelled` 和 `deleted`；`STOPPED` 和所有进行中状态均不是终止状态。
-
-`wait` 的 `timeout` 默认为 `25s`，允许 `1s` 至 `25s`。任务进入终止状态后，接口返回 `200` 及完整下载模型；超时则返回 `204`，响应正文为空，并携带 `X-CD211-Download-Version` 响应头。
-
-事件响应为 `{"items":[{"cursor","event"}],"next_cursor","has_more"}`。`cursor` 是采用 base64url 编码且带版本的不透明游标；客户端应将其作为字符串原样保存。省略 `cursor` 时，从当前保留的最早事件开始；`latest` 表示只拉取当前高水位之后产生的新事件。`types` 可筛选 `download.completed` 和 `download.failed`，`hash` 可限定单个任务；`limit` 默认为 `100`、最大为 `500`，`wait` 允许 `0s` 至 `25s`。翻页时，游标按单调递增的事件序号推进，并跳过不符合筛选条件的事件。事件采用「至少一次」投递语义，客户端必须按事件 ID 去重。失败事件中的错误信息会经过脱敏；任务提交时记录的固定路径也在脱敏范围内。
-
-原生 API 仅提供提交、查询、等待和事件拉取能力，**没有**重试、取消、删除或分类变更等控制端点。与 Webhook 一样，请仅在可信局域网内使用：所有客户端共用一个全局令牌，也没有适用于公网或多租户环境的防滥用机制。
-
-### Webhook
-
-下载完成或失败时，CD211 可以向外部自动化服务或通知系统发送带签名的 Webhook 请求。Webhook 仅用于外部通知；Sonarr 和 Radarr 仍通过轮询和 Completed Download Handling 导入下载。
-
-在 Web 界面的 **Webhook** 页面管理 Webhook 端点，在 **投递记录** 页面（`/webhook-deliveries`）查看投递历史。每个端点可以单独或同时订阅 `download.completed` 和 `download.failed` 事件，并支持创建、编辑、启用、停用、轮换签名密钥、删除、测试、筛选和重新投递死信。所有操作均受现有管理员会话和 CSRF 机制保护，不使用独立的角色或 API 凭据。
-
-端点配置项：
-
-- **名称**：用于区分端点的任意名称。
-- **接收 URL**：必须是绝对 HTTP 或 HTTPS URL，且不能包含用户信息（userinfo）或片段标识符（fragment）。查询参数可以使用，但 Web 界面会隐藏其原始内容。CD211 不跟随重定向。
-- **可选 Bearer 令牌**：通过 `Authorization: Bearer <token>` 请求头发送；编辑时留空可保留原值，也可通过专用控件清除。
-
-每次投递均为 JSON 格式的 POST 请求，并携带 `X-CD211-Event`、`X-CD211-Event-ID`、`X-CD211-Timestamp`（Unix 秒）、`X-CD211-Signature` 以及可选的 `Authorization: Bearer <token>` 请求头。签名为 `v1=` 加上小写十六进制的 HMAC-SHA256(secret, `<timestamp>.<raw-body>`)。接收方必须先使用原始请求体验证签名，再解析请求体，并根据事件 ID 去重。事件封装格式为 `{id, type, schema_version, occurred_at, data}`；失败事件的错误信息已脱敏，不含提交 URI、Tracker 凭据、签名密钥或 Bearer 令牌。
-
-安全要点：
-
-- 签名密钥在创建或轮换时生成，仅通过带 `Cache-Control: no-store` 的响应显示一次，之后无法在 Web 界面中找回；Bearer 令牌也不会再次显示。
-- URL、密钥和请求体不会写入日志。
-- 仅配置可信的接收方 URL。CD211 有意允许访问私网或局域网地址，因此不提供用于限制目标地址的 SSRF 白名单。
-
-重试与重新投递：
-
-- 只有 2xx 响应视为成功；其他响应会按指数退避策略重试，退避间隔设有上限。重试期最长为 24 小时，之后进入死信状态。
-- 死信投递可在 **投递记录** 页面手动重新投递（仅限已启用且未删除的端点）；重新投递时会沿用原事件 ID 和载荷，重新开始最长 24 小时的重试期，且不会创建重复的投递记录。
-- 接收方必须根据事件 ID 做幂等处理。
-
-`webhook.test` 事件只发送给所选端点，用于测试。
-
-### 健康检查
+## 健康检查
 
 ```text
 GET /healthz
 GET /readyz
 ```
 
-首次运行设置完成且本地根目录可用后，`/readyz` 才会返回成功。在设置完成前，qBittorrent API 请求会返回 `503`。
+`/healthz` 用于进程存活检查。首次设置完成且本地根目录可用后，`/readyz` 才会返回成功；在此之前，qBittorrent API 会返回 `503`。
