@@ -3,6 +3,7 @@ package clouddrive
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -485,6 +486,15 @@ func TestCopyInspectionValidationAndStateProgressMappings(t *testing.T) {
 	}
 	if _, err := mapOffline("/cloud", testHash, &pb.OfflineFile{Name: "x", Status: pb.OfflineFileStatus_OFFLINE_INIT, PercendDone: 101}); err == nil {
 		t.Fatal("accepted out-of-range offline progress")
+	}
+	if got, err := mapOffline("/cloud", testHash, &pb.OfflineFile{Name: "x", Status: pb.OfflineFileStatus_OFFLINE_INIT, PercendDone: 0, Size: 42}); err != nil || got.Size != 42 {
+		t.Fatalf("offline size mapping: %#v, %v", got, err)
+	}
+	if got, err := mapOffline("/cloud", testHash, &pb.OfflineFile{Name: "x", Status: pb.OfflineFileStatus_OFFLINE_INIT, PercendDone: 0, Size: 0}); err != nil || got.Size != 0 {
+		t.Fatalf("zero offline size mapping: %#v, %v", got, err)
+	}
+	if _, err := mapOffline("/cloud", testHash, &pb.OfflineFile{Name: "x", Status: pb.OfflineFileStatus_OFFLINE_INIT, PercendDone: 0, Size: uint64(math.MaxInt64) + 1}); err == nil {
+		t.Fatal("accepted overflow offline size")
 	}
 	states := []pb.CopyTask_TaskStatus{pb.CopyTask_Pending, pb.CopyTask_Scanning, pb.CopyTask_Scanned, pb.CopyTask_Completed, pb.CopyTask_Failed}
 	for _, state := range states {

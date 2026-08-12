@@ -66,6 +66,7 @@ type OfflineTask struct {
 	Name, InfoHash, SourcePath string
 	State                      OfflineState
 	Progress                   float64
+	Size                       int64
 }
 
 type CopyState string
@@ -679,7 +680,10 @@ func mapOffline(folder, hash string, file *pb.OfflineFile) (OfflineTask, error) 
 	if !ok {
 		return OfflineTask{}, errors.New("invalid progress")
 	}
-	return OfflineTask{Name: file.Name, InfoHash: hash, SourcePath: path.Join(folder, file.Name), State: state, Progress: progress}, nil
+	if file.Size > math.MaxInt64 {
+		return OfflineTask{}, errors.New("invalid size")
+	}
+	return OfflineTask{Name: file.Name, InfoHash: hash, SourcePath: path.Join(folder, file.Name), State: state, Progress: progress, Size: int64(file.Size)}, nil
 }
 
 func offlineState(status pb.OfflineFileStatus) (OfflineState, bool) {

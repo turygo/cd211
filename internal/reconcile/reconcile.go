@@ -577,7 +577,7 @@ func validateOfflineTask(d *domain.Download, task clouddrive.OfflineTask) error 
 	default:
 		return errors.New("invalid offline state")
 	}
-	if task.InfoHash != d.Hash || task.Progress < 0 || task.Progress > 1 || (task.Name == "" && task.SourcePath != "") || (task.Name != "" && !safeName(task.Name)) {
+	if task.InfoHash != d.Hash || task.Progress < 0 || task.Progress > 1 || task.Size < 0 || (task.Name == "" && task.SourcePath != "") || (task.Name != "" && !safeName(task.Name)) {
 		return errors.New("invalid offline task")
 	}
 	if task.Name == "" {
@@ -597,6 +597,9 @@ func (s *Scheduler) recordOffline(d *domain.Download, task clouddrive.OfflineTas
 	d.LastUpstreamStatus = "offline:" + string(task.State)
 	if task.State == clouddrive.OfflineFinished {
 		d.CloudTaskName, d.Name, d.CloudSourcePath = task.Name, task.Name, task.SourcePath
+	}
+	if d.TotalSize == 0 && task.Size > 0 {
+		d.TotalSize = task.Size
 	}
 }
 

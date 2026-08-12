@@ -316,6 +316,36 @@ func TestRecordOfflineTrustsMetadataOnlyAfterFinish(t *testing.T) {
 	}
 }
 
+func TestRecordOfflineFillsUnknownTotalSizeAndPreservesKnown(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	scheduler := &Scheduler{}
+
+	unknown := baseDownload(domain.StateWaitingOffline, now)
+	scheduler.recordOffline(&unknown, clouddrive.OfflineTask{
+		Name: "payload", SourcePath: "/cloud/payload", State: clouddrive.OfflineDownloading, Progress: 0.5, Size: 4096,
+	})
+	if unknown.TotalSize != 4096 || unknown.OfflineProgress != 0.5 || unknown.QbitProgress != 0.45 {
+		t.Fatalf("unknown durable size not filled with progress preserved: %+v", unknown)
+	}
+
+	known := baseDownload(domain.StateWaitingOffline, now)
+	known.TotalSize = 2048
+	scheduler.recordOffline(&known, clouddrive.OfflineTask{
+		Name: "payload", SourcePath: "/cloud/payload", State: clouddrive.OfflineDownloading, Progress: 0.5, Size: 4096,
+	})
+	if known.TotalSize != 2048 {
+		t.Fatalf("known durable size was overwritten: %+v", known)
+	}
+
+	zeroTask := baseDownload(domain.StateWaitingOffline, now)
+	scheduler.recordOffline(&zeroTask, clouddrive.OfflineTask{
+		Name: "payload", SourcePath: "/cloud/payload", State: clouddrive.OfflineDownloading, Progress: 0.5, Size: 0,
+	})
+	if zeroTask.TotalSize != 0 {
+		t.Fatalf("zero offline size was treated as known: %+v", zeroTask)
+	}
+}
+
 func TestStepWorkflowAndMissingCopyRecovery(t *testing.T) {
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	clock := &fakeClock{now: now}
