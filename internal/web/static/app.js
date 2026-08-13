@@ -554,3 +554,24 @@ for (const preview of document.querySelectorAll("[data-settings-remap]")) {
   }
   renderRemap();
 }
+
+// Sticky action columns need separation only while they overlap horizontally
+// scrollable table content. Without overflow—or at the right edge—the shadow
+// would render as a broken vertical gray stripe through every body row.
+for (const tableWrap of document.querySelectorAll(".table-wrap")) {
+  if (!tableWrap.querySelector(".actions-heading, .cell-actions")) {
+    continue;
+  }
+
+  const updateStickyShadow = () => {
+    const maxScrollLeft = tableWrap.scrollWidth - tableWrap.clientWidth;
+    const overlapsContent = maxScrollLeft > 1 && tableWrap.scrollLeft < maxScrollLeft - 1;
+    tableWrap.classList.toggle("has-sticky-overlap", overlapsContent);
+  };
+
+  tableWrap.addEventListener("scroll", updateStickyShadow, { passive: true });
+  if ("ResizeObserver" in window) {
+    new ResizeObserver(updateStickyShadow).observe(tableWrap);
+  }
+  updateStickyShadow();
+}

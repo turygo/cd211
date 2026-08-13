@@ -21,6 +21,7 @@ section using the release version and date.
 
 ### Fixed
 
+- Show the fixed action-column shadow only while it overlaps horizontally scrollable table content, removing the segmented gray stripe from wide tables.
 - Kept primary-button labels and current setup-step numbers white and readable on indigo backgrounds in Light mode, including after cached stylesheet upgrades.
 
 ## [0.3.8] - 2026-08-13

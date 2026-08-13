@@ -520,11 +520,11 @@ func TestSecurityHeadersAndStaticAssets(t *testing.T) {
 
 	body := login.Body.String()
 	themeInit := strings.Index(body, `<script src="/static/theme-init.js?v=1"></script>`)
-	stylesheet := strings.Index(body, `<link rel="stylesheet" href="/static/app.css?v=11">`)
+	stylesheet := strings.Index(body, `<link rel="stylesheet" href="/static/app.css?v=12">`)
 	if themeInit < 0 || stylesheet < 0 || themeInit > stylesheet {
 		t.Errorf("theme initializer must load before stylesheet: theme=%d stylesheet=%d", themeInit, stylesheet)
 	}
-	moduleScript := strings.Index(body, `<script type="module" src="/static/app.js?v=7"></script>`)
+	moduleScript := strings.Index(body, `<script type="module" src="/static/app.js?v=8"></script>`)
 	if moduleScript < 0 || moduleScript < stylesheet {
 		t.Errorf("app module script must load after stylesheet: module=%d stylesheet=%d", moduleScript, stylesheet)
 	}

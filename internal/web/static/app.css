@@ -605,7 +605,7 @@ tbody tr:hover { background: var(--row-hover); }
   right: 0;
   z-index: 2;
   background: var(--bg-primary);
-  box-shadow: var(--shadow-sticky);
+  box-shadow: none;
   text-align: right;
 }
 
@@ -615,6 +615,11 @@ tbody tr:hover { background: var(--row-hover); }
   z-index: 1;
   vertical-align: middle;
   background: var(--bg-primary);
+  box-shadow: none;
+}
+
+.table-wrap.has-sticky-overlap .actions-heading,
+.table-wrap.has-sticky-overlap .cell-actions {
   box-shadow: var(--shadow-sticky);
 }
 
