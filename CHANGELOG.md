@@ -8,6 +8,10 @@ section using the release version and date.
 
 ## [Unreleased]
 
+### Fixed
+
+- Redirected authenticated operators away from the login page to the dashboard.
+
 ## [0.3.6] - 2026-08-12
 
 ### Added

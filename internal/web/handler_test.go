@@ -424,6 +424,12 @@ func TestAuthenticationRedirectLoginAndLogout(t *testing.T) {
 		t.Errorf("redirect Location = %q, want /login", location)
 	}
 
+	authenticatedLogin := fixture.request(http.MethodGet, "/login", nil, true)
+	requireStatus(t, authenticatedLogin, http.StatusSeeOther)
+	if location := authenticatedLogin.Header().Get("Location"); location != "/" {
+		t.Errorf("authenticated login Location = %q, want /", location)
+	}
+
 	invalid := fixture.request(http.MethodPost, "/login", url.Values{"username": {"operator"}, "password": {"wrong secret"}}, false)
 	requireStatus(t, invalid, http.StatusUnauthorized)
 	requireContains(t, invalid.Body.String(), "The username or password did not match.")

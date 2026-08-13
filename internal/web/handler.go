@@ -394,6 +394,13 @@ func static(w http.ResponseWriter, name, contentType string) {
 }
 
 func (h *handler) loginPage(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie("SID")
+	if err == nil && cookie.Value != "" {
+		if _, ok := h.sessions.Get(cookie.Value); ok {
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		}
+	}
 	h.render(w, http.StatusOK, "login", loginView(requestLang(r), ""))
 }
 
