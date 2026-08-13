@@ -8,6 +8,8 @@ section using the release version and date.
 
 ## [Unreleased]
 
+## [0.3.8] - 2026-08-13
+
 ### Fixed
 
 - Made light mode the default and applied saved theme preferences before styles load, preventing a dark-to-light flash during page and browser-history navigation.
