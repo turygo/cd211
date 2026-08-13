@@ -1,23 +1,13 @@
 "use strict";
 
 const themeStorageKey = "cd211-theme";
-const lightThemeQuery = window.matchMedia("(prefers-color-scheme: light)");
-let savedTheme = null;
-
-try {
-  const value = window.localStorage.getItem(themeStorageKey);
-  if (value === "dark" || value === "light") {
-    savedTheme = value;
-  }
-} catch {
-  // Storage can be unavailable in privacy-restricted browser contexts.
-}
+let savedTheme = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
 
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
 }
 
-applyTheme(savedTheme || (lightThemeQuery.matches ? "light" : "dark"));
+applyTheme(savedTheme);
 
 for (const toggle of document.querySelectorAll("[data-theme-toggle]")) {
   toggle.addEventListener("click", () => {
@@ -31,15 +21,9 @@ for (const toggle of document.querySelectorAll("[data-theme-toggle]")) {
   });
 }
 
-lightThemeQuery.addEventListener("change", (event) => {
-  if (!savedTheme) {
-    applyTheme(event.matches ? "light" : "dark");
-  }
-});
-
 window.addEventListener("storage", (event) => {
-  if (event.key === themeStorageKey && (event.newValue === "dark" || event.newValue === "light")) {
-    savedTheme = event.newValue;
+  if (event.key === themeStorageKey) {
+    savedTheme = event.newValue === "dark" ? "dark" : "light";
     applyTheme(savedTheme);
   }
 });

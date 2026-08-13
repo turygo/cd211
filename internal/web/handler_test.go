@@ -518,7 +518,14 @@ func TestSecurityHeadersAndStaticAssets(t *testing.T) {
 		t.Errorf("Referrer-Policy = %q", got)
 	}
 
-	for _, target := range []string{"/static/app.css", "/static/app.js"} {
+	body := login.Body.String()
+	themeInit := strings.Index(body, `<script src="/static/theme-init.js?v=1"></script>`)
+	stylesheet := strings.Index(body, `<link rel="stylesheet" href="/static/app.css?v=7">`)
+	if themeInit < 0 || stylesheet < 0 || themeInit > stylesheet {
+		t.Errorf("theme initializer must load before stylesheet: theme=%d stylesheet=%d", themeInit, stylesheet)
+	}
+
+	for _, target := range []string{"/static/app.css", "/static/app.js", "/static/theme-init.js"} {
 		response := fixture.request(http.MethodGet, target, nil, false)
 		requireStatus(t, response, http.StatusOK)
 		if response.Header().Get("Cache-Control") != "public,max-age=3600" || response.Header().Get("X-Content-Type-Options") != "nosniff" {

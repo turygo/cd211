@@ -153,6 +153,7 @@ func NewSetup(cfg SetupConfig) (http.Handler, error) {
 	mux.Handle("POST /setup/finish", http.HandlerFunc(h.setupFinish))
 	mux.Handle("GET /lang", http.HandlerFunc(setLang))
 	mux.Handle("GET /static/app.css", http.HandlerFunc(staticCSS))
+	mux.Handle("GET /static/theme-init.js", http.HandlerFunc(staticThemeInitJS))
 	mux.Handle("GET /static/app.js", http.HandlerFunc(staticJS))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		method, found := setupRouteMethod(r.URL.Path, r.Method)
@@ -177,7 +178,7 @@ func NewSetup(cfg SetupConfig) (http.Handler, error) {
 
 func setupRouteMethod(requestPath, requestMethod string) (string, bool) {
 	switch requestPath {
-	case "/setup", "/lang", "/static/app.css", "/static/app.js":
+	case "/setup", "/lang", "/static/app.css", "/static/app.js", "/static/theme-init.js":
 		return http.MethodGet, true
 	case "/setup/cloud-directories", "/setup/local-directories":
 		if requestMethod == http.MethodGet {

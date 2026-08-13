@@ -39,7 +39,7 @@ const (
 	maxDownloadSearchLength       = 200
 )
 
-//go:embed templates/*.html static/app.css static/app.js
+//go:embed templates/*.html static/app.css static/app.js static/theme-init.js
 var assets embed.FS
 
 // Repository is the durable surface required by the operator interface.
@@ -185,6 +185,7 @@ func New(config Config, credentials Credentials, repo Repository, sessions *sess
 	mux.Handle("POST /login", http.HandlerFunc(h.login))
 	mux.Handle("GET /lang", http.HandlerFunc(setLang))
 	mux.Handle("GET /static/app.css", http.HandlerFunc(staticCSS))
+	mux.Handle("GET /static/theme-init.js", http.HandlerFunc(staticThemeInitJS))
 	mux.Handle("GET /static/app.js", http.HandlerFunc(staticJS))
 	mux.Handle("GET /", h.auth(h.downloads, false))
 	mux.Handle("GET /downloads/{hash}", h.auth(h.detail, false))
@@ -245,7 +246,7 @@ func routeMethod(requestPath, requestMethod string) (string, bool) {
 			return http.MethodPost, true
 		}
 		return http.MethodGet, true
-	case "/", "/categories", "/settings", "/lang", "/static/app.css", "/static/app.js":
+	case "/", "/categories", "/settings", "/lang", "/static/app.css", "/static/app.js", "/static/theme-init.js":
 		return http.MethodGet, true
 	case "/logout", "/categories/save", "/settings/test", "/settings/save":
 		return http.MethodPost, true
@@ -379,6 +380,10 @@ func staticCSS(w http.ResponseWriter, _ *http.Request) {
 
 func staticJS(w http.ResponseWriter, _ *http.Request) {
 	static(w, "static/app.js", "text/javascript; charset=utf-8")
+}
+
+func staticThemeInitJS(w http.ResponseWriter, _ *http.Request) {
+	static(w, "static/theme-init.js", "text/javascript; charset=utf-8")
 }
 
 func static(w http.ResponseWriter, name, contentType string) {

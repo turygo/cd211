@@ -3,7 +3,7 @@
  * Status colors (green/yellow/red) are derived additions for workflow state;
  * everything else maps 1:1 to the pinned token sheet. */
 
-:root {
+html[data-theme="dark"] {
   color-scheme: dark;
   /* Colors — Linear Dark System */
   --bg-primary: #08090a;
@@ -61,7 +61,7 @@
   --dialog-backdrop: rgba(3, 4, 5, 0.72);
 }
 
-html[data-theme="light"] {
+:root {
   color-scheme: light;
   --bg-primary: #f8f9fb;
   --bg-secondary: #f1f2f4;
@@ -287,9 +287,9 @@ a:hover { color: var(--accent-hover); }
   stroke-width: 1.4;
 }
 
-.theme-icon-moon,
-html[data-theme="light"] .theme-icon-sun { display: none; }
-html[data-theme="light"] .theme-icon-moon { display: block; }
+.theme-icon-sun,
+html[data-theme="dark"] .theme-icon-moon { display: none; }
+html[data-theme="dark"] .theme-icon-sun { display: block; }
 
 .page-title {
   display: flex;

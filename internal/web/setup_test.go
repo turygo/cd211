@@ -693,8 +693,10 @@ func TestSetupRoutesServeLangAndStaticPreAuth(t *testing.T) {
 	fixture := newSetupFixture(t)
 	lang := fixture.get("/lang?to=zh", "")
 	requireStatus(t, lang, http.StatusSeeOther)
-	css := fixture.get("/static/app.css", "")
-	requireStatus(t, css, http.StatusOK)
+	for _, target := range []string{"/static/app.css", "/static/app.js", "/static/theme-init.js"} {
+		asset := fixture.get(target, "")
+		requireStatus(t, asset, http.StatusOK)
+	}
 	get := fixture.get("/setup/password", "")
 	requireStatus(t, get, http.StatusMethodNotAllowed)
 	missing := fixture.get("/no-such-route", "")
