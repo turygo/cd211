@@ -4,7 +4,7 @@
     <span class="cell-meta"><code>{{.HashPrefix}}</code></span>
     {{if .Error}}<span class="cell-error{{if .ErrorIsWarning}} is-warning{{end}}">{{.Error}}</span>{{end}}
   </td>
-  <td><span class="state-badge" data-state="{{.InternalState}}">{{.StateLabel}}</span></td>
+  <td><span class="state-badge" data-state="{{.InternalState}}" aria-label="{{.StateFullLabel}}" title="{{.StateFullLabel}}">{{.StateLabel}}</span></td>
   <td class="cell-progress">{{template "route-strip" .Route}}</td>
   <td class="cell-category">{{.Category}}</td>
   <td class="cell-age">{{printf .Str.AgoFormat .Age}}</td>

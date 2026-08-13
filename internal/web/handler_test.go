@@ -520,7 +520,7 @@ func TestSecurityHeadersAndStaticAssets(t *testing.T) {
 
 	body := login.Body.String()
 	themeInit := strings.Index(body, `<script src="/static/theme-init.js?v=1"></script>`)
-	stylesheet := strings.Index(body, `<link rel="stylesheet" href="/static/app.css?v=12">`)
+	stylesheet := strings.Index(body, `<link rel="stylesheet" href="/static/app.css?v=13">`)
 	if themeInit < 0 || stylesheet < 0 || themeInit > stylesheet {
 		t.Errorf("theme initializer must load before stylesheet: theme=%d stylesheet=%d", themeInit, stylesheet)
 	}
@@ -1181,7 +1181,10 @@ func TestLanguagePreferenceRendersChinese(t *testing.T) {
 
 	downloads := fixture.requestLang(http.MethodGet, "/?view=all", true, "zh")
 	requireStatus(t, downloads, http.StatusOK)
-	requireContains(t, downloads.Body.String(), "115 离线", "复制到 NAS", "本地校验", "CloudDrive2 在线", "下载任务", "分类管理", `data-state="WAITING_OFFLINE">等待离线下载</span>`)
+	requireContains(t, downloads.Body.String(), "115 离线", "复制到 NAS", "本地校验", "CloudDrive2 在线", "下载任务", "分类管理", `data-state="WAITING_OFFLINE" aria-label="等待离线下载" title="等待离线下载">等待 115 完成</span>`)
+	englishDownloads := fixture.requestLang(http.MethodGet, "/?view=all", true, "en")
+	requireStatus(t, englishDownloads, http.StatusOK)
+	requireContains(t, englishDownloads.Body.String(), `data-state="WAITING_OFFLINE" aria-label="Waiting for offline download" title="Waiting for offline download">Waiting for 115</span>`)
 
 	detail := fixture.requestLang(http.MethodGet, "/downloads/"+strings.Repeat("a", 40), true, "zh")
 	requireStatus(t, detail, http.StatusOK)

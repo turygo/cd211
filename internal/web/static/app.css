@@ -215,7 +215,7 @@ a:hover { color: var(--accent-hover); }
 
 .brand-name { color: var(--text-primary); }
 
-.side-nav { display: flex; flex-direction: column; gap: 2px; }
+.side-nav { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 
 .nav-item {
   padding: 6px 8px;
@@ -235,6 +235,7 @@ a:hover { color: var(--accent-hover); }
 .sidebar-foot {
   margin-top: auto;
   display: flex;
+  min-width: 0;
   flex-direction: column;
   align-items: flex-start;
   gap: 4px;
@@ -252,6 +253,7 @@ a:hover { color: var(--accent-hover); }
 .lang-toggle:hover { color: var(--text-primary); background: var(--bg-elevated); }
 
 .content {
+  min-width: 0;
   padding: 32px clamp(16px, 4vw, 48px) 96px;
   max-width: 1200px;
   width: 100%;
@@ -314,6 +316,7 @@ main#main-content {
 /* ---------- Page chrome ---------- */
 
 .page-header {
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -323,6 +326,8 @@ main#main-content {
 
 .page-header-actions {
   display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
@@ -437,6 +442,7 @@ html[data-theme="dark"] .theme-icon-sun { display: block; }
 
 .filter-field {
   display: flex;
+  min-width: 0;
   flex-direction: column;
   gap: 4px;
   font-size: 12px;
@@ -940,7 +946,7 @@ tbody tr:hover .cell-actions { background: var(--row-sticky-hover); }
 .detail-list dt { color: var(--text-tertiary); font-size: 12px; }
 .detail-list dd { margin: 0; color: var(--text-secondary); overflow-wrap: anywhere; }
 
-.action-bar { display: flex; flex-wrap: wrap; gap: 8px; }
+.action-bar { display: flex; min-width: 0; flex-wrap: wrap; gap: 8px; }
 
 /* ---------- Notices & empty state ---------- */
 
@@ -1593,6 +1599,7 @@ html.vt-back::view-transition-new(setup-content) {
 
 .setup-actions {
   display: flex;
+  min-width: 0;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
@@ -1701,7 +1708,7 @@ html.vt-back::view-transition-new(setup-content) {
   color: var(--text-secondary);
 }
 
-.button-row { display: flex; gap: 8px; margin-top: 16px; }
+.button-row { display: flex; min-width: 0; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 .button-row .button { margin-top: 0; }
 
 .settings-form .panel { margin-bottom: 16px; }
@@ -1719,9 +1726,9 @@ html.vt-back::view-transition-new(setup-content) {
   .cell-progress .stage-head { display: none; }
   .cell-progress, .col-progress { min-width: 130px; width: 130px; }
   .cell-name { min-width: 180px; }
-  .download-table { min-width: 860px; }
+  .download-table { min-width: 880px; }
   .download-table .col-name { width: 220px; }
-  .download-table .col-state { width: 130px; }
+  .download-table .col-state { width: 150px; }
 }
 
 @media (max-width: 768px) {
@@ -1729,16 +1736,30 @@ html.vt-back::view-transition-new(setup-content) {
 
   .sidebar {
     position: static;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
     height: auto;
-    flex-direction: row;
-    align-items: center;
+    align-items: stretch;
+    gap: 8px;
     border-right: none;
     border-bottom: 1px solid var(--border);
     padding: 8px 16px;
   }
 
-  .side-nav { flex-direction: row; }
-  .sidebar-foot { margin-top: 0; margin-left: auto; flex-direction: row; align-items: center; }
+  .side-nav {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+  .side-nav .nav-item { min-width: 0; text-align: center; }
+  .sidebar-foot {
+    margin: 0;
+    padding: 0;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+  }
   .lang-toggle { padding: 4px 6px; }
 
   .content { padding: 20px 16px 64px; }
@@ -1796,7 +1817,7 @@ html.vt-back::view-transition-new(setup-content) {
     justify-content: flex-start;
     flex-direction: column;
     gap: 6px;
-    height: 48px;
+    min-height: 62px;
     text-align: center;
   }
 
@@ -1817,11 +1838,10 @@ html.vt-back::view-transition-new(setup-content) {
 
   .setup-step-title {
     display: block;
-    overflow: hidden;
+    min-height: 28px;
     font-size: 10px;
     line-height: 14px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: normal;
   }
 
   .setup-step-detail { display: none; }

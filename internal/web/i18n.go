@@ -83,7 +83,10 @@ type Strings struct {
 	EmptyBody         string
 	PaginationFormat  string // printf with first row, last row, and total count
 	PreviousPage      string
-	States            StateLabels
+	// States contains complete labels for detail views and accessible names.
+	States StateLabels
+	// CompactStates contains single-line labels for download-list badges.
+	CompactStates StateLabels
 
 	// Route stages
 	Stage115           string
@@ -426,6 +429,22 @@ var stringsEN = Strings{
 		SubmittingCopy:    "Submitting copy",
 		WaitingCopy:       "Waiting for copy",
 		VerifyingLocal:    "Verifying local files",
+		Completed:         "Completed",
+		Failed:            "Failed",
+		CancelRequested:   "Cancelling",
+		Cancelled:         "Cancelled",
+		DeleteRequested:   "Deleting",
+		Deleted:           "Deleted",
+	},
+	CompactStates: StateLabels{
+		Accepted:          "Accepted",
+		Stopped:           "Paused",
+		Pausing:           "Pausing",
+		SubmittingOffline: "Submitting to 115",
+		WaitingOffline:    "Waiting for 115",
+		SubmittingCopy:    "Starting copy",
+		WaitingCopy:       "Copying",
+		VerifyingLocal:    "Verifying files",
 		Completed:         "Completed",
 		Failed:            "Failed",
 		CancelRequested:   "Cancelling",
@@ -786,6 +805,22 @@ var stringsZH = Strings{
 		CancelRequested:   "正在取消",
 		Cancelled:         "已取消",
 		DeleteRequested:   "正在删除",
+		Deleted:           "已删除",
+	},
+	CompactStates: StateLabels{
+		Accepted:          "待处理",
+		Stopped:           "已暂停",
+		Pausing:           "暂停中",
+		SubmittingOffline: "提交到 115",
+		WaitingOffline:    "等待 115 完成",
+		SubmittingCopy:    "开始复制",
+		WaitingCopy:       "复制中",
+		VerifyingLocal:    "本地校验中",
+		Completed:         "已完成",
+		Failed:            "已失败",
+		CancelRequested:   "取消中",
+		Cancelled:         "已取消",
+		DeleteRequested:   "删除中",
 		Deleted:           "已删除",
 	},
 

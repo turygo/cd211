@@ -76,6 +76,7 @@ type DownloadRow struct {
 	Category       string
 	InternalState  string
 	StateLabel     string
+	StateFullLabel string
 	ProjectedState string
 	Projected      string
 	Offline        string
@@ -308,7 +309,8 @@ func buildDownloadRow(download domain.Download, projection domain.Projection, no
 		Name:           download.Name,
 		Category:       displayCategory(download.Category, str),
 		InternalState:  string(download.State),
-		StateLabel:     displayDownloadState(download, str),
+		StateLabel:     displayDownloadState(download, str.CompactStates),
+		StateFullLabel: displayDownloadState(download, str.States),
 		ProjectedState: projection.State,
 		Projected:      percent(projection.Progress),
 		Offline:        percent(download.OfflineProgress),
@@ -345,7 +347,7 @@ func buildDetailView(download domain.Download, files []domain.DownloadFile, csrf
 		CloudSourcePath: displayPath(download.CloudSourcePath, str),
 		ContentPath:     displayPath(download.ContentPath, str),
 		InternalState:   string(download.State),
-		StateLabel:      displayDownloadState(download, str),
+		StateLabel:      displayDownloadState(download, str.States),
 		ProjectedState:  projection.State,
 		Projected:       percent(projection.Progress),
 		Offline:         percent(download.OfflineProgress),
@@ -461,46 +463,46 @@ func buildRoute(download domain.Download, str *Strings) RouteView {
 		stages[2].Status = str.StatusVerified
 	default:
 		stages[2].Class = "is-halted"
-		stages[2].Status = displayDownloadState(download, str)
+		stages[2].Status = displayDownloadState(download, str.States)
 	}
 	return RouteView{Stages: stages, Verified: download.State == domain.StateCompleted, State: string(download.State)}
 }
 
-func displayDownloadState(download domain.Download, str *Strings) string {
+func displayDownloadState(download domain.Download, labels StateLabels) string {
 	if download.State == domain.StateCancelRequested && download.PauseRequested {
-		return str.States.Pausing
+		return labels.Pausing
 	}
-	return displayState(download.State, str)
+	return displayState(download.State, labels)
 }
 
-func displayState(state domain.State, str *Strings) string {
+func displayState(state domain.State, labels StateLabels) string {
 	switch state {
 	case domain.StateAccepted:
-		return str.States.Accepted
+		return labels.Accepted
 	case domain.StateStopped:
-		return str.States.Stopped
+		return labels.Stopped
 	case domain.StateSubmittingOffline:
-		return str.States.SubmittingOffline
+		return labels.SubmittingOffline
 	case domain.StateWaitingOffline:
-		return str.States.WaitingOffline
+		return labels.WaitingOffline
 	case domain.StateSubmittingCopy:
-		return str.States.SubmittingCopy
+		return labels.SubmittingCopy
 	case domain.StateWaitingCopy:
-		return str.States.WaitingCopy
+		return labels.WaitingCopy
 	case domain.StateVerifyingLocal:
-		return str.States.VerifyingLocal
+		return labels.VerifyingLocal
 	case domain.StateCompleted:
-		return str.States.Completed
+		return labels.Completed
 	case domain.StateFailed:
-		return str.States.Failed
+		return labels.Failed
 	case domain.StateCancelRequested:
-		return str.States.CancelRequested
+		return labels.CancelRequested
 	case domain.StateCancelled:
-		return str.States.Cancelled
+		return labels.Cancelled
 	case domain.StateDeleteRequested:
-		return str.States.DeleteRequested
+		return labels.DeleteRequested
 	case domain.StateDeleted:
-		return str.States.Deleted
+		return labels.Deleted
 	default:
 		return string(state)
 	}
