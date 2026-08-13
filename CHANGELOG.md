@@ -8,6 +8,8 @@ section using the release version and date.
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-08-13
+
 ### Fixed
 
 - Redirected authenticated operators away from the login page to the dashboard.
