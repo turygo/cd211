@@ -7,7 +7,10 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"html/template"
 	"mime"
 	"net/http"
@@ -15,6 +18,7 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -39,7 +43,7 @@ const (
 	maxDownloadSearchLength       = 200
 )
 
-//go:embed templates/*.html static/app.css static/app.js static/theme-init.js static/vendor/motion-mini.js
+//go:embed templates/*.html static/app.css static/app.js static/actions-motion.js static/downloads-live.js static/motion.js static/setup-motion.js static/theme-init.js static/vendor/motion-mini.js
 var assets embed.FS
 
 // Repository is the durable surface required by the operator interface.
@@ -187,9 +191,15 @@ func New(config Config, credentials Credentials, repo Repository, sessions *sess
 	mux.Handle("GET /static/app.css", http.HandlerFunc(staticCSS))
 	mux.Handle("GET /static/theme-init.js", http.HandlerFunc(staticThemeInitJS))
 	mux.Handle("GET /static/app.js", http.HandlerFunc(staticJS))
+	mux.Handle("GET /static/motion.js", http.HandlerFunc(staticMotionJS))
+	mux.Handle("GET /static/actions-motion.js", http.HandlerFunc(staticActionsMotionJS))
+	mux.Handle("GET /static/downloads-live.js", http.HandlerFunc(staticDownloadsLiveJS))
+	mux.Handle("GET /static/setup-motion.js", http.HandlerFunc(staticSetupMotionJS))
 	mux.Handle("GET /static/vendor/motion-mini.js", http.HandlerFunc(staticMotionMiniJS))
 	mux.Handle("GET /", h.auth(h.downloads, false))
+	mux.Handle("GET /downloads/updates", h.auth(h.downloadsUpdates, false))
 	mux.Handle("GET /downloads/{hash}", h.auth(h.detail, false))
+	mux.Handle("GET /downloads/{hash}/updates", h.auth(h.detailUpdates, false))
 	mux.Handle("GET /categories", h.auth(h.categories, false))
 	mux.Handle("GET /settings", h.auth(h.settingsPage, false))
 	mux.Handle("GET /password", h.auth(h.passwordPage, false))
@@ -247,7 +257,7 @@ func routeMethod(requestPath, requestMethod string) (string, bool) {
 			return http.MethodPost, true
 		}
 		return http.MethodGet, true
-	case "/", "/categories", "/settings", "/lang", "/static/app.css", "/static/app.js", "/static/theme-init.js", "/static/vendor/motion-mini.js":
+	case "/", "/categories", "/settings", "/lang", "/static/app.css", "/static/app.js", "/static/motion.js", "/static/actions-motion.js", "/static/downloads-live.js", "/static/setup-motion.js", "/static/theme-init.js", "/static/vendor/motion-mini.js":
 		return http.MethodGet, true
 	case "/logout", "/categories/save", "/settings/test", "/settings/save":
 		return http.MethodPost, true
@@ -269,6 +279,8 @@ func routeMethod(requestPath, requestMethod string) (string, bool) {
 		switch parts[2] {
 		case "start", "pause", "retry", "cancel", "remove":
 			return http.MethodPost, true
+		case "updates":
+			return http.MethodGet, true
 		}
 	}
 	if len(parts) == 2 && parts[0] == "webhooks" && parts[1] != "" {
@@ -389,6 +401,22 @@ func staticThemeInitJS(w http.ResponseWriter, _ *http.Request) {
 
 func staticMotionMiniJS(w http.ResponseWriter, _ *http.Request) {
 	static(w, "static/vendor/motion-mini.js", "text/javascript; charset=utf-8")
+}
+
+func staticMotionJS(w http.ResponseWriter, _ *http.Request) {
+	static(w, "static/motion.js", "text/javascript; charset=utf-8")
+}
+
+func staticActionsMotionJS(w http.ResponseWriter, _ *http.Request) {
+	static(w, "static/actions-motion.js", "text/javascript; charset=utf-8")
+}
+
+func staticDownloadsLiveJS(w http.ResponseWriter, _ *http.Request) {
+	static(w, "static/downloads-live.js", "text/javascript; charset=utf-8")
+}
+
+func staticSetupMotionJS(w http.ResponseWriter, _ *http.Request) {
+	static(w, "static/setup-motion.js", "text/javascript; charset=utf-8")
 }
 
 func static(w http.ResponseWriter, name, contentType string) {
@@ -623,6 +651,307 @@ func (h *handler) detail(w http.ResponseWriter, r *http.Request) {
 	}
 	page.Path = r.URL.RequestURI()
 	h.render(w, http.StatusOK, "detail", page)
+}
+
+// downloadUpdateRow is one server-rendered download row inside a live-update
+// snapshot. HTML is the same "download-row" template the full list page
+// renders, keyed by data-download-hash and data-row-version.
+type downloadUpdateRow struct {
+	Hash       string `json:"hash"`
+	RowVersion int64  `json:"row_version"`
+	State      string `json:"state"`
+	Terminal   bool   `json:"terminal"`
+	HTML       string `json:"html"`
+}
+
+// downloadUpdatesResponse is the authoritative max-25-row snapshot returned by
+// GET /downloads/updates. RowsExited carries the server-rendered terminal rows
+// for hashes the client reported via `known` that are no longer members of the
+// current view, so the client can confirm completion/failure before exiting.
+type downloadUpdatesResponse struct {
+	Rows           []downloadUpdateRow `json:"rows"`
+	RowsExited     []downloadUpdateRow `json:"rows_exited"`
+	TotalRows      int                 `json:"total_rows"`
+	PageStart      int                 `json:"page_start"`
+	PageEnd        int                 `json:"page_end"`
+	PageNumber     int                 `json:"page_number"`
+	TotalPages     int                 `json:"total_pages"`
+	HasActive      bool                `json:"has_active"`
+	PaginationHTML string              `json:"pagination_html"`
+	EmptyHTML      string              `json:"empty_html"`
+}
+
+// detailUpdateResponse is the current live detail region for
+// GET /downloads/{hash}/updates. HTML is the complete replaceable
+// "detail-live" region rendered by the server.
+type detailUpdateResponse struct {
+	Hash       string `json:"hash"`
+	RowVersion int64  `json:"row_version"`
+	State      string `json:"state"`
+	Terminal   bool   `json:"terminal"`
+	HTML       string `json:"html"`
+}
+
+// maxKnownHashes bounds the `known` query parameter to one page of rows, the
+// only hashes a client can currently be displaying.
+const maxKnownHashes = downloadPageSize
+
+// parseKnownHashes validates the repeated `known=<40hex>:<row_version>` query
+// parameter. It is optional; when present it must contain at most one page of
+// unique, well-formed entries. The versions are validated but not retained
+// server-side: the client uses them to decide when an exit is a regression.
+func parseKnownHashes(query url.Values) (map[string]struct{}, bool) {
+	values := query["known"]
+	if len(values) == 0 {
+		return nil, true
+	}
+	if len(values) > maxKnownHashes {
+		return nil, false
+	}
+	known := make(map[string]struct{}, len(values))
+	for _, raw := range values {
+		hash, version, cut := strings.Cut(raw, ":")
+		canonical, hashOK := canonicalHash(hash)
+		if !cut || !hashOK {
+			return nil, false
+		}
+		parsed, err := strconv.ParseInt(version, 10, 64)
+		if err != nil || parsed < 0 {
+			return nil, false
+		}
+		if _, duplicate := known[canonical]; duplicate {
+			return nil, false
+		}
+		known[canonical] = struct{}{}
+	}
+	return known, true
+}
+
+// downloadsUpdates serves the authenticated conditional-poll snapshot for the
+// download list. It accepts the same view/category/q/page semantics as GET /
+// and returns server-rendered row fragments keyed by hash and durable
+// row_version. The response is an authoritative page snapshot (max 25 rows);
+// the browser diffs by hash/version and mutates only changed rows. ETag covers
+// the exact JSON bytes and a matching If-None-Match yields 304.
+func (h *handler) downloadsUpdates(w http.ResponseWriter, r *http.Request) {
+	options, ok := parseDownloadListOptions(r.URL.Query())
+	if !ok {
+		plain(w, http.StatusBadRequest, "Bad Request\n")
+		return
+	}
+	known, ok := parseKnownHashes(r.URL.Query())
+	if !ok {
+		plain(w, http.StatusBadRequest, "Bad Request\n")
+		return
+	}
+	var category *string
+	if options.Category != "" {
+		category = &options.Category
+	}
+	downloads, err := h.repo.ListDownloads(r.Context(), category)
+	if err != nil {
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+		return
+	}
+	lang := requestLang(r)
+	str := tr(lang)
+	csrf := h.authSession(r).CSRFToken
+	now := h.clock.Now().UTC()
+	search := strings.ToLower(options.Search)
+	matching := make([]domain.Download, 0, len(downloads))
+	hasActive := false
+	for _, download := range downloads {
+		if !downloadMatchesView(download, options.View) ||
+			search != "" && !strings.Contains(strings.ToLower(download.Name), search) && !strings.Contains(download.Hash, search) {
+			continue
+		}
+		matching = append(matching, download)
+		if !download.State.Terminal() {
+			hasActive = true
+		}
+	}
+	totalRows := len(matching)
+	totalPages := max(1, (totalRows+downloadPageSize-1)/downloadPageSize)
+	pageNumber := min(options.Page, totalPages)
+	start := min((pageNumber-1)*downloadPageSize, totalRows)
+	end := min(start+downloadPageSize, totalRows)
+	inMatching := make(map[string]struct{}, totalRows)
+	for _, download := range matching {
+		inMatching[download.Hash] = struct{}{}
+	}
+	rows := make([]downloadUpdateRow, 0, min(downloadPageSize, end-start))
+	inPage := make(map[string]struct{}, end-start)
+	for _, download := range matching[start:end] {
+		html, ok := h.renderDownloadRow(download, options, pageNumber, csrf, str, now)
+		if !ok {
+			plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+			return
+		}
+		rows = append(rows, downloadUpdateRow{Hash: download.Hash, RowVersion: download.RowVersion, State: string(download.State), Terminal: download.State.Terminal(), HTML: html})
+		inPage[download.Hash] = struct{}{}
+	}
+	// Terminal rows the client still displays but that have left the current
+	// view are reported once with their final server-rendered state so the
+	// client can confirm completion/failure before exiting. A hash still in
+	// the full matching set (for example pushed onto another page) is not an
+	// exit. Missing, Deleted/DeleteRequested, and other invisible non-terminal
+	// hashes are plain removals and never enter rows_exited.
+	exited := make([]downloadUpdateRow, 0, len(known))
+	for hash := range known {
+		if _, present := inPage[hash]; present {
+			continue
+		}
+		if _, stillMember := inMatching[hash]; stillMember {
+			continue
+		}
+		download, err := h.repo.GetDownload(r.Context(), hash)
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+			return
+		}
+		if !download.State.Terminal() {
+			continue
+		}
+		html, ok := h.renderDownloadRow(download, options, pageNumber, csrf, str, now)
+		if !ok {
+			plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+			return
+		}
+		exited = append(exited, downloadUpdateRow{Hash: download.Hash, RowVersion: download.RowVersion, State: string(download.State), Terminal: true, HTML: html})
+	}
+	sort.Slice(exited, func(i, j int) bool { return exited[i].Hash < exited[j].Hash })
+	pageView := DownloadsView{
+		PageMeta:    pageMeta(str.TitleDownloads, "downloads", csrf, lang),
+		TotalRows:   totalRows,
+		PageNumber:  pageNumber,
+		TotalPages:  totalPages,
+		HasPrevious: pageNumber > 1,
+		HasNext:     pageNumber < totalPages,
+	}
+	if totalRows > 0 {
+		pageView.PageStart = start + 1
+		pageView.PageEnd = end
+	}
+	if pageView.HasPrevious {
+		pageView.PreviousURL = downloadListURL(options, pageNumber-1)
+	}
+	if pageView.HasNext {
+		pageView.NextURL = downloadListURL(options, pageNumber+1)
+	}
+	paginationHTML := ""
+	emptyHTML := ""
+	if len(rows) > 0 {
+		paginationHTML, ok = h.renderFragment("download-pagination", pageView)
+	} else {
+		emptyHTML, ok = h.renderFragment("download-empty", pageView)
+	}
+	if !ok {
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+		return
+	}
+	writeUpdatesJSON(w, r, downloadUpdatesResponse{
+		Rows: rows, RowsExited: exited, TotalRows: totalRows,
+		PageStart: pageView.PageStart, PageEnd: pageView.PageEnd, PageNumber: pageNumber, TotalPages: totalPages,
+		HasActive: hasActive, PaginationHTML: paginationHTML, EmptyHTML: emptyHTML,
+	})
+}
+
+// renderDownloadRow renders one self-contained "download-row" fragment with
+// the page context (CSRF token, return path, localized strings) attached.
+func (h *handler) renderDownloadRow(download domain.Download, options downloadListOptions, pageNumber int, csrf string, str *Strings, now time.Time) (string, bool) {
+	projection, err := domain.Project(download)
+	if err != nil {
+		return "", false
+	}
+	row, err := buildDownloadRow(download, projection, now, str)
+	if err != nil {
+		return "", false
+	}
+	row.CSRFToken = csrf
+	row.ReturnPath = downloadListURL(options, pageNumber)
+	return h.renderFragment("download-row", row)
+}
+
+// renderFragment executes a named template into a string.
+func (h *handler) renderFragment(name string, data any) (string, bool) {
+	var output bytes.Buffer
+	if err := h.templates.ExecuteTemplate(&output, name, data); err != nil {
+		return "", false
+	}
+	return output.String(), true
+}
+
+// writeUpdatesJSON serializes a live-update payload with a stable ETag over
+// the exact JSON bytes and honors If-None-Match with a 304. The response is
+// never cached (no-store) and carries no secrets beyond the rendered fragments.
+func writeUpdatesJSON(w http.ResponseWriter, r *http.Request, payload any) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+		return
+	}
+	sum := sha256.Sum256(body)
+	etag := fmt.Sprintf("%q", hex.EncodeToString(sum[:]))
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("ETag", etag)
+	if etagMatches(r.Header.Get("If-None-Match"), etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
+}
+
+// etagMatches reports whether the If-None-Match header list contains etag,
+// tolerating the weak-prefix form a client may echo back.
+func etagMatches(header, etag string) bool {
+	for _, candidate := range strings.Split(header, ",") {
+		candidate = strings.TrimSpace(strings.TrimPrefix(candidate, "W/"))
+		if candidate == etag {
+			return true
+		}
+	}
+	return false
+}
+
+// detailUpdates serves the current live detail region for one download,
+// following the same ETag/304 and no-store semantics as the list snapshot.
+func (h *handler) detailUpdates(w http.ResponseWriter, r *http.Request) {
+	hash, ok := canonicalHash(r.PathValue("hash"))
+	if !ok {
+		plain(w, http.StatusBadRequest, "Bad Request\n")
+		return
+	}
+	download, err := h.repo.GetDownload(r.Context(), hash)
+	if err != nil {
+		repositoryError(w, err)
+		return
+	}
+	cleanupFailure := cleanupFailed(download)
+	if !download.State.Visible() && !cleanupFailure {
+		plain(w, http.StatusNotFound, "Not Found\n")
+		return
+	}
+	files, err := h.repo.ListDownloadFiles(r.Context(), hash)
+	if err != nil {
+		repositoryError(w, err)
+		return
+	}
+	page, err := buildDetailView(download, files, h.authSession(r).CSRFToken, requestLang(r))
+	if err != nil {
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+		return
+	}
+	html, ok := h.renderFragment("detail-live", page)
+	if !ok {
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+		return
+	}
+	writeUpdatesJSON(w, r, detailUpdateResponse{Hash: download.Hash, RowVersion: download.RowVersion, State: string(download.State), Terminal: download.State.Terminal(), HTML: html})
 }
 
 func (h *handler) categories(w http.ResponseWriter, r *http.Request) {

@@ -4,11 +4,11 @@
 <body>
   <div class="app-shell">
     {{template "sidebar" .}}
-    <main class="content" id="main-content">
+    <main class="content" id="main-content" data-download-list data-view="{{.SelectedView}}" data-page="{{.PageNumber}}">
       <header class="page-header">
         <div class="page-title">
           <h1>{{.Str.TitleDownloads}}</h1>
-          <span class="record-count">{{printf .Str.ShownFormat .TotalRows}}</span>
+          <span class="record-count" data-record-count data-format="{{.Str.ShownFormat}}">{{printf .Str.ShownFormat .TotalRows}}</span>
         </div>
         <div class="page-header-actions">
           <span class="status-chip {{.CloudStatusClass}}" role="status" aria-label="CloudDrive2 {{.CloudStatus}}" title="CloudDrive2 {{.CloudStatus}}"><span class="status-dot" aria-hidden="true"></span><span aria-hidden="true">{{.CloudStatus}}</span></span>
@@ -45,8 +45,7 @@
         <button class="button button-secondary" type="submit">{{.Str.Apply}}</button>
       </form>
 
-      {{if .Rows}}
-      <div class="table-wrap" aria-live="polite">
+      <div class="table-wrap" data-table-wrap{{if not .Rows}} hidden{{end}}>
         <table class="download-table">
           <colgroup>
             <col class="col-name">
@@ -67,74 +66,11 @@
             </tr>
           </thead>
           <tbody>
-            {{range .Rows}}
-            <tr>
-              <td class="cell-name">
-                <a class="task-title" href="/downloads/{{.Hash}}" title="{{.Name}}">{{.Name}}</a>
-                <span class="cell-meta"><code>{{.HashPrefix}}</code></span>
-                {{if .Error}}<span class="cell-error{{if .ErrorIsWarning}} is-warning{{end}}">{{.Error}}</span>{{end}}
-              </td>
-              <td><span class="state-badge" data-state="{{.InternalState}}">{{.StateLabel}}</span></td>
-              <td class="cell-progress">{{template "route-strip" .Route}}</td>
-              <td class="cell-category">{{.Category}}</td>
-              <td class="cell-age">{{printf $.Str.AgoFormat .Age}}</td>
-              <td class="cell-actions">
-                <div class="task-actions">
-                  {{if .CanPause}}
-                  <form action="/downloads/{{.Hash}}/pause" method="post" data-confirm="{{$.Str.ConfirmPause}}">
-                    <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
-                    <input type="hidden" name="return_to" value="{{$.Path}}">
-                    <button class="task-control task-control-primary" type="submit" aria-label="{{$.Str.ActionPause}}" title="{{$.Str.ActionPause}}">
-                      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.25 3.25v9.5M10.75 3.25v9.5"></path></svg>
-                    </button>
-                  </form>
-                  {{else if .CanResume}}
-                  <form action="/downloads/{{.Hash}}/start" method="post">
-                    <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
-                    <input type="hidden" name="return_to" value="{{$.Path}}">
-                    <button class="task-control task-control-primary" type="submit" aria-label="{{$.Str.ActionResume}}" title="{{$.Str.ActionResume}}">
-                      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5.25 3.25 7 4.75-7 4.75z"></path></svg>
-                    </button>
-                  </form>
-                  {{end}}
-                  {{if .CanRemove}}
-                  <button class="task-control" type="button" data-dialog-open="delete-{{.Hash}}" aria-label="{{$.Str.ActionMore}}" title="{{$.Str.ActionMore}}">
-                    <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r=".8"></circle><circle cx="8" cy="8" r=".8"></circle><circle cx="13" cy="8" r=".8"></circle></svg>
-                  </button>
-                  <dialog class="delete-dialog" id="delete-{{.Hash}}" aria-labelledby="delete-title-{{.Hash}}">
-                    <div class="delete-dialog-header">
-                      <div>
-                        <span class="dialog-eyebrow">{{$.Str.ActionMore}}</span>
-                        <h2 id="delete-title-{{.Hash}}">{{$.Str.DeleteChoiceTitle}}</h2>
-                      </div>
-                      <button class="dialog-close" type="button" data-dialog-close aria-label="Close">×</button>
-                    </div>
-                    <p class="delete-task-name" title="{{.Name}}">{{.Name}}</p>
-                    <div class="delete-options">
-                      <form action="/downloads/{{.Hash}}/remove" method="post" data-confirm="{{$.Str.ConfirmRemove}}">
-                        <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
-                        <input type="hidden" name="return_to" value="{{$.Path}}">
-                        <input type="hidden" name="delete_files" value="false">
-                        <button class="delete-option" type="submit">{{$.Str.ActionRemove}}</button>
-                      </form>
-                      <form action="/downloads/{{.Hash}}/remove" method="post" data-confirm="{{$.Str.ConfirmRemoveFiles}}">
-                        <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
-                        <input type="hidden" name="return_to" value="{{$.Path}}">
-                        <input type="hidden" name="delete_files" value="true">
-                        <button class="delete-option is-danger" type="submit">{{$.Str.ActionRemoveFiles}}</button>
-                      </form>
-                    </div>
-                    <p class="delete-note">{{$.Str.RemovalNote}}</p>
-                  </dialog>
-                  {{end}}
-                </div>
-              </td>
-            </tr>
-            {{end}}
+            {{range .Rows}}{{template "download-row" .}}{{end}}
           </tbody>
         </table>
       </div>
-      <nav class="pagination" aria-label="Pagination">
+      <nav class="pagination" data-pagination aria-label="Pagination"{{if not .Rows}} hidden{{end}}>
         <span class="pagination-status">{{printf .Str.PaginationFormat .PageStart .PageEnd .TotalRows}}</span>
         <div class="pagination-actions">
           {{if .HasPrevious}}<a class="pagination-link" href="{{.PreviousURL}}">{{.Str.PreviousPage}}</a>{{else}}<span class="pagination-link is-disabled">{{.Str.PreviousPage}}</span>{{end}}
@@ -142,13 +78,13 @@
           {{if .HasNext}}<a class="pagination-link" href="{{.NextURL}}">{{.Str.NextPage}}</a>{{else}}<span class="pagination-link is-disabled">{{.Str.NextPage}}</span>{{end}}
         </div>
       </nav>
-      {{else}}
-      <section class="empty-state" aria-labelledby="empty-title">
+      <section class="empty-state" data-empty-state{{if .Rows}} hidden{{end}} aria-labelledby="empty-title">
         <h2 id="empty-title">{{.Str.EmptyTitle}}</h2>
         <p>{{.Str.EmptyBody}}</p>
       </section>
-      {{end}}
+      <p class="visually-hidden" role="status" data-live-announcer aria-live="polite"></p>
     </main>
   </div>
+  <script type="module" src="/static/downloads-live.js?v=1"></script>
 </body>
 </html>{{end}}

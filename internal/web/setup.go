@@ -15,6 +15,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -155,6 +156,9 @@ func NewSetup(cfg SetupConfig) (http.Handler, error) {
 	mux.Handle("GET /static/app.css", http.HandlerFunc(staticCSS))
 	mux.Handle("GET /static/theme-init.js", http.HandlerFunc(staticThemeInitJS))
 	mux.Handle("GET /static/app.js", http.HandlerFunc(staticJS))
+	mux.Handle("GET /static/motion.js", http.HandlerFunc(staticMotionJS))
+	mux.Handle("GET /static/actions-motion.js", http.HandlerFunc(staticActionsMotionJS))
+	mux.Handle("GET /static/setup-motion.js", http.HandlerFunc(staticSetupMotionJS))
 	mux.Handle("GET /static/vendor/motion-mini.js", http.HandlerFunc(staticMotionMiniJS))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		method, found := setupRouteMethod(r.URL.Path, r.Method)
@@ -179,7 +183,7 @@ func NewSetup(cfg SetupConfig) (http.Handler, error) {
 
 func setupRouteMethod(requestPath, requestMethod string) (string, bool) {
 	switch requestPath {
-	case "/setup", "/lang", "/static/app.css", "/static/app.js", "/static/theme-init.js", "/static/vendor/motion-mini.js":
+	case "/setup", "/lang", "/static/app.css", "/static/app.js", "/static/motion.js", "/static/actions-motion.js", "/static/setup-motion.js", "/static/theme-init.js", "/static/vendor/motion-mini.js":
 		return http.MethodGet, true
 	case "/setup/cloud-directories", "/setup/local-directories":
 		if requestMethod == http.MethodGet {
@@ -227,8 +231,9 @@ type setupHandler struct {
 
 func (h *setupHandler) setupPage(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
-	step := h.state.step
+	currentStep := h.state.step
 	h.mu.Unlock()
+	step := currentStep
 	csrf := ""
 	if step > 1 {
 		current, ok := h.wizardSession(r)
@@ -240,8 +245,22 @@ func (h *setupHandler) setupPage(w http.ResponseWriter, r *http.Request) {
 			csrf = current.CSRFToken
 		}
 	}
+	// The optional ?step=N query is a pure view hook: it may select only a
+	// step already reached (1..step), so browser Back/Forward restores the
+	// step the operator was viewing without ever moving the server-owned
+	// wizard state backwards. Missing, malformed, or ahead values render the
+	// current step instead of an error.
+	viewPath := "/setup"
+	if requested, ok := exactlyOne(r.URL.Query()["step"]); ok {
+		if n, err := strconv.Atoi(requested); err == nil && n >= 1 && n <= step {
+			if n != currentStep {
+				step = n
+				viewPath = fmt.Sprintf("/setup?step=%d", n)
+			}
+		}
+	}
 	view := h.buildSetupView(r, step, csrf, "", "")
-	view.Path = "/setup"
+	view.Path = viewPath
 	h.renderSetup(w, http.StatusOK, view)
 }
 
@@ -326,13 +345,19 @@ func (h *setupHandler) setupPassword(w http.ResponseWriter, r *http.Request) {
 	previousSID := h.state.sid
 	h.state.sid = sid
 	h.state.passwordHash = hash
-	h.state.step = 2
+	// The password step starts the wizard and, when re-submitted after a
+	// lost session, re-establishes it — but it never rolls a more advanced
+	// wizard state back; the redirect targets the actual current step.
+	if h.state.step < 2 {
+		h.state.step = 2
+	}
+	targetStep := h.state.step
 	h.mu.Unlock()
 	if previousSID != "" {
 		h.sessions.Revoke(previousSID)
 	}
 	http.SetCookie(w, sidCookie(sid, false, r.TLS != nil))
-	http.Redirect(w, r, "/setup", http.StatusSeeOther)
+	http.Redirect(w, r, fmt.Sprintf("/setup?step=%d", targetStep), http.StatusSeeOther)
 }
 
 func (h *setupHandler) setupCD2Test(w http.ResponseWriter, r *http.Request) {
@@ -396,12 +421,15 @@ func (h *setupHandler) setupCD2Test(w http.ResponseWriter, r *http.Request) {
 	h.state.cd2Username = username
 	h.state.cd2Password = password
 	h.state.cd2Insecure = insecure
-	if action == "continue" {
+	// Continue advances the wizard monotonically: re-submitting an earlier
+	// step from a backward view must never roll the state back.
+	if action == "continue" && h.state.step < 3 {
 		h.state.step = 3
 	}
+	targetStep := h.state.step
 	h.mu.Unlock()
 	if action == "continue" {
-		http.Redirect(w, r, "/setup", http.StatusSeeOther)
+		http.Redirect(w, r, fmt.Sprintf("/setup?step=%d", targetStep), http.StatusSeeOther)
 		return
 	}
 	h.renderSetupStep(w, r, 2, http.StatusOK, "", str.TestPassed)
@@ -631,12 +659,15 @@ func (h *setupHandler) setupPathsTest(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
 	h.state.cloudRoot = cloudRoot
 	h.state.localRoot = localRoot
-	if action == "continue" {
+	// Continue advances the wizard monotonically: re-submitting an earlier
+	// step from a backward view must never roll the state back.
+	if action == "continue" && h.state.step < 4 {
 		h.state.step = 4
 	}
+	targetStep := h.state.step
 	h.mu.Unlock()
 	if action == "continue" {
-		http.Redirect(w, r, "/setup", http.StatusSeeOther)
+		http.Redirect(w, r, fmt.Sprintf("/setup?step=%d", targetStep), http.StatusSeeOther)
 		return
 	}
 	h.renderSetupStep(w, r, 3, http.StatusOK, "", str.TestPassed)
@@ -746,7 +777,39 @@ func (h *setupHandler) renderSetupStep(w http.ResponseWriter, r *http.Request, s
 		}
 	}
 	view := h.buildSetupView(r, step, csrf, errorText, successText)
+	// A failed connection/path test re-renders the form with the exact
+	// submitted values, so an error never clears what the operator entered.
+	// Password fields are never echoed back; html/template escapes the
+	// echoed values in the markup.
+	if errorText != "" && r.Method == http.MethodPost {
+		switch step {
+		case 2:
+			if address, ok := exactPostValue(r, "address"); ok {
+				view.Values.CD2Address = address
+			}
+			if username, ok := exactPostValue(r, "username"); ok {
+				view.Values.CD2Username = username
+			}
+			// The checkbox mirrors the handler's parse: absent or malformed
+			// means unchecked.
+			insecureValues, insecurePresent := r.PostForm["insecure"]
+			view.Values.CD2Insecure = insecurePresent && len(insecureValues) == 1 && insecureValues[0] == "true"
+		case 3:
+			if cloudRoot, ok := exactPostValue(r, "cloud_root"); ok {
+				view.Values.CloudRoot = cloudRoot
+			}
+			if localRoot, ok := exactPostValue(r, "local_root"); ok {
+				view.Values.LocalRoot = localRoot
+			}
+		}
+	}
+	h.mu.Lock()
+	currentStep := h.state.step
+	h.mu.Unlock()
 	view.Path = "/setup"
+	if step != currentStep {
+		view.Path = fmt.Sprintf("/setup?step=%d", step)
+	}
 	h.renderSetup(w, status, view)
 }
 

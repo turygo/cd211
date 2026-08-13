@@ -299,8 +299,7 @@ func setupModeMux(setup http.Handler) *http.ServeMux {
 	mux.Handle("/setup", setup)
 	mux.Handle("/setup/", setup)
 	mux.Handle("/lang", setup)
-	mux.Handle("/static/app.css", setup)
-	mux.Handle("/static/app.js", setup)
+	mux.Handle("/static/", setup)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/setup", http.StatusSeeOther)
 	})

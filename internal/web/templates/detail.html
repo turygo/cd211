@@ -9,71 +9,14 @@
       <header class="page-header detail-header">
         <div class="page-title">
           <h1>{{.Name}}</h1>
-          <span class="state-badge" data-state="{{.InternalState}}">{{.StateLabel}}</span>
+          <span class="state-badge" data-live-badge data-state="{{.InternalState}}">{{.StateLabel}}</span>
         </div>
       </header>
 
-      <section class="panel">
-        {{template "route-strip" .Route}}
-      </section>
-
-      {{if .Error}}<div class="notice {{if .ErrorIsWarning}}notice-warning{{else}}notice-error{{end}}" role="{{if .ErrorIsWarning}}status{{else}}alert{{end}}"><strong>{{if .ErrorIsWarning}}{{.Str.RetryingTitle}}{{else}}{{.Str.RecordedError}}{{end}}</strong><p>{{.Error}}</p></div>{{end}}
-
-      <div class="panel-grid">
-        <section class="panel" aria-labelledby="paths-title">
-          <h2 id="paths-title">{{.Str.SectionPaths}}</h2>
-          <dl class="detail-list">
-            <div><dt>{{.Str.CloudFolder}}</dt><dd><code>{{.CloudFolder}}</code></dd></div>
-            <div><dt>{{.Str.CloudSource}}</dt><dd><code>{{.CloudSourcePath}}</code></dd></div>
-            <div><dt>{{.Str.SavePathLabel}}</dt><dd><code>{{.SavePath}}</code></dd></div>
-            <div><dt>{{.Str.LocalContent}}</dt><dd><code>{{.ContentPath}}</code></dd></div>
-            <div><dt>{{.Str.CategoryLabel}}</dt><dd>{{.Category}}</dd></div>
-          </dl>
-          <p class="panel-note">{{.Str.FrozenNote}}</p>
-        </section>
-
-        <section class="panel" aria-labelledby="timing-title">
-          <h2 id="timing-title">{{.Str.SectionChronology}}</h2>
-          <dl class="detail-list">
-            <div><dt>{{.Str.ProgressLabel}}</dt><dd>{{printf .Str.ProgressSummary .Projected .Offline .Copy}}</dd></div>
-            <div><dt>{{.Str.ProjectedState}}</dt><dd>{{.ProjectedState}}</dd></div>
-            <div><dt>{{.Str.Created}}</dt><dd>{{.CreatedAt}}</dd></div>
-            <div><dt>{{.Str.Updated}}</dt><dd>{{.UpdatedAt}}</dd></div>
-            <div><dt>{{.Str.PhaseStarted}}</dt><dd>{{.PhaseStartedAt}}</dd></div>
-            <div><dt>{{.Str.NextRun}}</dt><dd>{{.NextRunAt}}</dd></div>
-            <div><dt>{{.Str.CompletedLabel}}</dt><dd>{{.CompletedAt}}</dd></div>
-            <div><dt>{{.Str.Attempts}}</dt><dd>{{.AttemptCount}}</dd></div>
-          </dl>
-        </section>
-      </div>
-
-      <section class="panel" aria-labelledby="actions-title">
-        <h2 id="actions-title">{{.Str.SectionActions}}</h2>
-        <div class="action-bar">
-          {{if .CanStart}}<form action="/downloads/{{.Hash}}/start" method="post"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="button button-primary" type="submit">{{.Str.ActionStart}}</button></form>{{end}}
-          {{if .CanRetry}}<form action="/downloads/{{.Hash}}/retry" method="post"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="button button-primary" type="submit">{{.Str.ActionRetry}}</button></form>{{end}}
-          {{if .CanPause}}<form action="/downloads/{{.Hash}}/pause" method="post" data-confirm="{{.Str.ConfirmPause}}"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="button button-secondary" type="submit">{{.Str.ActionPause}}</button></form>{{end}}
-          {{if .CanRemove}}
-          <form action="/downloads/{{.Hash}}/remove" method="post" data-confirm="{{.Str.ConfirmRemove}}">
-            <input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="delete_files" value="false"><button class="button button-secondary" type="submit">{{.Str.ActionRemove}}</button>
-          </form>
-          <form action="/downloads/{{.Hash}}/remove" method="post" data-confirm="{{.Str.ConfirmRemoveFiles}}">
-            <input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="delete_files" value="true"><button class="button button-danger" type="submit">{{.Str.ActionRemoveFiles}}</button>
-          </form>
-          {{end}}
-        </div>
-        <p class="panel-note">{{.Str.RemovalNote}}</p>
-      </section>
-
-      <section class="panel" aria-labelledby="files-title">
-        <h2 id="files-title">{{.Str.SectionFiles}}</h2>
-        {{if .Files}}
-        <div class="table-wrap"><table class="file-table"><thead><tr><th scope="col">{{.Str.ThIndex}}</th><th scope="col">{{.Str.ThPath}}</th><th scope="col" class="col-size">{{.Str.ThSize}}</th></tr></thead><tbody>
-          {{range .Files}}<tr><td class="cell-index">{{.Index}}</td><td><code>{{.Path}}</code></td><td class="cell-size">{{.Size}}</td></tr>{{end}}
-        </tbody></table></div>
-        {{else}}<p class="muted">{{.Str.NoFiles}}</p>{{end}}
-      </section>
+      {{template "detail-live" .}}
+      <p class="visually-hidden" role="status" data-live-announcer aria-live="polite"></p>
     </main>
   </div>
+  <script type="module" src="/static/downloads-live.js?v=1"></script>
 </body>
 </html>{{end}}

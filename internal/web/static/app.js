@@ -1,81 +1,19 @@
-import { animate } from "/static/vendor/motion-mini.js?v=13.1.0";
+import { animateElement, motionTiming, staggerDelay } from "/static/motion.js?v=1";
 
 const themeStorageKey = "cd211-theme";
 let savedTheme = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
 
-// Shared motion policy: one set of restrained durations/easings for every
-// JS-driven transition, gated by prefers-reduced-motion. Reduced motion
-// applies target values immediately but still resolves the returned promise,
-// so completion-sensitive flows (dialog close) work unchanged.
-const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
-const motionPolicy = {
-  fast: 100,
-  normal: 160,
-  slow: 220,
-  ease: [0.25, 0.1, 0.25, 1],
-};
-
-// Drives an element to a target visual state with Motion Mini. The returned
-// promise resolves when the animation finishes; under prefers-reduced-motion
-// the target applies synchronously and the promise resolves immediately.
-// With clearInline, the inline opacity/transform written for the animation
-// are removed once the resting state is reached, so no transient style
-// survives the interaction.
-function transitionElement(element, target, { duration = motionPolicy.normal, delay = 0, clearInline = false } = {}) {
-  const applyTarget = () => {
-    if (target.opacity !== undefined) {
-      element.style.opacity = String(target.opacity);
-    }
-    if (target.transform !== undefined) {
-      element.style.transform = target.transform;
-    }
-  };
-  const clearInlineStyles = () => {
-    if (target.opacity !== undefined) {
-      element.style.opacity = "";
-    }
-    if (target.transform !== undefined) {
-      element.style.transform = "";
-    }
-  };
-  if (reducedMotion.matches) {
-    applyTarget();
-    if (clearInline) {
-      clearInlineStyles();
-    }
-    return Promise.resolve();
-  }
-  const keyframes = {};
-  if (target.opacity !== undefined) {
-    keyframes.opacity = target.opacity;
-  }
-  if (target.transform !== undefined) {
-    keyframes.transform = target.transform;
-  }
-  return Promise.resolve(
-    animate(element, keyframes, {
-      duration: duration / 1000,
-      delay: delay / 1000,
-      ease: motionPolicy.ease,
-    })
-  ).then((result) => {
-    if (clearInline) {
-      clearInlineStyles();
-    }
-    return result;
-  });
-}
-
 // Reveals a set of elements with a restrained fade and at most 4px rise. A
 // tiny stagger applies only to short lists and is always capped so large
-// result sets never delay their final rows.
-function revealElements(elements, { duration = motionPolicy.normal, distance = 4, stagger = true } = {}) {
+// result sets never delay their final rows. Timings come from the shared
+// motion policy in motion.js.
+function revealElements(elements, { duration = motionTiming.standard, distance = 4, stagger = true } = {}) {
   const targets = Array.from(elements);
   targets.forEach((element, index) => {
-    const delay = stagger && targets.length > 1 ? Math.min(index * 30, 120) : 0;
+    const delay = stagger && targets.length > 1 ? staggerDelay(index, 30, 120) : 0;
     element.style.opacity = "0";
     element.style.transform = `translateY(${distance}px)`;
-    transitionElement(element, { opacity: 1, transform: "none" }, { duration, delay, clearInline: true });
+    animateElement(element, { opacity: 1, transform: "none" }, { duration, delay, clearInline: true });
   });
 }
 
@@ -113,10 +51,20 @@ for (const form of document.querySelectorAll("form[data-confirm]")) {
   });
 }
 
-// Opens a delete confirmation dialog with a restrained entrance: native
-// showModal() first (focus trapping and top layer), then a fade-in with a
-// small rise. Reopening after a completed close always starts neutral.
+// Delete-confirmation dialog lifecycle. Native showModal() runs first so the
+// top layer and focus trapping are the browser's; the entrance/exit are the
+// only animation. All close paths (close button, backdrop click, Escape)
+// converge on closeDeleteDialog, which is idempotent and returns the
+// in-flight closing promise so a rapid reopen lands after the close
+// finishes. Inline animation styles never survive a completed close.
+const closingDialogs = new WeakMap();
+
 function openDeleteDialog(dialog) {
+  if (dialog.classList.contains("is-closing")) {
+    const closing = closingDialogs.get(dialog) || Promise.resolve();
+    closing.then(() => openDeleteDialog(dialog));
+    return;
+  }
   if (dialog.open) {
     return;
   }
@@ -124,29 +72,34 @@ function openDeleteDialog(dialog) {
   dialog.showModal();
   dialog.style.opacity = "0";
   dialog.style.transform = "translateY(6px) scale(0.985)";
-  transitionElement(dialog, { opacity: 1, transform: "none" }, { duration: motionPolicy.normal, clearInline: true });
+  animateElement(dialog, { opacity: 1, transform: "none" }, { duration: motionTiming.standard, clearInline: true });
 }
 
-// One shared animated-close path for the close button, backdrop clicks, and
-// native Escape/cancel. The reverse animation runs while the dialog stays in
-// the top layer (so the CSS ::backdrop can fade out), then dialog.close() is
-// called and inline start styles are cleared. A closing dialog ignores
-// duplicate close requests.
 function closeDeleteDialog(dialog) {
-  if (!(dialog instanceof HTMLDialogElement) || !dialog.open || dialog.classList.contains("is-closing")) {
-    return;
+  if (!(dialog instanceof HTMLDialogElement) || !dialog.open) {
+    return Promise.resolve();
+  }
+  if (dialog.classList.contains("is-closing")) {
+    return closingDialogs.get(dialog) || Promise.resolve();
   }
   dialog.classList.add("is-closing");
-  transitionElement(dialog, { opacity: 0, transform: "translateY(6px) scale(0.985)" }, { duration: 120 })
+  const closing = animateElement(
+    dialog,
+    { opacity: 0, transform: "translateY(6px) scale(0.985)" },
+    { duration: motionTiming.fast }
+  )
     .catch(() => {})
     .then(() => {
       dialog.classList.remove("is-closing");
       dialog.style.opacity = "";
       dialog.style.transform = "";
+      closingDialogs.delete(dialog);
       if (dialog.open) {
         dialog.close();
       }
     });
+  closingDialogs.set(dialog, closing);
+  return closing;
 }
 
 for (const opener of document.querySelectorAll("[data-dialog-open]")) {
@@ -196,7 +149,7 @@ for (const details of document.querySelectorAll("details.details-reveal")) {
     for (let sibling = summary ? summary.nextElementSibling : null; sibling; sibling = sibling.nextElementSibling) {
       targets.push(sibling);
     }
-    revealElements(targets, { duration: motionPolicy.normal });
+    revealElements(targets, { duration: motionTiming.standard });
   });
 }
 
@@ -240,13 +193,21 @@ for (const picker of document.querySelectorAll("[data-directory-picker]")) {
     createURL &&
     csrf
   ) {
+    const revealStatus = (element) => {
+      element.style.opacity = "0";
+      element.style.transform = "translateY(4px)";
+      animateElement(element, { opacity: 1, transform: "none" }, { duration: motionTiming.fast }).then(() => {
+        element.style.opacity = "";
+        element.style.transform = "";
+      });
+    };
     const showStatus = (message, isError = false) => {
       const status = document.createElement("p");
       status.className = "cloud-picker-status";
       status.classList.toggle("is-error", isError);
       status.textContent = message;
       list.replaceChildren(status);
-      revealElements(list.children, { duration: motionPolicy.normal, stagger: false });
+      revealStatus(status);
     };
     const setLoading = (isLoading) => {
       upButton.disabled = isLoading || currentPath === "/";
@@ -263,10 +224,41 @@ for (const picker of document.querySelectorAll("[data-directory-picker]")) {
       return separator <= 0 ? "/" : value.slice(0, separator);
     };
 
-    const loadDirectories = async (target) => {
+    let requestSequence = 0;
+    const slideOut = async (direction) => {
+      const offset = direction === "forward" ? -16 : 16;
+      const previousHeight = list.getBoundingClientRect().height;
+      list.style.height = `${previousHeight}px`;
+      await animateElement(list, { opacity: 0, transform: `translateX(${offset}px)` }, { duration: motionTiming.standard });
+    };
+    const slideIn = async (direction) => {
+      const entry = direction === "forward" ? 16 : -16;
+      list.style.height = "";
+      const nextHeight = list.getBoundingClientRect().height;
+      list.style.height = `${nextHeight}px`;
+      list.style.opacity = "0";
+      list.style.transform = `translateX(${entry}px)`;
+      await animateElement(list, { opacity: 1, transform: "none", height: `${nextHeight}px` }, { duration: motionTiming.standard });
+      list.style.opacity = "";
+      list.style.transform = "";
+      list.style.height = "";
+    };
+    const clearSlideStyles = () => {
+      list.style.opacity = "";
+      list.style.transform = "";
+      list.style.height = "";
+    };
+
+    const loadDirectories = async (target, direction = null) => {
+      const sequence = ++requestSequence;
       list.setAttribute("aria-busy", "true");
       setLoading(true);
-      showStatus(loadingMessage || "");
+      // Directional navigations keep the outgoing list visible until the
+      // response arrives, so the slide moves real directories; the loading
+      // placeholder is initial-load only.
+      if (direction === null) {
+        showStatus(loadingMessage || "");
+      }
       try {
         const response = await fetch(`${listURL}?path=${encodeURIComponent(target)}`, {
           credentials: "same-origin",
@@ -279,11 +271,21 @@ for (const picker of document.querySelectorAll("[data-directory-picker]")) {
         if (typeof payload.path !== "string" || !Array.isArray(payload.directories)) {
           throw new Error(listErrorMessage || "");
         }
-
+        if (sequence !== requestSequence) {
+          return; // A newer request superseded this one: discard stale data.
+        }
+        if (direction !== null) {
+          await slideOut(direction);
+          if (sequence !== requestSequence) {
+            return; // Discard even mid-transition when superseded.
+          }
+        }
+        // Breadcrumb and list update together.
         currentPath = payload.path;
         pathOutput.textContent = currentPath;
         list.replaceChildren();
         if (payload.directories.length === 0) {
+          clearSlideStyles();
           showStatus(emptyMessage || "");
           return;
         }
@@ -298,19 +300,27 @@ for (const picker of document.querySelectorAll("[data-directory-picker]")) {
           name.className = "cloud-directory-name";
           name.textContent = directory.name;
           button.append(name);
-          button.addEventListener("click", () => loadDirectories(directory.path));
+          // Entering a child moves leftward; the list is never staggered.
+          button.addEventListener("click", () => loadDirectories(directory.path, "forward"));
           list.append(button);
         }
-        revealElements(list.children, { duration: motionPolicy.normal });
+        if (direction !== null) {
+          await slideIn(direction);
+        }
       } catch (error) {
-        showStatus(error instanceof Error ? error.message : listErrorMessage || "", true);
+        if (sequence === requestSequence) {
+          clearSlideStyles();
+          showStatus(error instanceof Error ? error.message : listErrorMessage || "", true);
+        }
       } finally {
-        setLoading(false);
-        list.removeAttribute("aria-busy");
+        if (sequence === requestSequence) {
+          setLoading(false);
+          list.removeAttribute("aria-busy");
+        }
       }
     };
 
-    upButton.addEventListener("click", () => loadDirectories(parentPath(currentPath)));
+    upButton.addEventListener("click", () => loadDirectories(parentPath(currentPath), "reverse"));
     selectButton.addEventListener("click", () => {
       rootInput.value = currentPath;
       rootInput.dispatchEvent(new Event("change", { bubbles: true }));
@@ -346,7 +356,10 @@ for (const picker of document.querySelectorAll("[data-directory-picker]")) {
         }
         nameInput.value = "";
         rootInput.value = payload.directory.path;
-        await loadDirectories(payload.directory.path);
+        await loadDirectories(payload.directory.path, "forward");
+        // Only a truly created directory receives the individual insertion
+        // emphasis; it is now the current breadcrumb path.
+        animateElement(pathOutput, [{ opacity: 0.4, transform: "translateY(4px)" }, { opacity: 1, transform: "none" }], { duration: motionTiming.standard });
       } catch (error) {
         showStatus(error instanceof Error ? error.message : createErrorMessage || "", true);
       } finally {
@@ -367,20 +380,50 @@ for (const picker of document.querySelectorAll("[data-directory-picker]")) {
 for (const form of document.querySelectorAll("form[data-preserve-test-fields]")) {
   const feedback = document.querySelector(".setup-feedback");
   let useNativeSubmit = false;
+  let nativeSubmitting = false;
+  let testing = false;
+
+  const revealFeedback = (children) => {
+    for (const child of children) {
+      child.style.opacity = "0";
+      child.style.transform = "translateY(4px)";
+      animateElement(child, { opacity: 1, transform: "none" }, { duration: motionTiming.fast }).then(() => {
+        child.style.opacity = "";
+        child.style.transform = "";
+      });
+    }
+  };
 
   form.addEventListener("submit", async (event) => {
     const submitter = event.submitter;
-    if (
-      useNativeSubmit ||
-      !(submitter instanceof HTMLButtonElement) ||
-      submitter.value !== "test" ||
-      !feedback
-    ) {
+    if (!(submitter instanceof HTMLButtonElement) || !feedback) {
       return;
     }
-
+    if (submitter.value !== "test") {
+      // Continue keeps native navigation; block double submission.
+      if (nativeSubmitting) {
+        event.preventDefault();
+        return;
+      }
+      nativeSubmitting = true;
+      for (const button of form.querySelectorAll('button[type="submit"]')) {
+        button.disabled = true;
+      }
+      return;
+    }
+    if (useNativeSubmit || nativeSubmitting) {
+      return; // A fetch failed earlier: let the native submission proceed.
+    }
+    if (testing) {
+      event.preventDefault();
+      return; // A test is already in flight; never submit twice.
+    }
     event.preventDefault();
-    submitter.disabled = true;
+    testing = true;
+    for (const button of form.querySelectorAll('button[type="submit"]')) {
+      button.disabled = true;
+    }
+    submitter.classList.add("is-busy");
     feedback.setAttribute("aria-busy", "true");
 
     try {
@@ -409,13 +452,31 @@ for (const form of document.querySelectorAll("form[data-preserve-test-fields]"))
         throw new Error("Setup test response is missing its feedback region");
       }
       feedback.replaceChildren(...nextFeedback.childNodes);
-      revealElements(feedback.children, { duration: motionPolicy.normal, stagger: false });
+      revealFeedback(feedback.children);
+      // Error results move focus to the alert; successes are announced by the
+      // polite live region without stealing focus.
+      const alert = feedback.querySelector('[role="alert"]');
+      if (alert) {
+        alert.setAttribute("tabindex", "-1");
+        alert.focus({ preventScroll: false });
+      }
     } catch {
       useNativeSubmit = true;
+      nativeSubmitting = true;
+      submitter.disabled = false;
+      submitter.classList.remove("is-busy");
+      feedback.removeAttribute("aria-busy");
       form.requestSubmit(submitter);
+      return;
     } finally {
       feedback.removeAttribute("aria-busy");
-      submitter.disabled = false;
+      submitter.classList.remove("is-busy");
+      if (!nativeSubmitting) {
+        for (const button of form.querySelectorAll('button[type="submit"]')) {
+          button.disabled = false;
+        }
+        testing = false;
+      }
     }
   });
 }

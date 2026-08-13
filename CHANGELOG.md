@@ -8,9 +8,15 @@ section using the release version and date.
 
 ## [Unreleased]
 
+### Added
+
+- Added live download updates on the Downloads dashboard and detail pages: authenticated ETag/304 conditional polling (2s while any task is active, 10s terminal-only, bounded backoff with immediate resume on visibility and online events), server-rendered row/detail fragments keyed by hash and durable row_version, real progress interpolation with left-to-right stage handoff, a completion confirmation with a 1.2s hold before active-view exit, and filter/search/pagination/history updates that preserve focus and scroll without full page reloads. Forms and navigation keep working without JavaScript.
+
 ### Changed
 
-- Added smooth Motion Mini-driven transitions for delete-dialog open/close, setup feedback, directory picker results, and details-section content, plus a minimal same-origin MPA navigation cross-fade — all honoring `prefers-reduced-motion`.
+- Consolidated all JS-driven motion behind one shared module (`motion.js`) with a single timing policy; same-origin navigation now keeps the sidebar steady and slides only the main content while the active nav item stays in place, and the delete dialog uses a shared purposeful open/close path that is safe under rapid reopen. All motion honors `prefers-reduced-motion`.
+- Settings test/save, category create/save, webhook enable/disable/test/replay, and API-token generate/rotate/revoke submissions mark the button busy and block duplicate submissions while the server's own response stays authoritative.
+- Reworked first-run setup step navigation: step URLs keep browser Back/Forward on reached steps without regressing wizard state, directional transitions keep the step rail continuous, connection feedback and directory results transition in place, and failed connection/path tests retain entered values with an explicit busy state.
 - Defined the pinned Light theme alongside Dark, added explicit English and Simplified Chinese font fallback tokens, and made shared typography and radius tokens resolve consistently in both themes.
 
 ### Fixed

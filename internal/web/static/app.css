@@ -258,18 +258,57 @@ a:hover { color: var(--accent-hover); }
 }
 
 /* ---------- MPA view transitions ----------
- * Minimal progressive enhancement: supported browsers cross-fade the page on
- * same-origin navigation; unsupported browsers ignore these rules and
- * navigate normally. No element is given its own transition group, so the
- * steady-state layout is untouched. */
+ * Minimal progressive enhancement: supported browsers keep the sidebar steady
+ * (it keeps its own view-transition name and is identical on both sides),
+ * cross-fade the main content with a restrained directional slide, and let
+ * the active nav item morph in place so the current location stays visible.
+ * Unsupported browsers ignore these rules and navigate normally. No element
+ * is given a resting-layout change; the steady state is untouched. */
 
 @view-transition {
   navigation: auto;
 }
 
-::view-transition-old(root),
-::view-transition-new(root) {
-  animation-duration: 140ms;
+.sidebar {
+  view-transition-name: app-sidebar;
+}
+
+main#main-content {
+  view-transition-name: app-main;
+}
+
+.nav-item[aria-current="page"] {
+  view-transition-name: app-active-nav;
+}
+
+::view-transition-old(app-main) {
+  animation: 200ms cubic-bezier(0.25, 0.1, 0.25, 1) both app-main-out;
+}
+
+::view-transition-new(app-main) {
+  animation: 200ms cubic-bezier(0.25, 0.1, 0.25, 1) both app-main-in;
+}
+
+::view-transition-group(app-main),
+::view-transition-group(app-active-nav),
+::view-transition-old(app-active-nav),
+::view-transition-new(app-active-nav) {
+  animation-duration: 200ms;
+  animation-timing-function: cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+@keyframes app-main-out {
+  to {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+}
+
+@keyframes app-main-in {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
 }
 
 /* ---------- Page chrome ---------- */
@@ -447,7 +486,12 @@ input:focus, select:focus {
   font: inherit;
   font-weight: 510;
   cursor: pointer;
-  transition: background-color 0.1s ease, border-color 0.1s ease;
+  transition: background-color 0.1s ease, border-color 0.1s ease, opacity 0.1s ease;
+}
+
+.button:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
 .button-primary { background: var(--accent); color: var(--button-on-accent, #ffffff); }
@@ -643,7 +687,7 @@ tbody tr:hover .cell-actions { background: var(--row-sticky-hover); }
 .delete-dialog::backdrop {
   background: var(--dialog-backdrop);
   backdrop-filter: blur(2px);
-  transition: opacity 0.12s ease;
+  transition: opacity 0.16s ease;
 }
 
 .delete-dialog.is-closing::backdrop {
@@ -1250,9 +1294,78 @@ tbody tr:hover .cell-actions { background: var(--row-sticky-hover); }
 .setup-step.is-current .setup-step-title { color: var(--text-primary); }
 .setup-step.is-current .setup-step-detail { color: var(--text-secondary); }
 
+/* Forward step transitions re-fill the connector into the just-completed
+ * node before the current node activates; state itself stays server-owned. */
+.setup-step.is-just-completed::after {
+  animation: setup-connector-fill 220ms ease-out both;
+}
+
+@keyframes setup-connector-fill {
+  from { background: var(--border-strong); }
+  to { background: var(--accent); }
+}
+
+.setup-step.is-current.is-activating .setup-step-node {
+  animation: setup-node-activate 300ms ease-out both;
+}
+
+@keyframes setup-node-activate {
+  from { transform: scale(0.96); }
+  to { transform: scale(1); }
+}
+
 .setup-content {
   min-width: 0;
   padding: 32px;
+  view-transition-name: setup-content;
+}
+
+/* Setup step direction (cross-document view transitions).
+ * The rail stays visually continuous while the step content slides
+ * directionally: forward enters from the right, back from the left, on the
+ * 16px step scale with shared emphasized timing; neutral navigations
+ * cross-fade with shared standard timing. The vt-forward/vt-back classes
+ * are transient, added only when a step transition actually ran. */
+::view-transition-old(setup-content),
+::view-transition-new(setup-content) {
+  animation-duration: 220ms;
+  animation-timing-function: cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+html.vt-forward::view-transition-old(setup-content) {
+  animation: setup-content-out 300ms ease-out both;
+}
+
+html.vt-forward::view-transition-new(setup-content) {
+  animation: setup-content-in 300ms ease-out both;
+}
+
+html.vt-back::view-transition-old(setup-content) {
+  animation: setup-content-out-back 300ms ease-out both;
+}
+
+html.vt-back::view-transition-new(setup-content) {
+  animation: setup-content-in-back 300ms ease-out both;
+}
+
+@keyframes setup-content-out {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateX(-16px); }
+}
+
+@keyframes setup-content-in {
+  from { opacity: 0; transform: translateX(16px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes setup-content-out-back {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateX(16px); }
+}
+
+@keyframes setup-content-in-back {
+  from { opacity: 0; transform: translateX(-16px); }
+  to { opacity: 1; transform: none; }
 }
 
 .setup-feedback:not(:empty) { margin-bottom: 16px; }
@@ -1478,6 +1591,44 @@ tbody tr:hover .cell-actions { background: var(--row-sticky-hover); }
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* Busy test/continue buttons keep their dimensions; only opacity and cursor
+ * change, so the form never reflows while a connection test runs. */
+.button.is-busy {
+  cursor: progress;
+  opacity: 0.65;
+}
+
+/* The success notice carries a restrained check that draws in once; errors
+ * keep the existing alert styling and reveal. */
+.setup-feedback .notice-success {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.setup-feedback .notice-success::before {
+  content: "";
+  flex: none;
+  width: 10px;
+  height: 6px;
+  margin-top: 6px;
+  border-left: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg) translate(1px, -2px) scale(1);
+  animation: setup-check-in 160ms ease-out both;
+}
+
+@keyframes setup-check-in {
+  from {
+    opacity: 0;
+    transform: rotate(-45deg) translate(1px, -2px) scale(0.5);
+  }
+  to {
+    opacity: 1;
+    transform: rotate(-45deg) translate(1px, -2px) scale(1);
+  }
 }
 
 .setup-review {
@@ -1869,15 +2020,95 @@ tbody tr:hover .cell-actions { background: var(--row-sticky-hover); }
 /* ---------- Reduced motion ----------
  * Physical movement added by this change (MPA page transitions and the
  * delete-dialog backdrop fade) is removed; existing color transitions stay
- * intact. JS transitions are handled by the same media query in app.js. */
+ * intact. JS transitions are handled by the same media query in motion.js. */
 
 @media (prefers-reduced-motion: reduce) {
   ::view-transition-old(root),
-  ::view-transition-new(root) {
+  ::view-transition-new(root),
+  ::view-transition-old(app-main),
+  ::view-transition-new(app-main),
+  ::view-transition-group(app-main),
+  ::view-transition-old(app-sidebar),
+  ::view-transition-new(app-sidebar),
+  ::view-transition-group(app-sidebar),
+  ::view-transition-old(app-active-nav),
+  ::view-transition-new(app-active-nav),
+  ::view-transition-group(app-active-nav),
+  ::view-transition-old(setup-content),
+  ::view-transition-new(setup-content),
+  ::view-transition-group(setup-content) {
+    animation: none;
+  }
+
+  .setup-step.is-just-completed::after,
+  .setup-step.is-current.is-activating .setup-step-node,
+  .setup-feedback .notice-success::before {
     animation: none;
   }
 
   .delete-dialog::backdrop {
     transition: none;
+  }
+}
+
+/* ---------- Download live updates ----------
+ * Transient busy/status styling for the live download list and detail
+ * regions. None of these change resting layout, durable colors, or the
+ * server-rendered content. */
+
+/* Busy and disabled action controls (pause/resume/retry/remove). */
+.task-control.is-busy,
+.button.is-busy {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.task-control:disabled,
+.button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* A row mid-exit or terminal-confirmation is not interactive; the Retry entry
+ * stays interactive only in member views (All/Failed). */
+.download-table tr[aria-busy="true"] .task-actions,
+.download-table tr[aria-busy="true"] .delete-options {
+  pointer-events: none;
+}
+
+/* Height-collapse support for authoritative row exits. */
+.download-table tr.is-collapsing {
+  overflow: hidden;
+}
+
+/* Completion confirmation: one check glyph on the state badge and one
+ * low-intensity sweep across the verified stage fill. */
+.badge-check {
+  margin-left: 5px;
+  font-weight: 600;
+  color: var(--ok);
+}
+
+.stage-fill {
+  position: relative;
+}
+
+.stage-sweep {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent);
+  pointer-events: none;
+}
+
+/* Dimmed rows while a filter/search/pagination fetch is in flight; the
+ * current content and focus stay intact. */
+[data-download-list][aria-busy="true"] .download-table tbody {
+  opacity: 0.75;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .download-table tr[aria-busy="true"] .task-actions,
+  .download-table tr[aria-busy="true"] .delete-options {
+    pointer-events: none;
   }
 }

@@ -89,6 +89,18 @@ type DownloadRow struct {
 	CanPause       bool
 	CanResume      bool
 	CanRemove      bool
+	// RowVersion is the durable domain.Download.RowVersion. The live-update
+	// client keys rows by Hash and replaces a row only when RowVersion rises.
+	RowVersion int64
+	// Terminal mirrors download.State.Terminal() so the client can classify a
+	// terminal confirmation without duplicating state logic.
+	Terminal bool
+	// CSRFToken, ReturnPath, and Str carry the page context required by the
+	// self-contained "download-row" fragment (same markup on the full page and
+	// in the updates JSON).
+	CSRFToken  string
+	ReturnPath string
+	Str        *Strings
 }
 
 type RouteView struct {
@@ -133,6 +145,11 @@ type DetailView struct {
 	CanRetry        bool
 	CanPause        bool
 	CanRemove       bool
+	// RowVersion mirrors the durable domain.Download.RowVersion and Terminal
+	// mirrors download.State.Terminal(); the detail live region carries both
+	// so the client never regresses to an older snapshot.
+	RowVersion int64
+	Terminal   bool
 }
 
 type FileView struct {
@@ -272,6 +289,11 @@ func buildDownloadsView(downloads []domain.Download, categories []domain.Categor
 	if page.HasNext {
 		page.NextURL = downloadListURL(options, page.PageNumber+1)
 	}
+	page.Path = downloadListURL(options, page.PageNumber)
+	for index := range page.Rows {
+		page.Rows[index].CSRFToken = csrfToken
+		page.Rows[index].ReturnPath = page.Path
+	}
 	return page, nil
 }
 
@@ -300,6 +322,9 @@ func buildDownloadRow(download domain.Download, projection domain.Projection, no
 		CanPause:       canPause(download),
 		CanResume:      download.State == domain.StateStopped,
 		CanRemove:      download.State.Visible(),
+		RowVersion:     download.RowVersion,
+		Terminal:       download.State.Terminal(),
+		Str:            str,
 	}, nil
 }
 
@@ -338,6 +363,8 @@ func buildDetailView(download domain.Download, files []domain.DownloadFile, csrf
 		CanRetry:        canRetry(download),
 		CanPause:        canPause(download),
 		CanRemove:       download.State.Visible(),
+		RowVersion:      download.RowVersion,
+		Terminal:        download.State.Terminal(),
 	}
 	for _, file := range files {
 		page.Files = append(page.Files, FileView{Index: file.Index, Path: file.RelativePath, Size: byteSize(file.Size)})

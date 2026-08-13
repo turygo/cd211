@@ -278,6 +278,10 @@ func TestSetupWizardHappyPath(t *testing.T) {
 	start := fixture.get("/setup", "")
 	requireStatus(t, start, http.StatusOK)
 	requireContains(t, start.Body.String(), `action="/setup/password"`, "password", "confirm_password")
+	// The setup page loads exactly its own motion module, never the download
+	// live module, and carries the rendered step for direction detection.
+	requireContains(t, start.Body.String(), `/static/setup-motion.js?v=1`, `data-setup-step="1"`)
+	requireAbsent(t, start.Body.String(), "downloads-live")
 
 	sid, csrf := fixture.advancePassword()
 
@@ -699,6 +703,9 @@ func TestSetupRoutesServeLangAndStaticPreAuth(t *testing.T) {
 	}{
 		{"/static/app.css", "text/css; charset=utf-8"},
 		{"/static/app.js", "text/javascript; charset=utf-8"},
+		{"/static/motion.js", "text/javascript; charset=utf-8"},
+		{"/static/actions-motion.js", "text/javascript; charset=utf-8"},
+		{"/static/setup-motion.js", "text/javascript; charset=utf-8"},
 		{"/static/theme-init.js", "text/javascript; charset=utf-8"},
 		{"/static/vendor/motion-mini.js", "text/javascript; charset=utf-8"},
 	} {
@@ -716,10 +723,158 @@ func TestSetupRoutesServeLangAndStaticPreAuth(t *testing.T) {
 	}
 	postStatic := fixture.post("/static/vendor/motion-mini.js", "", "", nil)
 	requireStatus(t, postStatic, http.StatusMethodNotAllowed)
+	setupModulePOST := fixture.post("/static/setup-motion.js", "", "", nil)
+	requireStatus(t, setupModulePOST, http.StatusMethodNotAllowed)
 	get := fixture.get("/setup/password", "")
 	requireStatus(t, get, http.StatusMethodNotAllowed)
 	missing := fixture.get("/no-such-route", "")
 	requireStatus(t, missing, http.StatusNotFound)
+}
+
+func TestSetupStepURLsRestoreReachedSteps(t *testing.T) {
+	fixture := newSetupFixture(t)
+
+	// Without a wizard session every step URL falls back to step 1.
+	for _, target := range []string{"/setup?step=2", "/setup?step=3", "/setup?step=9", "/setup?step=two"} {
+		page := fixture.get(target, "")
+		requireStatus(t, page, http.StatusOK)
+		requireContains(t, page.Body.String(), `action="/setup/password"`)
+	}
+
+	sid, _ := fixture.advancePassword()
+
+	// Malformed and ahead steps render the current step, never an error.
+	for _, target := range []string{"/setup?step=abc", "/setup?step=0", "/setup?step=4"} {
+		page := fixture.get(target, sid)
+		requireStatus(t, page, http.StatusOK)
+		requireContains(t, page.Body.String(), `action="/setup/cd2/test"`)
+	}
+
+	// Reached steps stay viewable in either direction.
+	step1 := fixture.get("/setup?step=1", sid)
+	requireStatus(t, step1, http.StatusOK)
+	requireContains(t, step1.Body.String(), `action="/setup/password"`, `data-setup-step="1"`)
+	step2 := fixture.get("/setup?step=2", sid)
+	requireStatus(t, step2, http.StatusOK)
+	requireContains(t, step2.Body.String(), `action="/setup/cd2/test"`, `data-setup-step="2"`)
+
+	// A later reached step remains viewable backwards from the review.
+	reviewSid, csrf := fixture.advanceToReview()
+	backward := fixture.get("/setup?step=2", reviewSid)
+	requireStatus(t, backward, http.StatusOK)
+	requireContains(t, backward.Body.String(), `action="/setup/cd2/test"`, `data-setup-step="2"`)
+	review := fixture.get("/setup?step=4", reviewSid)
+	requireStatus(t, review, http.StatusOK)
+	requireContains(t, review.Body.String(), `action="/setup/finish"`, `data-setup-step="4"`)
+
+	// The wizard still advances through the normal POST/redirect flow.
+	continued := fixture.post("/setup/paths/test", reviewSid, csrf, url.Values{
+		"action": {"continue"}, "cloud_root": {"/cloud"}, "local_root": {t.TempDir()},
+	})
+	requireStatus(t, continued, http.StatusSeeOther)
+}
+
+func TestSetupStepRedirectTargets(t *testing.T) {
+	fixture := newSetupFixture(t)
+	password := fixture.post("/setup/password", "", "", url.Values{
+		"password": {"correct horse"}, "confirm_password": {"correct horse"},
+	})
+	requireStatus(t, password, http.StatusSeeOther)
+	if location := password.Header().Get("Location"); location != "/setup?step=2" {
+		t.Errorf("password Location = %q, want /setup?step=2", location)
+	}
+	cookies := password.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != "SID" {
+		t.Fatalf("password cookies = %+v, want one SID", cookies)
+	}
+	sid := cookies[0].Value
+	current, ok := fixture.sessions.Get(sid)
+	if !ok {
+		t.Fatalf("wizard session %q not retained", sid)
+	}
+	csrf := current.CSRFToken
+
+	cd2 := fixture.post("/setup/cd2/test", sid, csrf, url.Values{
+		"action": {"continue"}, "address": {"cd2.example:443"}, "username": {"operator"}, "password": {"cd2-secret"},
+	})
+	requireStatus(t, cd2, http.StatusSeeOther)
+	if location := cd2.Header().Get("Location"); location != "/setup?step=3" {
+		t.Errorf("cd2 continue Location = %q, want /setup?step=3", location)
+	}
+
+	paths := fixture.post("/setup/paths/test", sid, csrf, url.Values{
+		"action": {"continue"}, "cloud_root": {"/cloud"}, "local_root": {t.TempDir()},
+	})
+	requireStatus(t, paths, http.StatusSeeOther)
+	if location := paths.Header().Get("Location"); location != "/setup?step=4" {
+		t.Errorf("paths continue Location = %q, want /setup?step=4", location)
+	}
+}
+
+func TestSetupBackwardViewNeverRegressesStep(t *testing.T) {
+	fixture := newSetupFixture(t)
+	sid, csrf := fixture.advanceToReview()
+
+	// An older step's Continue re-runs its validation but must not roll the
+	// wizard state back; the redirect targets the actual current step.
+	backward := fixture.post("/setup/cd2/test", sid, csrf, url.Values{
+		"action": {"continue"}, "address": {"cd2.example:443"}, "username": {"operator"}, "password": {"cd2-secret"},
+	})
+	requireStatus(t, backward, http.StatusSeeOther)
+	if location := backward.Header().Get("Location"); location != "/setup?step=4" {
+		t.Errorf("backward cd2 continue Location = %q, want /setup?step=4", location)
+	}
+	pathsBackward := fixture.post("/setup/paths/test", sid, csrf, url.Values{
+		"action": {"continue"}, "cloud_root": {"/cloud"}, "local_root": {t.TempDir()},
+	})
+	requireStatus(t, pathsBackward, http.StatusSeeOther)
+	if location := pathsBackward.Header().Get("Location"); location != "/setup?step=4" {
+		t.Errorf("backward paths continue Location = %q, want /setup?step=4", location)
+	}
+
+	page := fixture.get("/setup", sid)
+	requireStatus(t, page, http.StatusOK)
+	requireContains(t, page.Body.String(), `action="/setup/finish"`)
+}
+
+func TestSetupErrorsKeepEnteredValues(t *testing.T) {
+	fixture := newSetupFixture(t)
+	sid, csrf := fixture.advancePassword()
+
+	// An invalid address re-renders step 2 with the typed values intact.
+	invalid := fixture.post("/setup/cd2/test", sid, csrf, url.Values{
+		"action": {"test"}, "address": {"not an address"}, "username": {"operator"}, "password": {"cd2-secret"},
+	})
+	requireStatus(t, invalid, http.StatusBadRequest)
+	requireContains(t, invalid.Body.String(), `value="not an address"`, `value="operator"`)
+
+	// A failed connectivity test preserves the same fields.
+	fixture.dial.setCheckErr(&clouddrive.Error{Operation: "system_status", Kind: clouddrive.ErrorTemporary})
+	failed := fixture.post("/setup/cd2/test", sid, csrf, url.Values{
+		"action": {"test"}, "address": {"cd2.example:443"}, "username": {"operator"}, "password": {"cd2-secret"},
+	})
+	requireStatus(t, failed, http.StatusOK)
+	requireContains(t, failed.Body.String(), `value="cd2.example:443"`, `value="operator"`)
+	fixture.dial.setCheckErr(nil)
+
+	// Path validation errors keep both roots typed on the re-rendered form.
+	advanced := fixture.post("/setup/cd2/test", sid, csrf, url.Values{
+		"action": {"continue"}, "address": {"cd2.example:443"}, "username": {"operator"}, "password": {"cd2-secret"},
+	})
+	requireStatus(t, advanced, http.StatusSeeOther)
+	localRoot := t.TempDir()
+	relative := fixture.post("/setup/paths/test", sid, csrf, url.Values{
+		"action": {"test"}, "cloud_root": {"relative"}, "local_root": {localRoot},
+	})
+	requireStatus(t, relative, http.StatusBadRequest)
+	requireContains(t, relative.Body.String(), `value="relative"`, `value="`+localRoot+`"`)
+
+	// A non-writable local root keeps the typed cloud root too.
+	missing := fixture.post("/setup/paths/test", sid, csrf, url.Values{
+		"action": {"test"}, "cloud_root": {"/cloud"}, "local_root": {"/no/such/root"},
+	})
+	requireStatus(t, missing, http.StatusOK)
+	requireContains(t, missing.Body.String(), `value="/cloud"`)
 }
 
 func TestSettingsRequiresAuth(t *testing.T) {

@@ -520,13 +520,17 @@ func TestSecurityHeadersAndStaticAssets(t *testing.T) {
 
 	body := login.Body.String()
 	themeInit := strings.Index(body, `<script src="/static/theme-init.js?v=1"></script>`)
-	stylesheet := strings.Index(body, `<link rel="stylesheet" href="/static/app.css?v=10">`)
+	stylesheet := strings.Index(body, `<link rel="stylesheet" href="/static/app.css?v=11">`)
 	if themeInit < 0 || stylesheet < 0 || themeInit > stylesheet {
 		t.Errorf("theme initializer must load before stylesheet: theme=%d stylesheet=%d", themeInit, stylesheet)
 	}
-	moduleScript := strings.Index(body, `<script type="module" src="/static/app.js?v=6"></script>`)
+	moduleScript := strings.Index(body, `<script type="module" src="/static/app.js?v=7"></script>`)
 	if moduleScript < 0 || moduleScript < stylesheet {
 		t.Errorf("app module script must load after stylesheet: module=%d stylesheet=%d", moduleScript, stylesheet)
+	}
+	actionsMotion := strings.Index(body, `<script type="module" src="/static/actions-motion.js?v=1"></script>`)
+	if actionsMotion < 0 || actionsMotion < moduleScript {
+		t.Errorf("actions-motion module script must load after app module: actions=%d module=%d", actionsMotion, moduleScript)
 	}
 
 	for _, target := range []struct {
@@ -535,6 +539,10 @@ func TestSecurityHeadersAndStaticAssets(t *testing.T) {
 	}{
 		{"/static/app.css", "text/css; charset=utf-8"},
 		{"/static/app.js", "text/javascript; charset=utf-8"},
+		{"/static/motion.js", "text/javascript; charset=utf-8"},
+		{"/static/actions-motion.js", "text/javascript; charset=utf-8"},
+		{"/static/downloads-live.js", "text/javascript; charset=utf-8"},
+		{"/static/setup-motion.js", "text/javascript; charset=utf-8"},
 		{"/static/theme-init.js", "text/javascript; charset=utf-8"},
 		{"/static/vendor/motion-mini.js", "text/javascript; charset=utf-8"},
 	} {

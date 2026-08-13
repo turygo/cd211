@@ -119,6 +119,11 @@ func TestSetupModeMux(t *testing.T) {
 		{name: "setup language", method: http.MethodGet, path: "/lang", wantStatus: http.StatusOK, wantBody: "setup handler"},
 		{name: "setup css", method: http.MethodGet, path: "/static/app.css", wantStatus: http.StatusOK, wantBody: "setup handler"},
 		{name: "setup javascript", method: http.MethodGet, path: "/static/app.js", wantStatus: http.StatusOK, wantBody: "setup handler"},
+		{name: "setup theme initializer", method: http.MethodGet, path: "/static/theme-init.js", wantStatus: http.StatusOK, wantBody: "setup handler"},
+		{name: "setup motion module", method: http.MethodGet, path: "/static/motion.js", wantStatus: http.StatusOK, wantBody: "setup handler"},
+		{name: "setup actions module", method: http.MethodGet, path: "/static/actions-motion.js", wantStatus: http.StatusOK, wantBody: "setup handler"},
+		{name: "setup transition module", method: http.MethodGet, path: "/static/setup-motion.js", wantStatus: http.StatusOK, wantBody: "setup handler"},
+		{name: "setup motion vendor", method: http.MethodGet, path: "/static/vendor/motion-mini.js", wantStatus: http.StatusOK, wantBody: "setup handler"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -53,7 +53,7 @@
         {{end}}
       </aside>
 
-      <div class="setup-content">
+      <div class="setup-content" data-setup-step="{{.Step}}">
         {{if .AlreadyConfigured}}
         <p class="setup-configured">{{.Str.SetupAlreadyConfigured}}</p>
         {{else}}
@@ -114,7 +114,7 @@
           </div>
           <div class="setup-field setup-path-stop">
             <label for="cloud-root">{{.Str.CloudRootLabel}}</label>
-            <input id="cloud-root" name="cloud_root" type="text" value="{{.Values.CloudRoot}}" placeholder="{{.Str.CloudDirectoryNoneSelected}}" aria-describedby="cloud-root-hint" required readonly>
+            <input id="cloud-root" name="cloud_root" type="text" value="{{.Values.CloudRoot}}" placeholder="{{.Str.CloudDirectoryNoneSelected}}" aria-describedby="cloud-root-hint" required readonly autofocus>
             <p class="form-hint" id="cloud-root-hint">{{.Str.CloudRootHint}}</p>
             <div class="cloud-picker"
                  data-directory-picker
@@ -238,5 +238,6 @@
       </div>
     </section>
   </main>
+  <script type="module" src="/static/setup-motion.js?v=1"></script>
 </body>
 </html>{{end}}

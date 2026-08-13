@@ -1,0 +1,134 @@
+{{define "download-row"}}<tr data-download-hash="{{.Hash}}" data-row-version="{{.RowVersion}}" data-state="{{.InternalState}}" data-terminal="{{.Terminal}}">
+  <td class="cell-name">
+    <a class="task-title" href="/downloads/{{.Hash}}" title="{{.Name}}">{{.Name}}</a>
+    <span class="cell-meta"><code>{{.HashPrefix}}</code></span>
+    {{if .Error}}<span class="cell-error{{if .ErrorIsWarning}} is-warning{{end}}">{{.Error}}</span>{{end}}
+  </td>
+  <td><span class="state-badge" data-state="{{.InternalState}}">{{.StateLabel}}</span></td>
+  <td class="cell-progress">{{template "route-strip" .Route}}</td>
+  <td class="cell-category">{{.Category}}</td>
+  <td class="cell-age">{{printf .Str.AgoFormat .Age}}</td>
+  <td class="cell-actions">
+    <div class="task-actions">
+      {{if .CanPause}}
+      <form action="/downloads/{{.Hash}}/pause" method="post" data-confirm="{{.Str.ConfirmPause}}">
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+        <input type="hidden" name="return_to" value="{{.ReturnPath}}">
+        <button class="task-control task-control-primary" type="submit" aria-label="{{.Str.ActionPause}}" title="{{.Str.ActionPause}}">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.25 3.25v9.5M10.75 3.25v9.5"></path></svg>
+        </button>
+      </form>
+      {{else if .CanResume}}
+      <form action="/downloads/{{.Hash}}/start" method="post">
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+        <input type="hidden" name="return_to" value="{{.ReturnPath}}">
+        <button class="task-control task-control-primary" type="submit" aria-label="{{.Str.ActionResume}}" title="{{.Str.ActionResume}}">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5.25 3.25 7 4.75-7 4.75z"></path></svg>
+        </button>
+      </form>
+      {{end}}
+      {{if .CanRemove}}
+      <button class="task-control" type="button" data-dialog-open="delete-{{.Hash}}" aria-label="{{.Str.ActionMore}}" title="{{.Str.ActionMore}}">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r=".8"></circle><circle cx="8" cy="8" r=".8"></circle><circle cx="13" cy="8" r=".8"></circle></svg>
+      </button>
+      <dialog class="delete-dialog" id="delete-{{.Hash}}" aria-labelledby="delete-title-{{.Hash}}">
+        <div class="delete-dialog-header">
+          <div>
+            <span class="dialog-eyebrow">{{.Str.ActionMore}}</span>
+            <h2 id="delete-title-{{.Hash}}">{{.Str.DeleteChoiceTitle}}</h2>
+          </div>
+          <button class="dialog-close" type="button" data-dialog-close aria-label="Close">×</button>
+        </div>
+        <p class="delete-task-name" title="{{.Name}}">{{.Name}}</p>
+        <div class="delete-options">
+          <form action="/downloads/{{.Hash}}/remove" method="post" data-confirm="{{.Str.ConfirmRemove}}">
+            <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+            <input type="hidden" name="return_to" value="{{.ReturnPath}}">
+            <input type="hidden" name="delete_files" value="false">
+            <button class="delete-option" type="submit">{{.Str.ActionRemove}}</button>
+          </form>
+          <form action="/downloads/{{.Hash}}/remove" method="post" data-confirm="{{.Str.ConfirmRemoveFiles}}">
+            <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+            <input type="hidden" name="return_to" value="{{.ReturnPath}}">
+            <input type="hidden" name="delete_files" value="true">
+            <button class="delete-option is-danger" type="submit">{{.Str.ActionRemoveFiles}}</button>
+          </form>
+        </div>
+        <p class="delete-note">{{.Str.RemovalNote}}</p>
+      </dialog>
+      {{end}}
+    </div>
+  </td>
+</tr>{{end}}
+
+{{define "download-pagination"}}<nav class="pagination" aria-label="Pagination">
+  <span class="pagination-status">{{printf .Str.PaginationFormat .PageStart .PageEnd .TotalRows}}</span>
+  <div class="pagination-actions">
+    {{if .HasPrevious}}<a class="pagination-link" href="{{.PreviousURL}}">{{.Str.PreviousPage}}</a>{{else}}<span class="pagination-link is-disabled">{{.Str.PreviousPage}}</span>{{end}}
+    <span class="pagination-page">{{.PageNumber}} / {{.TotalPages}}</span>
+    {{if .HasNext}}<a class="pagination-link" href="{{.NextURL}}">{{.Str.NextPage}}</a>{{else}}<span class="pagination-link is-disabled">{{.Str.NextPage}}</span>{{end}}
+  </div>
+</nav>{{end}}
+
+{{define "download-empty"}}<section class="empty-state" aria-labelledby="empty-title">
+  <h2 id="empty-title">{{.Str.EmptyTitle}}</h2>
+  <p>{{.Str.EmptyBody}}</p>
+</section>{{end}}
+
+{{define "detail-live"}}<div data-live-detail data-hash="{{.Hash}}" data-row-version="{{.RowVersion}}" data-state="{{.InternalState}}" data-terminal="{{.Terminal}}" data-state-label="{{.StateLabel}}">
+  <section class="panel" data-live-route>
+    {{template "route-strip" .Route}}
+  </section>
+  {{if .Error}}<div class="notice {{if .ErrorIsWarning}}notice-warning{{else}}notice-error{{end}}" data-live-error role="{{if .ErrorIsWarning}}status{{else}}alert{{end}}"><strong>{{if .ErrorIsWarning}}{{.Str.RetryingTitle}}{{else}}{{.Str.RecordedError}}{{end}}</strong><p>{{.Error}}</p></div>{{end}}
+  <div class="panel-grid">
+    <section class="panel" aria-labelledby="paths-title" data-live-paths>
+      <h2 id="paths-title">{{.Str.SectionPaths}}</h2>
+      <dl class="detail-list">
+        <div><dt>{{.Str.CloudFolder}}</dt><dd><code>{{.CloudFolder}}</code></dd></div>
+        <div><dt>{{.Str.CloudSource}}</dt><dd><code>{{.CloudSourcePath}}</code></dd></div>
+        <div><dt>{{.Str.SavePathLabel}}</dt><dd><code>{{.SavePath}}</code></dd></div>
+        <div><dt>{{.Str.LocalContent}}</dt><dd><code>{{.ContentPath}}</code></dd></div>
+        <div><dt>{{.Str.CategoryLabel}}</dt><dd>{{.Category}}</dd></div>
+      </dl>
+      <p class="panel-note">{{.Str.FrozenNote}}</p>
+    </section>
+    <section class="panel" aria-labelledby="timing-title" data-live-chronology>
+      <h2 id="timing-title">{{.Str.SectionChronology}}</h2>
+      <dl class="detail-list">
+        <div><dt>{{.Str.ProgressLabel}}</dt><dd>{{printf .Str.ProgressSummary .Projected .Offline .Copy}}</dd></div>
+        <div><dt>{{.Str.ProjectedState}}</dt><dd>{{.ProjectedState}}</dd></div>
+        <div><dt>{{.Str.Created}}</dt><dd>{{.CreatedAt}}</dd></div>
+        <div><dt>{{.Str.Updated}}</dt><dd>{{.UpdatedAt}}</dd></div>
+        <div><dt>{{.Str.PhaseStarted}}</dt><dd>{{.PhaseStartedAt}}</dd></div>
+        <div><dt>{{.Str.NextRun}}</dt><dd>{{.NextRunAt}}</dd></div>
+        <div><dt>{{.Str.CompletedLabel}}</dt><dd>{{.CompletedAt}}</dd></div>
+        <div><dt>{{.Str.Attempts}}</dt><dd>{{.AttemptCount}}</dd></div>
+      </dl>
+    </section>
+  </div>
+  <section class="panel" aria-labelledby="actions-title" data-live-actions>
+    <h2 id="actions-title">{{.Str.SectionActions}}</h2>
+    <div class="action-bar">
+      {{if .CanStart}}<form action="/downloads/{{.Hash}}/start" method="post"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="button button-primary" type="submit">{{.Str.ActionStart}}</button></form>{{end}}
+      {{if .CanRetry}}<form action="/downloads/{{.Hash}}/retry" method="post"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="button button-primary" type="submit">{{.Str.ActionRetry}}</button></form>{{end}}
+      {{if .CanPause}}<form action="/downloads/{{.Hash}}/pause" method="post" data-confirm="{{.Str.ConfirmPause}}"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="button button-secondary" type="submit">{{.Str.ActionPause}}</button></form>{{end}}
+      {{if .CanRemove}}
+      <form action="/downloads/{{.Hash}}/remove" method="post" data-confirm="{{.Str.ConfirmRemove}}">
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="delete_files" value="false"><button class="button button-secondary" type="submit">{{.Str.ActionRemove}}</button>
+      </form>
+      <form action="/downloads/{{.Hash}}/remove" method="post" data-confirm="{{.Str.ConfirmRemoveFiles}}">
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="delete_files" value="true"><button class="button button-danger" type="submit">{{.Str.ActionRemoveFiles}}</button>
+      </form>
+      {{end}}
+    </div>
+    <p class="panel-note">{{.Str.RemovalNote}}</p>
+  </section>
+  <section class="panel" aria-labelledby="files-title" data-live-files>
+    <h2 id="files-title">{{.Str.SectionFiles}}</h2>
+    {{if .Files}}
+    <div class="table-wrap"><table class="file-table"><thead><tr><th scope="col">{{.Str.ThIndex}}</th><th scope="col">{{.Str.ThPath}}</th><th scope="col" class="col-size">{{.Str.ThSize}}</th></tr></thead><tbody>
+      {{range .Files}}<tr><td class="cell-index">{{.Index}}</td><td><code>{{.Path}}</code></td><td class="cell-size">{{.Size}}</td></tr>{{end}}
+    </tbody></table></div>
+    {{else}}<p class="muted">{{.Str.NoFiles}}</p>{{end}}
+  </section>
+</div>{{end}}
