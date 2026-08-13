@@ -8,6 +8,8 @@ section using the release version and date.
 
 ## [Unreleased]
 
+## [0.3.9] - 2026-08-13
+
 ### Added
 
 - Added live download updates on the Downloads dashboard and detail pages: authenticated ETag/304 conditional polling (2s while any task is active, 10s terminal-only, bounded backoff with immediate resume on visibility and online events), server-rendered row/detail fragments keyed by hash and durable row_version, real progress interpolation with left-to-right stage handoff, a completion confirmation with a 1.2s hold before active-view exit, and filter/search/pagination/history updates that preserve focus and scroll without full page reloads. Forms and navigation keep working without JavaScript.
