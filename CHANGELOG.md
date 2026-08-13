@@ -8,6 +8,8 @@ section using the release version and date.
 
 ## [Unreleased]
 
+## [0.3.10] - 2026-08-13
+
 ### Fixed
 
 - Kept English and Chinese navigation, setup steps, action groups, and download states readable at narrow widths; download lists now use compact state labels while preserving full accessible descriptions.
