@@ -155,6 +155,7 @@ func NewSetup(cfg SetupConfig) (http.Handler, error) {
 	mux.Handle("GET /static/app.css", http.HandlerFunc(staticCSS))
 	mux.Handle("GET /static/theme-init.js", http.HandlerFunc(staticThemeInitJS))
 	mux.Handle("GET /static/app.js", http.HandlerFunc(staticJS))
+	mux.Handle("GET /static/vendor/motion-mini.js", http.HandlerFunc(staticMotionMiniJS))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		method, found := setupRouteMethod(r.URL.Path, r.Method)
 		if !found {
@@ -178,7 +179,7 @@ func NewSetup(cfg SetupConfig) (http.Handler, error) {
 
 func setupRouteMethod(requestPath, requestMethod string) (string, bool) {
 	switch requestPath {
-	case "/setup", "/lang", "/static/app.css", "/static/app.js", "/static/theme-init.js":
+	case "/setup", "/lang", "/static/app.css", "/static/app.js", "/static/theme-init.js", "/static/vendor/motion-mini.js":
 		return http.MethodGet, true
 	case "/setup/cloud-directories", "/setup/local-directories":
 		if requestMethod == http.MethodGet {

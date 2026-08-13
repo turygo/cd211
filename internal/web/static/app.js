@@ -1,7 +1,83 @@
-"use strict";
+import { animate } from "/static/vendor/motion-mini.js?v=13.1.0";
 
 const themeStorageKey = "cd211-theme";
 let savedTheme = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+
+// Shared motion policy: one set of restrained durations/easings for every
+// JS-driven transition, gated by prefers-reduced-motion. Reduced motion
+// applies target values immediately but still resolves the returned promise,
+// so completion-sensitive flows (dialog close) work unchanged.
+const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+const motionPolicy = {
+  fast: 100,
+  normal: 160,
+  slow: 220,
+  ease: [0.25, 0.1, 0.25, 1],
+};
+
+// Drives an element to a target visual state with Motion Mini. The returned
+// promise resolves when the animation finishes; under prefers-reduced-motion
+// the target applies synchronously and the promise resolves immediately.
+// With clearInline, the inline opacity/transform written for the animation
+// are removed once the resting state is reached, so no transient style
+// survives the interaction.
+function transitionElement(element, target, { duration = motionPolicy.normal, delay = 0, clearInline = false } = {}) {
+  const applyTarget = () => {
+    if (target.opacity !== undefined) {
+      element.style.opacity = String(target.opacity);
+    }
+    if (target.transform !== undefined) {
+      element.style.transform = target.transform;
+    }
+  };
+  const clearInlineStyles = () => {
+    if (target.opacity !== undefined) {
+      element.style.opacity = "";
+    }
+    if (target.transform !== undefined) {
+      element.style.transform = "";
+    }
+  };
+  if (reducedMotion.matches) {
+    applyTarget();
+    if (clearInline) {
+      clearInlineStyles();
+    }
+    return Promise.resolve();
+  }
+  const keyframes = {};
+  if (target.opacity !== undefined) {
+    keyframes.opacity = target.opacity;
+  }
+  if (target.transform !== undefined) {
+    keyframes.transform = target.transform;
+  }
+  return Promise.resolve(
+    animate(element, keyframes, {
+      duration: duration / 1000,
+      delay: delay / 1000,
+      ease: motionPolicy.ease,
+    })
+  ).then((result) => {
+    if (clearInline) {
+      clearInlineStyles();
+    }
+    return result;
+  });
+}
+
+// Reveals a set of elements with a restrained fade and at most 4px rise. A
+// tiny stagger applies only to short lists and is always capped so large
+// result sets never delay their final rows.
+function revealElements(elements, { duration = motionPolicy.normal, distance = 4, stagger = true } = {}) {
+  const targets = Array.from(elements);
+  targets.forEach((element, index) => {
+    const delay = stagger && targets.length > 1 ? Math.min(index * 30, 120) : 0;
+    element.style.opacity = "0";
+    element.style.transform = `translateY(${distance}px)`;
+    transitionElement(element, { opacity: 1, transform: "none" }, { duration, delay, clearInline: true });
+  });
+}
 
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
@@ -37,12 +113,48 @@ for (const form of document.querySelectorAll("form[data-confirm]")) {
   });
 }
 
+// Opens a delete confirmation dialog with a restrained entrance: native
+// showModal() first (focus trapping and top layer), then a fade-in with a
+// small rise. Reopening after a completed close always starts neutral.
+function openDeleteDialog(dialog) {
+  if (dialog.open) {
+    return;
+  }
+  dialog.classList.remove("is-closing");
+  dialog.showModal();
+  dialog.style.opacity = "0";
+  dialog.style.transform = "translateY(6px) scale(0.985)";
+  transitionElement(dialog, { opacity: 1, transform: "none" }, { duration: motionPolicy.normal, clearInline: true });
+}
+
+// One shared animated-close path for the close button, backdrop clicks, and
+// native Escape/cancel. The reverse animation runs while the dialog stays in
+// the top layer (so the CSS ::backdrop can fade out), then dialog.close() is
+// called and inline start styles are cleared. A closing dialog ignores
+// duplicate close requests.
+function closeDeleteDialog(dialog) {
+  if (!(dialog instanceof HTMLDialogElement) || !dialog.open || dialog.classList.contains("is-closing")) {
+    return;
+  }
+  dialog.classList.add("is-closing");
+  transitionElement(dialog, { opacity: 0, transform: "translateY(6px) scale(0.985)" }, { duration: 120 })
+    .catch(() => {})
+    .then(() => {
+      dialog.classList.remove("is-closing");
+      dialog.style.opacity = "";
+      dialog.style.transform = "";
+      if (dialog.open) {
+        dialog.close();
+      }
+    });
+}
+
 for (const opener of document.querySelectorAll("[data-dialog-open]")) {
   opener.addEventListener("click", () => {
     const id = opener.getAttribute("data-dialog-open");
     const dialog = id ? document.getElementById(id) : null;
     if (dialog instanceof HTMLDialogElement) {
-      dialog.showModal();
+      openDeleteDialog(dialog);
     }
   });
 }
@@ -51,7 +163,7 @@ for (const closer of document.querySelectorAll("[data-dialog-close]")) {
   closer.addEventListener("click", () => {
     const dialog = closer.closest("dialog");
     if (dialog instanceof HTMLDialogElement) {
-      dialog.close();
+      closeDeleteDialog(dialog);
     }
   });
 }
@@ -65,8 +177,26 @@ for (const dialog of document.querySelectorAll("dialog.delete-dialog")) {
       event.clientY < bounds.top ||
       event.clientY > bounds.bottom;
     if (outside) {
-      dialog.close();
+      closeDeleteDialog(dialog);
     }
+  });
+  dialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeDeleteDialog(dialog);
+  });
+}
+
+for (const details of document.querySelectorAll("details.details-reveal")) {
+  details.addEventListener("toggle", () => {
+    if (!details.open) {
+      return;
+    }
+    const summary = details.querySelector(":scope > summary");
+    const targets = [];
+    for (let sibling = summary ? summary.nextElementSibling : null; sibling; sibling = sibling.nextElementSibling) {
+      targets.push(sibling);
+    }
+    revealElements(targets, { duration: motionPolicy.normal });
   });
 }
 
@@ -116,6 +246,7 @@ for (const picker of document.querySelectorAll("[data-directory-picker]")) {
       status.classList.toggle("is-error", isError);
       status.textContent = message;
       list.replaceChildren(status);
+      revealElements(list.children, { duration: motionPolicy.normal, stagger: false });
     };
     const setLoading = (isLoading) => {
       upButton.disabled = isLoading || currentPath === "/";
@@ -170,6 +301,7 @@ for (const picker of document.querySelectorAll("[data-directory-picker]")) {
           button.addEventListener("click", () => loadDirectories(directory.path));
           list.append(button);
         }
+        revealElements(list.children, { duration: motionPolicy.normal });
       } catch (error) {
         showStatus(error instanceof Error ? error.message : listErrorMessage || "", true);
       } finally {
@@ -277,6 +409,7 @@ for (const form of document.querySelectorAll("form[data-preserve-test-fields]"))
         throw new Error("Setup test response is missing its feedback region");
       }
       feedback.replaceChildren(...nextFeedback.childNodes);
+      revealElements(feedback.children, { duration: motionPolicy.normal, stagger: false });
     } catch {
       useNativeSubmit = true;
       form.requestSubmit(submitter);

@@ -21,7 +21,7 @@
           <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
           <div class="form-field"><label for="webhook-name">{{.Str.EndpointName}}</label><input id="webhook-name" name="name" type="text" value="{{.Values.Name}}" maxlength="64" required aria-describedby="name-hint"><small id="name-hint">{{.Str.EndpointNameInvalid}}</small></div>
           <div class="form-field"><label for="webhook-url">{{.Str.FieldURL}}</label><input id="webhook-url" name="url" type="text" value="{{.Values.URL}}" maxlength="2048" {{if not .Editing}}required{{end}} aria-describedby="url-hint"><small id="url-hint">{{.Str.HintURL}} {{.Str.URLQueryRedacted}}</small>{{if .StoredURL}}<small class="path-preview">{{.Str.FieldURL}} · <code>{{.StoredURL}}</code></small>{{end}}</div>
-          <details class="webhook-auth-settings">
+          <details class="webhook-auth-settings details-reveal">
             <summary>{{.Str.OptionalAuthentication}}</summary>
             <div class="webhook-auth-fields">
               <div class="form-field"><label for="webhook-bearer">{{.Str.FieldBearerToken}}</label><input id="webhook-bearer" name="bearer" type="password" maxlength="4096" autocomplete="new-password" aria-describedby="bearer-hint"><small id="bearer-hint">{{if .Editing}}{{.Str.BearerEditHint}}{{else}}{{.Str.BearerCreateHint}}{{end}} {{.Str.BearerTooLong}}</small></div>
@@ -33,7 +33,7 @@
             <legend>{{.Str.SubscriptionsLabel}}</legend>
             <div class="webhook-event-option">
               <label class="check-row"><input name="completed" type="checkbox" value="true" {{if .Values.Completed}}checked{{end}}> {{.Str.SubscriptionCompleted}}</label>
-              <details class="webhook-event-example">
+              <details class="webhook-event-example details-reveal">
                 <summary>{{.Str.EventExampleSummary}} <code>download.completed</code></summary>
                 <p>{{.Str.EventDeliveryHint}}</p>
                 <pre><code>{{.CompletedExample}}</code></pre>
@@ -41,7 +41,7 @@
             </div>
             <div class="webhook-event-option">
               <label class="check-row"><input name="failed" type="checkbox" value="true" {{if .Values.Failed}}checked{{end}}> {{.Str.SubscriptionFailed}}</label>
-              <details class="webhook-event-example">
+              <details class="webhook-event-example details-reveal">
                 <summary>{{.Str.EventExampleSummary}} <code>download.failed</code></summary>
                 <p>{{.Str.EventDeliveryHint}}</p>
                 <pre><code>{{.FailedExample}}</code></pre>

@@ -1,7 +1,7 @@
 /* CD211 operator UI.
- * Design tokens: docs/ref/linear-design-tokens.md ("Linear Dark System").
- * Status colors (green/yellow/red) are derived additions for workflow state;
- * everything else maps 1:1 to the pinned token sheet. */
+ * Design tokens: docs/ref/linear-design-tokens.md.
+ * Dark colors follow the pinned Linear source; Light colors and semantic status
+ * colors are CD211 counterparts documented in the same token system. */
 
 html[data-theme="dark"] {
   color-scheme: dark;
@@ -27,7 +27,6 @@ html[data-theme="dark"] {
   --border-hover: rgba(226, 228, 231, 0.3);
   --row-hover: rgba(255, 255, 255, 0.02);
   --row-sticky-hover: #0d0e10;
-  --button-on-accent: #fff;
   /* Derived status colors */
   --ok: #4cb782;
   --ok-soft: rgba(76, 183, 130, 0.08);
@@ -43,16 +42,6 @@ html[data-theme="dark"] {
   --notice-danger-text: #f0a6a6;
   --notice-success-text: #9ed8bc;
   --notice-warning-text: #e9cf83;
-  /* Type */
-  --font-sans: "Inter Variable", "Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont,
-    "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
-  --font-mono: "Berkeley Mono", ui-monospace, "SF Mono", Menlo, monospace;
-  /* Shape */
-  --radius-xs: 2px;
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  --radius-pill: 9999px;
   /* Elevation */
   --shadow-low: 0px 2px 4px 0px rgba(0, 0, 0, 0.4);
   --shadow-border-inset: inset 0px 0px 0px 1px rgb(35, 37, 42);
@@ -62,6 +51,24 @@ html[data-theme="dark"] {
 }
 
 :root {
+  /* Type — shared by Light and Dark */
+  --font-sans-en: "Inter Variable", "Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+  --font-sans-zh: "Inter Variable", "Inter", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", "SF Pro Display",
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono-en: "Berkeley Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-mono-zh: "Berkeley Mono", ui-monospace, "SF Mono", Menlo,
+    "Noto Sans Mono CJK SC", "Sarasa Mono SC", "PingFang SC", "Microsoft YaHei", monospace;
+  --font-sans: var(--font-sans-en);
+  --font-mono: var(--font-mono-en);
+  --button-on-accent: #ffffff;
+  /* Shape — shared by Light and Dark */
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-pill: 9999px;
   color-scheme: light;
   --bg-primary: #f8f9fb;
   --bg-secondary: #f1f2f4;
@@ -105,6 +112,11 @@ html[data-theme="dark"] {
   --dialog-backdrop: rgba(32, 33, 36, 0.4);
 }
 
+html:lang(zh) {
+  --font-sans: var(--font-sans-zh);
+  --font-mono: var(--font-mono-zh);
+}
+
 * { box-sizing: border-box; }
 
 [hidden] { display: none !important; }
@@ -120,9 +132,12 @@ body {
   font-size: 13px;
   line-height: 19.5px;
   letter-spacing: -0.13px;
+
   font-feature-settings: "cv01", "ss03";
   -webkit-font-smoothing: antialiased;
 }
+
+html:lang(zh) body { letter-spacing: normal; }
 
 code {
   font-family: var(--font-mono);
@@ -240,6 +255,21 @@ a:hover { color: var(--accent-hover); }
   padding: 32px clamp(16px, 4vw, 48px) 96px;
   max-width: 1200px;
   width: 100%;
+}
+
+/* ---------- MPA view transitions ----------
+ * Minimal progressive enhancement: supported browsers cross-fade the page on
+ * same-origin navigation; unsupported browsers ignore these rules and
+ * navigate normally. No element is given its own transition group, so the
+ * steady-state layout is untouched. */
+
+@view-transition {
+  navigation: auto;
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 140ms;
 }
 
 /* ---------- Page chrome ---------- */
@@ -420,7 +450,7 @@ input:focus, select:focus {
   transition: background-color 0.1s ease, border-color 0.1s ease;
 }
 
-.button-primary { background: var(--accent); color: var(--button-on-accent); }
+.button-primary { background: var(--accent); color: var(--button-on-accent, #ffffff); }
 .button-primary:hover { background: var(--accent-hover); }
 
 .button-secondary {
@@ -613,6 +643,11 @@ tbody tr:hover .cell-actions { background: var(--row-sticky-hover); }
 .delete-dialog::backdrop {
   background: var(--dialog-backdrop);
   backdrop-filter: blur(2px);
+  transition: opacity 0.12s ease;
+}
+
+.delete-dialog.is-closing::backdrop {
+  opacity: 0;
 }
 
 .delete-dialog-header {
@@ -1209,7 +1244,7 @@ tbody tr:hover .cell-actions { background: var(--row-sticky-hover); }
 .setup-step.is-current .setup-step-node {
   border-color: var(--accent);
   background: var(--accent);
-  color: var(--text-primary);
+  color: var(--button-on-accent, #ffffff);
 }
 
 .setup-step.is-current .setup-step-title { color: var(--text-primary); }
@@ -1829,4 +1864,20 @@ tbody tr:hover .cell-actions { background: var(--row-sticky-hover); }
   display: flex;
   justify-content: flex-end;
   margin-top: 16px;
+}
+
+/* ---------- Reduced motion ----------
+ * Physical movement added by this change (MPA page transitions and the
+ * delete-dialog backdrop fade) is removed; existing color transitions stay
+ * intact. JS transitions are handled by the same media query in app.js. */
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none;
+  }
+
+  .delete-dialog::backdrop {
+    transition: none;
+  }
 }

@@ -8,6 +8,15 @@ section using the release version and date.
 
 ## [Unreleased]
 
+### Changed
+
+- Added smooth Motion Mini-driven transitions for delete-dialog open/close, setup feedback, directory picker results, and details-section content, plus a minimal same-origin MPA navigation cross-fade — all honoring `prefers-reduced-motion`.
+- Defined the pinned Light theme alongside Dark, added explicit English and Simplified Chinese font fallback tokens, and made shared typography and radius tokens resolve consistently in both themes.
+
+### Fixed
+
+- Kept primary-button labels and current setup-step numbers white and readable on indigo backgrounds in Light mode, including after cached stylesheet upgrades.
+
 ## [0.3.8] - 2026-08-13
 
 ### Fixed

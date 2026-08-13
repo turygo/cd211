@@ -693,10 +693,29 @@ func TestSetupRoutesServeLangAndStaticPreAuth(t *testing.T) {
 	fixture := newSetupFixture(t)
 	lang := fixture.get("/lang?to=zh", "")
 	requireStatus(t, lang, http.StatusSeeOther)
-	for _, target := range []string{"/static/app.css", "/static/app.js", "/static/theme-init.js"} {
-		asset := fixture.get(target, "")
+	for _, target := range []struct {
+		path        string
+		contentType string
+	}{
+		{"/static/app.css", "text/css; charset=utf-8"},
+		{"/static/app.js", "text/javascript; charset=utf-8"},
+		{"/static/theme-init.js", "text/javascript; charset=utf-8"},
+		{"/static/vendor/motion-mini.js", "text/javascript; charset=utf-8"},
+	} {
+		asset := fixture.get(target.path, "")
 		requireStatus(t, asset, http.StatusOK)
+		if asset.Header().Get("Cache-Control") != "public,max-age=3600" || asset.Header().Get("X-Content-Type-Options") != "nosniff" {
+			t.Errorf("%s headers = %v", target.path, asset.Header())
+		}
+		if got := asset.Header().Get("Content-Type"); got != target.contentType {
+			t.Errorf("%s Content-Type = %q, want %q", target.path, got, target.contentType)
+		}
+		if asset.Body.Len() == 0 {
+			t.Errorf("%s returned an empty asset", target.path)
+		}
 	}
+	postStatic := fixture.post("/static/vendor/motion-mini.js", "", "", nil)
+	requireStatus(t, postStatic, http.StatusMethodNotAllowed)
 	get := fixture.get("/setup/password", "")
 	requireStatus(t, get, http.StatusMethodNotAllowed)
 	missing := fixture.get("/no-such-route", "")

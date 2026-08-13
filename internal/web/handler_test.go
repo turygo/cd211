@@ -520,21 +520,39 @@ func TestSecurityHeadersAndStaticAssets(t *testing.T) {
 
 	body := login.Body.String()
 	themeInit := strings.Index(body, `<script src="/static/theme-init.js?v=1"></script>`)
-	stylesheet := strings.Index(body, `<link rel="stylesheet" href="/static/app.css?v=7">`)
+	stylesheet := strings.Index(body, `<link rel="stylesheet" href="/static/app.css?v=10">`)
 	if themeInit < 0 || stylesheet < 0 || themeInit > stylesheet {
 		t.Errorf("theme initializer must load before stylesheet: theme=%d stylesheet=%d", themeInit, stylesheet)
 	}
+	moduleScript := strings.Index(body, `<script type="module" src="/static/app.js?v=6"></script>`)
+	if moduleScript < 0 || moduleScript < stylesheet {
+		t.Errorf("app module script must load after stylesheet: module=%d stylesheet=%d", moduleScript, stylesheet)
+	}
 
-	for _, target := range []string{"/static/app.css", "/static/app.js", "/static/theme-init.js"} {
-		response := fixture.request(http.MethodGet, target, nil, false)
+	for _, target := range []struct {
+		path        string
+		contentType string
+	}{
+		{"/static/app.css", "text/css; charset=utf-8"},
+		{"/static/app.js", "text/javascript; charset=utf-8"},
+		{"/static/theme-init.js", "text/javascript; charset=utf-8"},
+		{"/static/vendor/motion-mini.js", "text/javascript; charset=utf-8"},
+	} {
+		response := fixture.request(http.MethodGet, target.path, nil, false)
 		requireStatus(t, response, http.StatusOK)
 		if response.Header().Get("Cache-Control") != "public,max-age=3600" || response.Header().Get("X-Content-Type-Options") != "nosniff" {
-			t.Errorf("%s headers = %v", target, response.Header())
+			t.Errorf("%s headers = %v", target.path, response.Header())
+		}
+		if got := response.Header().Get("Content-Type"); got != target.contentType {
+			t.Errorf("%s Content-Type = %q, want %q", target.path, got, target.contentType)
 		}
 		if response.Body.Len() == 0 {
-			t.Errorf("%s returned an empty asset", target)
+			t.Errorf("%s returned an empty asset", target.path)
 		}
 	}
+
+	postStatic := fixture.request(http.MethodPost, "/static/vendor/motion-mini.js", nil, false)
+	requireStatus(t, postStatic, http.StatusMethodNotAllowed)
 }
 
 func TestCSRFFailureDoesNotMutate(t *testing.T) {
