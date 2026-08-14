@@ -86,6 +86,13 @@ type OperatorPassword struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
+type Session struct {
+	SidDigest []byte    `json:"sid_digest"`
+	CsrfToken string    `json:"csrf_token"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
 type Setting struct {
 	Key       string    `json:"key"`
 	Value     string    `json:"value"`

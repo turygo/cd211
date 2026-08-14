@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"math"
 	"mime"
 	"net/http"
 	"net/url"
@@ -342,10 +343,17 @@ func (h *handler) auth(next http.HandlerFunc, csrf bool) http.Handler {
 			h.redirectLogin(w, r)
 			return
 		}
-		current, ok := h.sessions.Get(cookie.Value)
-		if !ok {
-			h.redirectLogin(w, r)
+		current, renewed, err := h.sessions.Get(r.Context(), cookie.Value)
+		if err != nil {
+			if errors.Is(err, session.ErrNotFound) {
+				h.redirectLogin(w, r)
+				return
+			}
+			plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 			return
+		}
+		if renewed {
+			http.SetCookie(w, sidCookie(cookie.Value, false, r.TLS != nil, h.clock.Now(), current.ExpiresAt))
 		}
 		if csrf {
 			if !browserOriginAllowed(r) {
@@ -434,8 +442,18 @@ func static(w http.ResponseWriter, name, contentType string) {
 func (h *handler) loginPage(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("SID")
 	if err == nil && cookie.Value != "" {
-		if _, ok := h.sessions.Get(cookie.Value); ok {
+		current, renewed, err := h.sessions.Get(r.Context(), cookie.Value)
+		switch {
+		case err == nil:
+			if renewed {
+				http.SetCookie(w, sidCookie(cookie.Value, false, r.TLS != nil, h.clock.Now(), current.ExpiresAt))
+			}
 			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		case errors.Is(err, session.ErrNotFound):
+			// Missing, malformed, or expired SID: render the login page.
+		default:
+			plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 			return
 		}
 	}
@@ -493,12 +511,12 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 		h.render(w, http.StatusUnauthorized, "login", loginView(requestLang(r), tr(requestLang(r)).LoginFailed))
 		return
 	}
-	sid, _, err := h.sessions.Create()
+	sid, current, err := h.sessions.Create(r.Context())
 	if err != nil {
 		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 		return
 	}
-	http.SetCookie(w, sidCookie(sid, false, r.TLS != nil))
+	http.SetCookie(w, sidCookie(sid, false, r.TLS != nil, h.clock.Now(), current.ExpiresAt))
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
@@ -508,17 +526,23 @@ func (h *handler) logout(w http.ResponseWriter, r *http.Request) {
 		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 		return
 	}
-	h.sessions.Revoke(current.sid)
-	http.SetCookie(w, sidCookie("", true, r.TLS != nil))
+	if err := h.sessions.Revoke(r.Context(), current.sid); err != nil {
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+		return
+	}
+	http.SetCookie(w, sidCookie("", true, r.TLS != nil, time.Time{}, time.Time{}))
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
-func sidCookie(value string, expired, secure bool) *http.Cookie {
+func sidCookie(value string, expired, secure bool, now, expiresAt time.Time) *http.Cookie {
 	cookie := &http.Cookie{Name: "SID", Value: value, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: secure}
 	if expired {
 		cookie.MaxAge = -1
 		cookie.Expires = time.Unix(1, 0).UTC()
+		return cookie
 	}
+	cookie.MaxAge = int(math.Ceil(expiresAt.Sub(now).Seconds()))
+	cookie.Expires = expiresAt.UTC()
 	return cookie
 }
 

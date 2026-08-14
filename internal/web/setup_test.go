@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -184,19 +185,31 @@ func (d *fakeDial) setCheckErr(err error) {
 }
 
 type setupFixture struct {
-	t          *testing.T
-	clock      *fixedClock
-	sessions   *session.Store
-	setupStore *recordingSetupStore
-	complete   *recordingComplete
-	dial       *fakeDial
-	handler    http.Handler
+	t            *testing.T
+	clock        *fixedClock
+	sessions     *session.Store
+	sessionStore *store.Store
+	setupStore   *recordingSetupStore
+	complete     *recordingComplete
+	dial         *fakeDial
+	handler      http.Handler
 }
 
 func newSetupFixture(t *testing.T) *setupFixture {
 	t.Helper()
 	clock := &fixedClock{now: time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)}
-	sessions, err := session.New(clock, &sequenceReader{}, time.Hour, 32)
+	// Sessions live in their own real SQLite store; the wizard configuration
+	// keeps using the recording fake.
+	sessionStore, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "setup-sessions.db"))
+	if err != nil {
+		t.Fatalf("store.Open(): %v", err)
+	}
+	t.Cleanup(func() {
+		if err := sessionStore.Close(); err != nil {
+			t.Errorf("session store close: %v", err)
+		}
+	})
+	sessions, err := session.New(sessionStore, clock, &sequenceReader{}, time.Hour, 30*time.Minute, 32)
 	if err != nil {
 		t.Fatalf("session.New(): %v", err)
 	}
@@ -207,7 +220,7 @@ func newSetupFixture(t *testing.T) *setupFixture {
 	if err != nil {
 		t.Fatalf("NewSetup(): %v", err)
 	}
-	return &setupFixture{t: t, clock: clock, sessions: sessions, setupStore: setupStore, complete: complete, dial: dial, handler: handler}
+	return &setupFixture{t: t, clock: clock, sessions: sessions, sessionStore: sessionStore, setupStore: setupStore, complete: complete, dial: dial, handler: handler}
 }
 
 func (f *setupFixture) get(target, sid string) *httptest.ResponseRecorder {
@@ -248,9 +261,12 @@ func (f *setupFixture) advancePassword() (string, string) {
 	if len(cookies) != 1 || cookies[0].Name != "SID" {
 		f.t.Fatalf("password step cookies = %+v, want SID", cookies)
 	}
-	current, ok := f.sessions.Get(cookies[0].Value)
-	if !ok {
-		f.t.Fatalf("wizard session %q not retained", cookies[0].Value)
+	current, _, err := f.sessions.Get(context.Background(), cookies[0].Value)
+	if err != nil {
+		f.t.Fatalf("wizard session %q lookup: %v", cookies[0].Value, err)
+	}
+	if cookies[0].MaxAge <= 0 || !cookies[0].Expires.Equal(current.ExpiresAt) {
+		f.t.Errorf("password step cookie = MaxAge:%d Expires:%v, want positive MaxAge and Expires %v", cookies[0].MaxAge, cookies[0].Expires, current.ExpiresAt)
 	}
 	return cookies[0].Value, current.CSRFToken
 }
@@ -496,15 +512,15 @@ func TestSetupPasswordValidation(t *testing.T) {
 	short := fixture.post("/setup/password", "", "", url.Values{"password": {"short"}, "confirm_password": {"short"}})
 	requireStatus(t, short, http.StatusBadRequest)
 	requireContains(t, short.Body.String(), "at least 8 characters")
-	if count := fixture.sessions.Len(); count != 0 {
-		t.Errorf("sessions after short password = %d, want 0", count)
+	if count, err := fixture.sessions.Len(context.Background()); err != nil || count != 0 {
+		t.Errorf("sessions after short password = %d (%v), want 0", count, err)
 	}
 
 	mismatch := fixture.post("/setup/password", "", "", url.Values{"password": {"correct horse"}, "confirm_password": {"correct horsey"}})
 	requireStatus(t, mismatch, http.StatusBadRequest)
 	requireContains(t, mismatch.Body.String(), "do not match")
-	if count := fixture.sessions.Len(); count != 0 {
-		t.Errorf("sessions after mismatch = %d, want 0", count)
+	if count, err := fixture.sessions.Len(context.Background()); err != nil || count != 0 {
+		t.Errorf("sessions after mismatch = %d (%v), want 0", count, err)
 	}
 
 	// The wizard is still at step 1.
@@ -524,7 +540,7 @@ func TestSetupStepGatingWithoutSession(t *testing.T) {
 	}
 
 	// A session that is not the wizard's own is equally rejected.
-	foreign, _, err := fixture.sessions.Create()
+	foreign, _, err := fixture.sessions.Create(context.Background())
 	if err != nil {
 		t.Fatalf("sessions.Create(): %v", err)
 	}
@@ -536,10 +552,67 @@ func TestSetupStepGatingWithoutSession(t *testing.T) {
 
 	// Losing the wizard session resets the visible flow to step 1.
 	sid, _ := fixture.advancePassword()
-	fixture.sessions.Revoke(sid)
+	if err := fixture.sessions.Revoke(context.Background(), sid); err != nil {
+		t.Fatalf("sessions.Revoke(): %v", err)
+	}
 	page := fixture.get("/setup", "")
 	requireStatus(t, page, http.StatusOK)
 	requireContains(t, page.Body.String(), `action="/setup/password"`)
+}
+
+// TestSetupSessionRenewalEmitsRefreshedCookie pins the wizard's sliding-expiry
+// contract: authenticated setup requests renew the session and answer with a
+// refreshed persistent SID cookie once the refresh boundary is reached.
+func TestSetupSessionRenewalEmitsRefreshedCookie(t *testing.T) {
+	fixture := newSetupFixture(t)
+	sid, _ := fixture.advancePassword()
+
+	// Before the refresh boundary no cookie is re-issued.
+	quiet := fixture.get("/setup", sid)
+	requireStatus(t, quiet, http.StatusOK)
+	if cookies := quiet.Result().Cookies(); len(cookies) != 0 {
+		t.Fatalf("unexpected cookies before renewal: %+v", cookies)
+	}
+
+	// ttl=1h and refreshInterval=30m put the boundary at ExpiresAt-30m; the
+	// clock past it makes the wizard session renew on the next request.
+	fixture.clock.now = fixture.clock.now.Add(31 * time.Minute)
+	renewed := fixture.get("/setup", sid)
+	requireStatus(t, renewed, http.StatusOK)
+	requireContains(t, renewed.Body.String(), `action="/setup/cd2/test"`)
+	var refreshed *http.Cookie
+	for _, cookie := range renewed.Result().Cookies() {
+		if cookie.Name == "SID" {
+			refreshed = cookie
+		}
+	}
+	if refreshed == nil || refreshed.Value != sid {
+		t.Fatalf("renewed cookies = %+v, want refreshed SID %q", renewed.Result().Cookies(), sid)
+	}
+	current, _, err := fixture.sessions.Get(context.Background(), sid)
+	if err != nil {
+		t.Fatalf("sessions.Get(): %v", err)
+	}
+	if refreshed.MaxAge <= 0 || !refreshed.Expires.Equal(current.ExpiresAt) {
+		t.Errorf("refreshed cookie = MaxAge:%d Expires:%v, want positive MaxAge and Expires %v", refreshed.MaxAge, refreshed.Expires, current.ExpiresAt)
+	}
+}
+
+// TestSetupRepositoryErrorsReturn500 pins the wizard's error contract:
+// repository failures during session lookup or revocation surface as 500
+// instead of restarting the wizard or being treated as expired/missing.
+func TestSetupRepositoryErrorsReturn500(t *testing.T) {
+	fixture := newSetupFixture(t)
+	sid, _ := fixture.advancePassword()
+	if err := fixture.sessionStore.Close(); err != nil {
+		t.Fatalf("close session store: %v", err)
+	}
+	page := fixture.get("/setup", sid)
+	requireStatus(t, page, http.StatusInternalServerError)
+	step := fixture.post("/setup/cd2/test", sid, "wrong", url.Values{"action": {"test"}})
+	requireStatus(t, step, http.StatusInternalServerError)
+	password := fixture.post("/setup/password", "", "", url.Values{"password": {"correct horse"}, "confirm_password": {"correct horse"}})
+	requireStatus(t, password, http.StatusInternalServerError)
 }
 
 func TestSetupLaterStepsRequireCSRF(t *testing.T) {
@@ -788,9 +861,9 @@ func TestSetupStepRedirectTargets(t *testing.T) {
 		t.Fatalf("password cookies = %+v, want one SID", cookies)
 	}
 	sid := cookies[0].Value
-	current, ok := fixture.sessions.Get(sid)
-	if !ok {
-		t.Fatalf("wizard session %q not retained", sid)
+	current, _, err := fixture.sessions.Get(context.Background(), sid)
+	if err != nil {
+		t.Fatalf("wizard session %q lookup: %v", sid, err)
 	}
 	csrf := current.CSRFToken
 

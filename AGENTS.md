@@ -19,8 +19,8 @@ Sonarr/Radarr -> qBittorrent HTTP API -> torrentmeta validation
 - `internal/store` is the source of truth. Reconciliation uses leases plus compare-and-swap commits; preserve claim/remote-operation/commit ordering and idempotent remote rechecks.
 - `internal/reconcile` advances `StateAccepted -> StateSubmittingOffline -> StateWaitingOffline -> StateSubmittingCopy -> StateWaitingCopy -> StateVerifyingLocal -> StateCompleted`, with explicit stopped, failure, cancellation, and removal branches.
 - `internal/clouddrive` and `internal/fsafe` isolate gRPC and filesystem side effects. Paths must be clean absolute paths under configured roots.
-- `internal/httpapi` implements qBittorrent WebAPI 2.11; `internal/web` provides the server-rendered setup and operator UI. Both share the store and session state.
-- `cmd/cd211/runtime.go` builds complete runtime generations and atomically swaps handlers when persisted settings change. The store and session store outlive generations.
+- `internal/httpapi` implements qBittorrent WebAPI 2.11; `internal/web` provides the server-rendered setup and operator UI. Both use the same SQLite-backed SID session service.
+- `cmd/cd211/runtime.go` builds complete runtime generations and atomically swaps handlers when persisted settings change. The SQLite store and session service outlive generations; persisted session records also survive process restarts that reopen the same database.
 
 ## Key Directories
 
@@ -66,7 +66,7 @@ There is no dedicated run, format, typecheck, coverage, or race target. After `m
 - Wrap errors with context using `fmt.Errorf("...: %w", err)` and classify with `errors.Is`. CloudDrive failures use structured error kinds; runtime logging uses JSON `slog`.
 - Pass `context.Context` through I/O and apply deadlines/cancellation. Background work is owned by explicit runtime/scheduler lifecycles; do not add detached goroutines.
 - Prefer constructor injection and small local interfaces. Tests commonly inject functions, fake clocks, fake repositories, fake RPC clients, and temporary stores.
-- Persist retry/concurrency state (`AttemptCount`, `NextRunAt`, lease, CAS) instead of relying on process memory. Sessions are intentionally in memory only.
+- Persist shared SID sessions in SQLite by SHA-256 digest only; raw SIDs remain client-side. Only bounded login-attempt tracking and bans remain in process memory.
 - Categories and paths are frozen into a submission; later settings changes affect future submissions only.
 - Never hand-edit generated files in `internal/clouddrive/pb/` or `internal/store/sqlc/`; change the proto, migrations, or queries and run `make generate`.
 - Preserve security boundaries: redact magnet trackers/passkeys from errors, constrain filesystem operations to configured roots, and do not make CloudDrive2 availability part of SQLite liveness.

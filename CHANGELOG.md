@@ -12,6 +12,10 @@ section using the release version and date.
 
 - Replaced download-list route strips with compact bilingual step/progress statuses and redesigned detail progress as a mutually exclusive three-segment track; terminal states remain task-level and completion keeps its state-badge confirmation.
 
+### Fixed
+
+- Kept Web UI and qBittorrent login cookies valid across settings hot swaps and service restarts by making their shared sliding 30-day sessions and logout revocation durable in SQLite.
+
 ## [0.3.10] - 2026-08-13
 
 ### Fixed

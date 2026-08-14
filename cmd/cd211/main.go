@@ -29,7 +29,8 @@ import (
 const (
 	cloudRPCTimeout        = 30 * time.Second
 	reconcileLeaseDuration = 3 * time.Minute
-	sessionTTL             = 24 * time.Hour
+	sessionTTL             = 30 * 24 * time.Hour
+	sessionRefreshInterval = 24 * time.Hour
 	sessionCapacity        = 256
 	webhookPruneInterval   = 24 * time.Hour
 )
@@ -78,7 +79,7 @@ func run() (result error) {
 	}()
 
 	clock := reconcile.RealClock{}
-	sessions, err := session.New(clock, rand.Reader, sessionTTL, sessionCapacity)
+	sessions, err := session.New(st, clock, rand.Reader, sessionTTL, sessionRefreshInterval, sessionCapacity)
 	if err != nil {
 		logger.Error("runtime startup failed", "error", err)
 		return err

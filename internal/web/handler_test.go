@@ -111,6 +111,7 @@ type webFixture struct {
 	t          *testing.T
 	clock      *fixedClock
 	store      *store.Store
+	dbPath     string
 	repo       *recordingRepository
 	sessions   *session.Store
 	waker      *countingWaker
@@ -130,8 +131,13 @@ func newWebFixture(t *testing.T) *webFixture {
 
 func newWebFixtureWithSettings(t *testing.T, settingsDeps SettingsDeps) *webFixture {
 	t.Helper()
+	return newWebFixtureAt(t, filepath.Join(t.TempDir(), "web.db"), settingsDeps)
+}
+
+func newWebFixtureAt(t *testing.T, dbPath string, settingsDeps SettingsDeps) *webFixture {
+	t.Helper()
 	clock := &fixedClock{now: time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)}
-	database, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "web.db"))
+	database, err := store.Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("store.Open(): %v", err)
 	}
@@ -140,11 +146,11 @@ func newWebFixtureWithSettings(t *testing.T, settingsDeps SettingsDeps) *webFixt
 			t.Errorf("Store.Close(): %v", err)
 		}
 	})
-	sessions, err := session.New(clock, &sequenceReader{}, time.Hour, 32)
+	sessions, err := session.New(database, clock, &sequenceReader{}, time.Hour, 30*time.Minute, 32)
 	if err != nil {
 		t.Fatalf("session.New(): %v", err)
 	}
-	sid, current, err := sessions.Create()
+	sid, current, err := sessions.Create(context.Background())
 	if err != nil {
 		t.Fatalf("sessions.Create(): %v", err)
 	}
@@ -181,7 +187,7 @@ func newWebFixtureWithSettings(t *testing.T, settingsDeps SettingsDeps) *webFixt
 	if err != nil {
 		t.Fatalf("New(): %v", err)
 	}
-	return &webFixture{t: t, clock: clock, store: database, repo: repo, sessions: sessions, waker: waker, cloud: cloud, filesystem: filesystem, creds: credentials, webhooks: webhooks, handler: handler, localRoot: localRoot, sid: sid, csrf: current.CSRFToken}
+	return &webFixture{t: t, clock: clock, store: database, dbPath: dbPath, repo: repo, sessions: sessions, waker: waker, cloud: cloud, filesystem: filesystem, creds: credentials, webhooks: webhooks, handler: handler, localRoot: localRoot, sid: sid, csrf: current.CSRFToken}
 }
 
 func (fixture *webFixture) request(method, target string, form url.Values, authenticated bool) *httptest.ResponseRecorder {
@@ -441,9 +447,12 @@ func TestAuthenticationRedirectLoginAndLogout(t *testing.T) {
 	if len(cookies) != 1 || cookies[0].Name != "SID" || cookies[0].Path != "/" || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteLaxMode {
 		t.Fatalf("login cookies = %+v, want secure SID contract", cookies)
 	}
-	createdSession, ok := fixture.sessions.Get(cookies[0].Value)
-	if !ok {
-		t.Fatal("login SID was not retained")
+	createdSession, _, err := fixture.sessions.Get(context.Background(), cookies[0].Value)
+	if err != nil {
+		t.Fatalf("sessions.Get(): %v", err)
+	}
+	if cookies[0].MaxAge <= 0 || !cookies[0].Expires.Equal(createdSession.ExpiresAt) {
+		t.Errorf("login cookie persistence = MaxAge:%d Expires:%v, want positive MaxAge and Expires %v", cookies[0].MaxAge, cookies[0].Expires, createdSession.ExpiresAt)
 	}
 
 	secureRequest := httptest.NewRequest(http.MethodPost, "https://cd211.test/login", strings.NewReader(url.Values{"username": {"admin"}, "password": {"adminadmin"}}.Encode()))
@@ -461,13 +470,102 @@ func TestAuthenticationRedirectLoginAndLogout(t *testing.T) {
 	logout := httptest.NewRecorder()
 	fixture.handler.ServeHTTP(logout, logoutRequest)
 	requireStatus(t, logout, http.StatusSeeOther)
-	if _, ok := fixture.sessions.Get(cookies[0].Value); ok {
-		t.Error("logout did not revoke the session")
+	if _, _, err := fixture.sessions.Get(context.Background(), cookies[0].Value); !errors.Is(err, session.ErrNotFound) {
+		t.Errorf("session after logout = %v, want ErrNotFound", err)
 	}
 	cleared := logout.Result().Cookies()
 	if len(cleared) != 1 || cleared[0].Name != "SID" || cleared[0].MaxAge != -1 {
 		t.Errorf("logout cookies = %+v, want expired SID", cleared)
 	}
+}
+
+// TestWebSessionRenewalEmitsRefreshedCookie pins the sliding-expiry contract:
+// an authenticated request whose session is at/after the refresh boundary
+// renews the record and answers with a refreshed persistent SID cookie, while
+// a session that is not yet due emits no cookie. GET /login with a valid
+// session refreshes the same way before redirecting.
+func TestWebSessionRenewalEmitsRefreshedCookie(t *testing.T) {
+	fixture := newWebFixture(t)
+
+	// Before the refresh boundary no cookie is re-issued.
+	quiet := fixture.request(http.MethodGet, "/", nil, true)
+	requireStatus(t, quiet, http.StatusOK)
+	if cookies := quiet.Result().Cookies(); len(cookies) != 0 {
+		t.Fatalf("unexpected cookies before renewal: %+v", cookies)
+	}
+
+	// ttl=1h and refreshInterval=30m put the boundary at ExpiresAt-30m; the
+	// clock past it makes the next Get renew.
+	fixture.clock.now = fixture.clock.now.Add(31 * time.Minute)
+	renewed := fixture.request(http.MethodGet, "/", nil, true)
+	requireStatus(t, renewed, http.StatusOK)
+	var refreshed *http.Cookie
+	for _, cookie := range renewed.Result().Cookies() {
+		if cookie.Name == "SID" {
+			refreshed = cookie
+		}
+	}
+	if refreshed == nil || refreshed.Value != fixture.sid {
+		t.Fatalf("renewed cookies = %+v, want refreshed SID %q", renewed.Result().Cookies(), fixture.sid)
+	}
+	current, _, err := fixture.sessions.Get(context.Background(), fixture.sid)
+	if err != nil {
+		t.Fatalf("sessions.Get(): %v", err)
+	}
+	if refreshed.MaxAge <= 0 || !refreshed.Expires.Equal(current.ExpiresAt) {
+		t.Errorf("refreshed cookie = MaxAge:%d Expires:%v, want positive MaxAge and Expires %v", refreshed.MaxAge, refreshed.Expires, current.ExpiresAt)
+	}
+
+	// GET /login with the renewed session refreshes again before redirecting.
+	fixture.clock.now = fixture.clock.now.Add(31 * time.Minute)
+	login := fixture.request(http.MethodGet, "/login", nil, true)
+	requireStatus(t, login, http.StatusSeeOther)
+	if location := login.Header().Get("Location"); location != "/" {
+		t.Errorf("login Location = %q, want /", location)
+	}
+	loginRefreshed := login.Result().Cookies()
+	if len(loginRefreshed) != 1 || loginRefreshed[0].Name != "SID" || loginRefreshed[0].MaxAge <= 0 {
+		t.Errorf("login cookies = %+v, want refreshed persistent SID", loginRefreshed)
+	}
+}
+
+// TestWebSessionSurvivesRestartOverSameDatabase proves the SID is durable: a
+// cookie issued by one process authenticates against a fresh process (new
+// session store and handler) over the same SQLite file.
+func TestWebSessionSurvivesRestartOverSameDatabase(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "restart.db")
+	first := newWebFixtureAt(t, dbPath, SettingsDeps{})
+	login := first.request(http.MethodPost, "/login", url.Values{"username": {"admin"}, "password": {"adminadmin"}}, false)
+	requireStatus(t, login, http.StatusSeeOther)
+	cookies := login.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != "SID" {
+		t.Fatalf("login cookies = %+v", cookies)
+	}
+	sidValue := cookies[0].Value
+	if err := first.store.Close(); err != nil {
+		t.Fatalf("close first store: %v", err)
+	}
+
+	restarted := newWebFixtureAt(t, dbPath, SettingsDeps{})
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.AddCookie(&http.Cookie{Name: "SID", Value: sidValue})
+	response := httptest.NewRecorder()
+	restarted.handler.ServeHTTP(response, request)
+	requireStatus(t, response, http.StatusOK)
+}
+
+// TestWebRepositoryErrorsReturn500 pins the error contract: repository
+// failures during session lookup or revocation are HTTP 500, never a login
+// redirect or a claimed logout.
+func TestWebRepositoryErrorsReturn500(t *testing.T) {
+	fixture := newWebFixture(t)
+	if err := fixture.store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	page := fixture.request(http.MethodGet, "/", nil, true)
+	requireStatus(t, page, http.StatusInternalServerError)
+	logout := fixture.post("/logout", url.Values{})
+	requireStatus(t, logout, http.StatusInternalServerError)
 }
 
 func TestAuthenticatedMutationBrowserOriginPolicy(t *testing.T) {

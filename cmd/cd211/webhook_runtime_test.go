@@ -69,7 +69,7 @@ func TestWebhookProcessSurvivesGenerationSwaps(t *testing.T) {
 	}
 
 	logger := discardLogger()
-	sessions, err := session.New(reconcile.RealClock{}, rand.Reader, sessionTTL, sessionCapacity)
+	sessions, err := session.New(st, reconcile.RealClock{}, rand.Reader, sessionTTL, sessionRefreshInterval, sessionCapacity)
 	if err != nil {
 		t.Fatalf("session.New: %v", err)
 	}

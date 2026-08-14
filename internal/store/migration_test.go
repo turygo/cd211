@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"io/fs"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -348,5 +349,110 @@ func assertWebhookEventForeignKey(t *testing.T, db *sql.DB) {
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate foreign key check: %v", err)
+	}
+}
+
+func TestSessionsMigrationCreatesSchemaAndEnforcesChecks(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "sessions.sqlite")
+	db := openDatabaseAtMigration(t, databasePath, 8)
+	var preExisting int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sessions'").Scan(&preExisting); err != nil {
+		_ = db.Close()
+		t.Fatalf("inspect pre-migration schema: %v", err)
+	}
+	if preExisting != 0 {
+		_ = db.Close()
+		t.Fatalf("sessions table exists before migration 9")
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pre-sessions fixture database: %v", err)
+	}
+
+	store, err := Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("Open(sessions migration) error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
+
+	columns := map[string]struct {
+		kind    string
+		notNull bool
+		pk      bool
+	}{
+		"sid_digest": {"BLOB", true, true},
+		"csrf_token": {"TEXT", true, false},
+		"created_at": {"DATETIME", true, false},
+		"expires_at": {"DATETIME", true, false},
+	}
+	rows, err := store.db.QueryContext(ctx, "PRAGMA table_info(sessions)")
+	if err != nil {
+		t.Fatalf("read sessions table info: %v", err)
+	}
+	defer rows.Close()
+	found := 0
+	for rows.Next() {
+		var (
+			cid        int
+			name, kind string
+			notNull    int
+			dflt       sql.NullString
+			pk         int
+		)
+		if err := rows.Scan(&cid, &name, &kind, &notNull, &dflt, &pk); err != nil {
+			t.Fatalf("scan sessions column: %v", err)
+		}
+		want, exists := columns[name]
+		if !exists {
+			continue
+		}
+		found++
+		if !strings.EqualFold(kind, want.kind) {
+			t.Errorf("sessions.%s kind = %q, want %q", name, kind, want.kind)
+		}
+		if (notNull == 1) != want.notNull {
+			t.Errorf("sessions.%s notNull = %t, want %t", name, notNull == 1, want.notNull)
+		}
+		if (pk == 1) != want.pk {
+			t.Errorf("sessions.%s pk = %t, want %t", name, pk == 1, want.pk)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate sessions columns: %v", err)
+	}
+	if found != len(columns) {
+		t.Fatalf("sessions columns found = %d, want %d", found, len(columns))
+	}
+
+	var indexName string
+	if err := store.db.QueryRowContext(ctx,
+		"SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'sessions' AND name = 'idx_sessions_expires_at'",
+	).Scan(&indexName); err != nil {
+		t.Fatalf("expires_at index missing: %v", err)
+	}
+
+	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+	reject := func(name string, digest []byte, csrf string, created, expires time.Time) {
+		t.Helper()
+		statement := "INSERT INTO sessions (sid_digest, csrf_token, created_at, expires_at) VALUES (?, ?, ?, ?)"
+		if _, err := store.db.ExecContext(ctx, statement, digest, csrf, created, expires); err == nil {
+			t.Errorf("%s: insert unexpectedly succeeded", name)
+		}
+	}
+	reject("empty csrf token", make([]byte, 32), "", now, now.Add(time.Hour))
+	reject("short digest", make([]byte, 16), "csrf", now, now.Add(time.Hour))
+	reject("expiry at creation", make([]byte, 32), "csrf", now, now)
+	reject("expiry before creation", make([]byte, 32), "csrf", now, now.Add(-time.Hour))
+
+	var validDigest [32]byte
+	validDigest[0] = 0x7f
+	if _, err := store.db.ExecContext(ctx,
+		"INSERT INTO sessions (sid_digest, csrf_token, created_at, expires_at) VALUES (?, 'csrf', ?, ?)",
+		validDigest[:], now, now.Add(time.Hour)); err != nil {
+		t.Fatalf("insert valid session row: %v", err)
 	}
 }

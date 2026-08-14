@@ -68,7 +68,7 @@ func TestRealStoreSubmissionChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = repository.Close() })
-	sessions, err := session.New(clock, bytes.NewReader(bytes.Repeat([]byte{1}, 128)), time.Hour, 4)
+	sessions, err := session.New(repository, clock, bytes.NewReader(bytes.Repeat([]byte{1}, 128)), time.Hour, 30*time.Minute, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,6 +99,13 @@ func TestRealStoreSubmissionChain(t *testing.T) {
 		t.Fatalf("unexpected session cookie: %#v", cookies)
 	}
 	cookie := cookies[0]
+	current, _, err := sessions.Get(context.Background(), cookie.Value)
+	if err != nil {
+		t.Fatalf("sessions.Get(): %v", err)
+	}
+	if cookie.MaxAge <= 0 || !cookie.Expires.Equal(current.ExpiresAt) {
+		t.Fatalf("login cookie persistence = MaxAge:%d Expires:%v, want positive MaxAge and Expires %v", cookie.MaxAge, cookie.Expires, current.ExpiresAt)
+	}
 
 	if response := doRequest(t, api, http.MethodGet, "/api/v2/app/webapiVersion", nil, cookie); response.Code != http.StatusOK || response.Body.String() != "2.11.0" {
 		t.Fatalf("webapiVersion = %d %q", response.Code, response.Body.String())
@@ -164,7 +171,8 @@ func doRequest(t *testing.T, handler http.Handler, method, target string, body *
 type contractHarness struct {
 	api        http.Handler
 	repository *store.Store
-	clock      contractClock
+	sessions   *session.Store
+	clock      *contractClock
 	waker      *contractWaker
 	filesystem *contractFilesystem
 	limits     torrentmeta.Limits
@@ -172,13 +180,18 @@ type contractHarness struct {
 
 func newContractHarness(t *testing.T) *contractHarness {
 	t.Helper()
-	clock := contractClock{now: time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)}
-	repository, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "api.sqlite"))
+	return newContractHarnessAt(t, filepath.Join(t.TempDir(), "api.sqlite"))
+}
+
+func newContractHarnessAt(t *testing.T, dbPath string) *contractHarness {
+	t.Helper()
+	clock := &contractClock{now: time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)}
+	repository, err := store.Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = repository.Close() })
-	sessions, err := session.New(clock, bytes.NewReader(bytes.Repeat([]byte{2}, 128)), time.Hour, 8)
+	sessions, err := session.New(repository, clock, bytes.NewReader(bytes.Repeat([]byte{2}, 128)), time.Hour, 30*time.Minute, 8)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +212,7 @@ func newContractHarness(t *testing.T) *contractHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &contractHarness{api: api, repository: repository, clock: clock, waker: waker, filesystem: filesystem, limits: limits}
+	return &contractHarness{api: api, repository: repository, sessions: sessions, clock: clock, waker: waker, filesystem: filesystem, limits: limits}
 }
 
 type stubCredentials struct {
@@ -766,5 +779,81 @@ func advanceToCompleted(t *testing.T, repository *store.Store, now time.Time, ha
 		if err := repository.CommitClaim(context.Background(), *claim, next); err != nil {
 			t.Fatalf("commit %s: %v", state, err)
 		}
+	}
+}
+
+// TestAPISessionRenewalEmitsRefreshedCookie pins the qBittorrent auth
+// contract: an authenticated call whose session is at/after the refresh
+// boundary renews the record and answers with a refreshed persistent SID
+// cookie, while a session that is not yet due emits no cookie.
+func TestAPISessionRenewalEmitsRefreshedCookie(t *testing.T) {
+	t.Parallel()
+	harness := newContractHarness(t)
+	cookie := harness.login(t)
+
+	// Before the refresh boundary no cookie is re-issued.
+	quiet := doRequest(t, harness.api, http.MethodGet, "/api/v2/app/version", nil, cookie)
+	if quiet.Code != http.StatusOK || quiet.Body.String() != "v5.0.0-cd211" {
+		t.Fatalf("version = %d %q", quiet.Code, quiet.Body.String())
+	}
+	if cookies := quiet.Result().Cookies(); len(cookies) != 0 {
+		t.Fatalf("unexpected cookies before renewal: %+v", cookies)
+	}
+
+	// ttl=1h and refreshInterval=30m put the boundary at ExpiresAt-30m; the
+	// clock past it makes the next authenticated call renew.
+	harness.clock.now = harness.clock.now.Add(31 * time.Minute)
+	renewed := doRequest(t, harness.api, http.MethodGet, "/api/v2/app/version", nil, cookie)
+	if renewed.Code != http.StatusOK {
+		t.Fatalf("version = %d %q", renewed.Code, renewed.Body.String())
+	}
+	refreshed := renewed.Result().Cookies()
+	if len(refreshed) != 1 || refreshed[0].Name != "SID" || refreshed[0].Value != cookie.Value {
+		t.Fatalf("renewed cookies = %#v, want refreshed SID %q", refreshed, cookie.Value)
+	}
+	current, _, err := harness.sessions.Get(context.Background(), cookie.Value)
+	if err != nil {
+		t.Fatalf("sessions.Get(): %v", err)
+	}
+	if refreshed[0].MaxAge <= 0 || !refreshed[0].Expires.Equal(current.ExpiresAt) {
+		t.Fatalf("refreshed cookie = MaxAge:%d Expires:%v, want positive MaxAge and Expires %v", refreshed[0].MaxAge, refreshed[0].Expires, current.ExpiresAt)
+	}
+}
+
+// TestAPISessionSurvivesRestartOverSameDatabase proves the SID is durable: a
+// cookie issued by one process authenticates against a fresh process (new
+// session store and handler) over the same SQLite file.
+func TestAPISessionSurvivesRestartOverSameDatabase(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "api-restart.sqlite")
+	first := newContractHarnessAt(t, dbPath)
+	cookie := first.login(t)
+	sidValue := cookie.Value
+	if err := first.repository.Close(); err != nil {
+		t.Fatalf("close first repository: %v", err)
+	}
+
+	second := newContractHarnessAt(t, dbPath)
+	response := doRequest(t, second.api, http.MethodGet, "/api/v2/app/version", nil, &http.Cookie{Name: "SID", Value: sidValue})
+	if response.Code != http.StatusOK || response.Body.String() != "v5.0.0-cd211" {
+		t.Fatalf("version after restart = %d %q", response.Code, response.Body.String())
+	}
+}
+
+// TestAPIRepositoryErrorsReturn500 pins the error contract: repository
+// failures during session lookup or revocation are HTTP 500, never a 403
+// authentication miss or a claimed logout.
+func TestAPIRepositoryErrorsReturn500(t *testing.T) {
+	t.Parallel()
+	harness := newContractHarness(t)
+	cookie := harness.login(t)
+	if err := harness.repository.Close(); err != nil {
+		t.Fatalf("close repository: %v", err)
+	}
+	if response := doRequest(t, harness.api, http.MethodGet, "/api/v2/app/version", nil, cookie); response.Code != http.StatusInternalServerError {
+		t.Fatalf("version with closed store = %d %q, want 500", response.Code, response.Body.String())
+	}
+	if response := doForm(t, harness.api, http.MethodPost, "/api/v2/auth/logout", url.Values{}, cookie); response.Code != http.StatusInternalServerError {
+		t.Fatalf("logout with closed store = %d %q, want 500", response.Code, response.Body.String())
 	}
 }

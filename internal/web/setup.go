@@ -236,13 +236,17 @@ func (h *setupHandler) setupPage(w http.ResponseWriter, r *http.Request) {
 	step := currentStep
 	csrf := ""
 	if step > 1 {
-		current, ok := h.wizardSession(r)
-		if !ok {
+		current, err := h.wizardSession(w, r)
+		switch {
+		case err == nil:
+			csrf = current.CSRFToken
+		case errors.Is(err, session.ErrNotFound):
 			// Missing or expired wizard session: start over at the password
 			// step rather than admitting a partially authenticated flow.
 			step = 1
-		} else {
-			csrf = current.CSRFToken
+		default:
+			plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+			return
 		}
 	}
 	// The optional ?step=N query is a pure view hook: it may select only a
@@ -265,28 +269,42 @@ func (h *setupHandler) setupPage(w http.ResponseWriter, r *http.Request) {
 }
 
 // wizardSession reports whether the request carries the session created by
-// the password step.
-func (h *setupHandler) wizardSession(r *http.Request) (session.Session, bool) {
+// the password step. A renewed session emits its refreshed cookie on the
+// available ResponseWriter before returning; repository failures are returned
+// as errors so callers surface them as 500 rather than treating the session
+// as expired.
+func (h *setupHandler) wizardSession(w http.ResponseWriter, r *http.Request) (session.Session, error) {
 	cookie, err := r.Cookie("SID")
 	if err != nil || cookie.Value == "" {
-		return session.Session{}, false
+		return session.Session{}, session.ErrNotFound
 	}
 	h.mu.Lock()
 	sid := h.state.sid
 	h.mu.Unlock()
 	if cookie.Value != sid {
-		return session.Session{}, false
+		return session.Session{}, session.ErrNotFound
 	}
-	return h.sessions.Get(cookie.Value)
+	current, renewed, err := h.sessions.Get(r.Context(), cookie.Value)
+	if err != nil {
+		return session.Session{}, err
+	}
+	if renewed {
+		http.SetCookie(w, sidCookie(cookie.Value, false, r.TLS != nil, h.clock.Now(), current.ExpiresAt))
+	}
+	return current, nil
 }
 
 // requireWizardPOST gates a later wizard step behind the wizard session and
 // the same CSRF proof the authenticated routes use. The form is parsed here
 // so handlers can read exact values afterwards.
 func (h *setupHandler) requireWizardPOST(w http.ResponseWriter, r *http.Request) (session.Session, bool) {
-	current, ok := h.wizardSession(r)
-	if !ok {
-		http.Redirect(w, r, "/setup", http.StatusSeeOther)
+	current, err := h.wizardSession(w, r)
+	if err != nil {
+		if errors.Is(err, session.ErrNotFound) {
+			http.Redirect(w, r, "/setup", http.StatusSeeOther)
+			return session.Session{}, false
+		}
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 		return session.Session{}, false
 	}
 	if !browserOriginAllowed(r) {
@@ -336,13 +354,22 @@ func (h *setupHandler) setupPassword(w http.ResponseWriter, r *http.Request) {
 		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 		return
 	}
-	sid, _, err := h.sessions.Create()
+	h.mu.Lock()
+	previousSID := h.state.sid
+	h.mu.Unlock()
+	sid, current, err := h.sessions.Create(r.Context())
 	if err != nil {
 		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 		return
 	}
+	if previousSID != "" {
+		if err := h.sessions.Revoke(r.Context(), previousSID); err != nil {
+			_ = h.sessions.Revoke(r.Context(), sid)
+			plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+			return
+		}
+	}
 	h.mu.Lock()
-	previousSID := h.state.sid
 	h.state.sid = sid
 	h.state.passwordHash = hash
 	// The password step starts the wizard and, when re-submitted after a
@@ -353,10 +380,7 @@ func (h *setupHandler) setupPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	targetStep := h.state.step
 	h.mu.Unlock()
-	if previousSID != "" {
-		h.sessions.Revoke(previousSID)
-	}
-	http.SetCookie(w, sidCookie(sid, false, r.TLS != nil))
+	http.SetCookie(w, sidCookie(sid, false, r.TLS != nil, h.clock.Now(), current.ExpiresAt))
 	http.Redirect(w, r, fmt.Sprintf("/setup?step=%d", targetStep), http.StatusSeeOther)
 }
 
@@ -443,8 +467,12 @@ type cloudDirectoryResponse struct {
 }
 
 func (h *setupHandler) setupCloudDirectories(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.wizardSession(r); !ok {
-		writeSetupJSON(w, http.StatusUnauthorized, cloudDirectoryResponse{Error: tr(requestLang(r)).SetupSessionExpired})
+	if _, err := h.wizardSession(w, r); err != nil {
+		if errors.Is(err, session.ErrNotFound) {
+			writeSetupJSON(w, http.StatusUnauthorized, cloudDirectoryResponse{Error: tr(requestLang(r)).SetupSessionExpired})
+			return
+		}
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 		return
 	}
 	parent, exact := exactlyOne(r.URL.Query()["path"])
@@ -508,8 +536,12 @@ func (h *setupHandler) setupCloudDirectoryCreate(w http.ResponseWriter, r *http.
 }
 
 func (h *setupHandler) setupLocalDirectories(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.wizardSession(r); !ok {
-		writeSetupJSON(w, http.StatusUnauthorized, cloudDirectoryResponse{Error: tr(requestLang(r)).SetupSessionExpired})
+	if _, err := h.wizardSession(w, r); err != nil {
+		if errors.Is(err, session.ErrNotFound) {
+			writeSetupJSON(w, http.StatusUnauthorized, cloudDirectoryResponse{Error: tr(requestLang(r)).SetupSessionExpired})
+			return
+		}
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 		return
 	}
 	if !h.wizardAtLeast(3) {
@@ -772,8 +804,15 @@ func (h *setupHandler) buildSetupView(r *http.Request, step int, csrf, errorText
 func (h *setupHandler) renderSetupStep(w http.ResponseWriter, r *http.Request, step, status int, errorText, successText string) {
 	csrf := ""
 	if step > 1 {
-		if current, ok := h.wizardSession(r); ok {
+		current, err := h.wizardSession(w, r)
+		switch {
+		case err == nil:
 			csrf = current.CSRFToken
+		case errors.Is(err, session.ErrNotFound):
+			// No wizard session: render the step without a CSRF token.
+		default:
+			plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+			return
 		}
 	}
 	view := h.buildSetupView(r, step, csrf, errorText, successText)

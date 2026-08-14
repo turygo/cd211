@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"errors"
+	"math"
 	"mime"
 	"net/http"
 	"net/url"
@@ -17,9 +19,17 @@ func (h *handler) auth(next http.HandlerFunc) http.Handler {
 			forbidden(w)
 			return
 		}
-		if _, ok := h.sessions.Get(cookie.Value); !ok {
-			forbidden(w)
+		current, renewed, err := h.sessions.Get(r.Context(), cookie.Value)
+		if err != nil {
+			if errors.Is(err, session.ErrNotFound) {
+				forbidden(w)
+				return
+			}
+			internalError(w)
 			return
+		}
+		if renewed {
+			http.SetCookie(w, sidCookie(cookie.Value, false, r.TLS != nil, h.clock.Now(), current.ExpiresAt))
 		}
 		if !browserOriginAllowed(r) {
 			forbidden(w)
@@ -77,12 +87,12 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 		plain(w, http.StatusOK, "Fails.")
 		return
 	}
-	sid, _, err := h.sessions.Create()
+	sid, current, err := h.sessions.Create(r.Context())
 	if err != nil {
 		internalError(w)
 		return
 	}
-	http.SetCookie(w, sidCookie(sid, false, r.TLS != nil))
+	http.SetCookie(w, sidCookie(sid, false, r.TLS != nil, h.clock.Now(), current.ExpiresAt))
 	plain(w, http.StatusOK, "Ok.")
 }
 
@@ -91,13 +101,16 @@ func (h *handler) logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if cookie, err := r.Cookie("SID"); err == nil {
-		h.sessions.Revoke(cookie.Value)
+		if err := h.sessions.Revoke(r.Context(), cookie.Value); err != nil {
+			internalError(w)
+			return
+		}
 	}
-	http.SetCookie(w, sidCookie("", true, r.TLS != nil))
+	http.SetCookie(w, sidCookie("", true, r.TLS != nil, time.Time{}, time.Time{}))
 	w.WriteHeader(http.StatusOK)
 }
 
-func sidCookie(value string, expired, secure bool) *http.Cookie {
+func sidCookie(value string, expired, secure bool, now, expiresAt time.Time) *http.Cookie {
 	cookie := &http.Cookie{
 		Name:     "SID",
 		Value:    value,
@@ -109,7 +122,10 @@ func sidCookie(value string, expired, secure bool) *http.Cookie {
 	if expired {
 		cookie.MaxAge = -1
 		cookie.Expires = time.Unix(1, 0).UTC()
+		return cookie
 	}
+	cookie.MaxAge = int(math.Ceil(expiresAt.Sub(now).Seconds()))
+	cookie.Expires = expiresAt.UTC()
 	return cookie
 }
 
