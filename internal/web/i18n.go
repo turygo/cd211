@@ -74,7 +74,6 @@ type Strings struct {
 	ViewAll           string
 	ThName            string
 	ThState           string
-	ThProgress        string
 	ThCategory        string
 	ThUpdated         string
 	ThActions         string
@@ -89,16 +88,14 @@ type Strings struct {
 	CompactStates StateLabels
 
 	// Route stages
-	Stage115           string
-	StageCopy          string
-	StageVerify        string
-	StatusPending      string
-	StatusQueued       string
-	StatusActiveSuffix string
-	StatusSourceReady  string
-	StatusCopyPresent  string
-	StatusChecking     string
-	StatusVerified     string
+	Stage115          string
+	StageCopy         string
+	StageVerify       string
+	StatusPending     string
+	StatusSourceReady string
+	StatusCopyPresent string
+	StatusChecking    string
+	StatusVerified    string
 
 	// Detail
 	SectionPaths       string
@@ -411,7 +408,6 @@ var stringsEN = Strings{
 	ViewAll:           "All records",
 	ThName:            "Name",
 	ThState:           "State",
-	ThProgress:        "Progress",
 	ThCategory:        "Category",
 	ThUpdated:         "Updated",
 	ThActions:         "Actions",
@@ -453,16 +449,14 @@ var stringsEN = Strings{
 		Deleted:           "Deleted",
 	},
 
-	Stage115:           "115 OFFLINE",
-	StageCopy:          "NAS COPY",
-	StageVerify:        "LOCAL VERIFY",
-	StatusPending:      "Pending",
-	StatusQueued:       "Queued",
-	StatusActiveSuffix: " · Active",
-	StatusSourceReady:  "Source ready",
-	StatusCopyPresent:  "Copy present",
-	StatusChecking:     "Checking",
-	StatusVerified:     "Verified",
+	Stage115:          "115 OFFLINE",
+	StageCopy:         "NAS COPY",
+	StageVerify:       "LOCAL VERIFY",
+	StatusPending:     "Pending",
+	StatusSourceReady: "Source ready",
+	StatusCopyPresent: "Copy present",
+	StatusChecking:    "Checking",
+	StatusVerified:    "Verified",
 
 	SectionPaths:       "Paths",
 	SectionChronology:  "Chronology",
@@ -782,7 +776,6 @@ var stringsZH = Strings{
 	ViewAll:           "全部记录",
 	ThName:            "名称",
 	ThState:           "状态",
-	ThProgress:        "进度",
 	ThCategory:        "分类",
 	ThUpdated:         "更新时间",
 	ThActions:         "操作",
@@ -824,16 +817,14 @@ var stringsZH = Strings{
 		Deleted:           "已删除",
 	},
 
-	Stage115:           "115 离线下载",
-	StageCopy:          "复制到 NAS",
-	StageVerify:        "本地校验",
-	StatusPending:      "等待中",
-	StatusQueued:       "排队中",
-	StatusActiveSuffix: " · 进行中",
-	StatusSourceReady:  "源已就绪",
-	StatusCopyPresent:  "复制完成",
-	StatusChecking:     "校验中",
-	StatusVerified:     "已校验",
+	Stage115:          "115 离线下载",
+	StageCopy:         "复制到 NAS",
+	StageVerify:       "本地校验",
+	StatusPending:     "等待中",
+	StatusSourceReady: "下载完成",
+	StatusCopyPresent: "复制完成",
+	StatusChecking:    "校验中",
+	StatusVerified:    "已校验",
 
 	SectionPaths:       "路径",
 	SectionChronology:  "时间线",

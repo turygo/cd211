@@ -535,8 +535,7 @@ input:focus, select:focus {
 }
 
 .download-table .col-name { width: 30%; }
-.download-table .col-state { width: 150px; }
-.download-table .col-progress { width: 230px; }
+.download-table .col-state { width: 210px; }
 .download-table .col-category { width: 110px; }
 .download-table .col-age { width: 100px; }
 .download-table .col-actions { width: 86px; }
@@ -601,9 +600,7 @@ tbody tr:hover { background: var(--row-hover); }
 
 .cell-category { white-space: nowrap; }
 .cell-age, .col-age { white-space: nowrap; color: var(--text-tertiary); }
-.cell-progress, .col-progress { min-width: 230px; width: 230px; }
-.cell-progress .stage-status { display: none; }
-.cell-progress .stage-strip { gap: 6px; }
+.cell-status, .col-state { min-width: 210px; width: 210px; }
 .cell-index, .cell-size, .col-size { font-family: var(--font-mono); font-size: 12px; white-space: nowrap; }
 
 .actions-heading {
@@ -848,56 +845,57 @@ tbody tr:hover .cell-actions { background: var(--row-sticky-hover); }
 .stage-strip {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  gap: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  overflow: hidden;
 }
 
-.stage { min-width: 0; }
+.stage {
+  min-width: 0;
+  padding: 8px 10px;
+  border-left: 1px solid var(--border);
+  background: var(--bg-primary);
+}
+
+.stage:first-child { border-left: 0; }
 
 .stage-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 6px;
-  margin-bottom: 3px;
+  display: block;
 }
 
 .stage-label {
+  display: block;
   font-size: 10px;
   font-weight: 510;
   letter-spacing: 0.03em;
   color: var(--text-quaternary);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .stage-status {
+  display: block;
+  margin-top: 4px;
   font-size: 10px;
-  color: var(--text-tertiary);
+  color: var(--text-quaternary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.stage-bar {
-  display: block;
-  height: 4px;
-  border-radius: var(--radius-pill);
+.stage.is-current {
   background: var(--bg-elevated);
-  overflow: hidden;
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
-
-.stage-fill {
-  display: block;
-  height: 100%;
-  border-radius: var(--radius-pill);
-  background: var(--text-quaternary);
-  transition: width 0.2s ease;
-}
-
-.stage.is-current .stage-fill { background: var(--accent); }
+.stage.is-current .stage-label,
 .stage.is-current .stage-status { color: var(--text-secondary); }
-.stage.is-passed .stage-fill { background: var(--ok); opacity: 0.55; }
-.stage.is-verified .stage-fill { background: var(--ok); }
-.stage.is-verified .stage-status { color: var(--ok); }
-.stage.is-halted .stage-status { color: var(--danger); }
+.stage.is-passed .stage-label,
+.stage.is-passed .stage-status { color: var(--text-tertiary); }
+.stage.is-pending .stage-label,
+.stage.is-pending .stage-status { color: var(--text-quaternary); }
+.stage.is-unselected { opacity: 0.72; }
 
 /* ---------- Panels ---------- */
 
@@ -1723,14 +1721,11 @@ html.vt-back::view-transition-new(setup-content) {
 /* ---------- Responsive ---------- */
 
 @media (max-width: 1100px) {
-  .cell-progress .stage-head { display: none; }
-  .cell-progress, .col-progress { min-width: 130px; width: 130px; }
   .cell-name { min-width: 180px; }
   .download-table { min-width: 880px; }
   .download-table .col-name { width: 220px; }
-  .download-table .col-state { width: 150px; }
+  .download-table .col-state { width: 190px; }
 }
-
 @media (max-width: 768px) {
   .app-shell { grid-template-columns: 1fr; }
 
@@ -2106,23 +2101,11 @@ html.vt-back::view-transition-new(setup-content) {
   overflow: hidden;
 }
 
-/* Completion confirmation: one check glyph on the state badge and one
- * low-intensity sweep across the verified stage fill. */
+/* Completion confirmation: one check glyph on the state badge. */
 .badge-check {
   margin-left: 5px;
   font-weight: 600;
   color: var(--ok);
-}
-
-.stage-fill {
-  position: relative;
-}
-
-.stage-sweep {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent);
-  pointer-events: none;
 }
 
 /* Dimmed rows while a filter/search/pagination fetch is in flight; the

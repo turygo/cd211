@@ -5,7 +5,7 @@
   <meta name="color-scheme" content="light dark">
   <title>{{.Title}} · CD211</title>
   <script src="/static/theme-init.js?v=1"></script>
-  <link rel="stylesheet" href="/static/app.css?v=13">
+  <link rel="stylesheet" href="/static/app.css?v=14">
   <script type="module" src="/static/app.js?v=8"></script>
   <script type="module" src="/static/actions-motion.js?v=1"></script>
 </head>
@@ -34,12 +34,11 @@
 </aside>
 {{end}}
 
-{{define "route-strip"}}
-<div class="stage-strip" role="group" aria-label="{{.State}}">
+{{define "segmented-track"}}
+<div class="stage-strip" role="group" aria-label="{{.State}} workflow">
   {{range .Stages}}
-  <div class="stage {{.Class}}" title="{{.Label}}: {{.Status}}">
+  <div class="stage {{.Class}}" aria-label="{{.Label}} · {{.Status}}" title="{{.Label}} · {{.Status}}"{{if eq .Class "is-current"}} aria-current="step"{{end}}>
     <span class="stage-head"><span class="stage-label">{{.Label}}</span><span class="stage-status">{{.Status}}</span></span>
-    <span class="stage-bar"><span class="stage-fill" style="width: {{.Progress}}%"></span></span>
   </div>
   {{end}}
 </div>

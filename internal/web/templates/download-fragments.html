@@ -4,8 +4,7 @@
     <span class="cell-meta"><code>{{.HashPrefix}}</code></span>
     {{if .Error}}<span class="cell-error{{if .ErrorIsWarning}} is-warning{{end}}">{{.Error}}</span>{{end}}
   </td>
-  <td><span class="state-badge" data-state="{{.InternalState}}" aria-label="{{.StateFullLabel}}" title="{{.StateFullLabel}}">{{.StateLabel}}</span></td>
-  <td class="cell-progress">{{template "route-strip" .Route}}</td>
+  <td><span class="state-badge" data-state="{{.InternalState}}" aria-label="{{.Route.ListTitle}}" title="{{.Route.ListTitle}}">{{.Route.ListLabel}}</span></td>
   <td class="cell-category">{{.Category}}</td>
   <td class="cell-age">{{printf .Str.AgoFormat .Age}}</td>
   <td class="cell-actions">
@@ -77,7 +76,7 @@
 
 {{define "detail-live"}}<div data-live-detail data-hash="{{.Hash}}" data-row-version="{{.RowVersion}}" data-state="{{.InternalState}}" data-terminal="{{.Terminal}}" data-state-label="{{.StateLabel}}">
   <section class="panel" data-live-route>
-    {{template "route-strip" .Route}}
+    {{template "segmented-track" .Route}}
   </section>
   {{if .Error}}<div class="notice {{if .ErrorIsWarning}}notice-warning{{else}}notice-error{{end}}" data-live-error role="{{if .ErrorIsWarning}}status{{else}}alert{{end}}"><strong>{{if .ErrorIsWarning}}{{.Str.RetryingTitle}}{{else}}{{.Str.RecordedError}}{{end}}</strong><p>{{.Error}}</p></div>{{end}}
   <div class="panel-grid">

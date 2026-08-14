@@ -8,6 +8,10 @@ section using the release version and date.
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced download-list route strips with compact bilingual step/progress statuses and redesigned detail progress as a mutually exclusive three-segment track; terminal states remain task-level and completion keeps its state-badge confirmation.
+
 ## [0.3.10] - 2026-08-13
 
 ### Fixed

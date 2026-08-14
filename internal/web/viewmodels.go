@@ -105,16 +105,16 @@ type DownloadRow struct {
 }
 
 type RouteView struct {
-	Stages   []RouteStage
-	Verified bool
-	State    string
+	Stages    []RouteStage
+	State     string
+	ListLabel string
+	ListTitle string
 }
 
 type RouteStage struct {
-	Label    string
-	Progress int
-	Status   string
-	Class    string
+	Label  string
+	Status string
+	Class  string
 }
 
 type DetailView struct {
@@ -429,21 +429,30 @@ func pageMeta(title, activeNav, csrfToken string, lang Lang) PageMeta {
 func buildRoute(download domain.Download, str *Strings) RouteView {
 	offline := routePercent(download.OfflineProgress)
 	copyProgress := routePercent(download.CopyProgress)
+	taskLabel := displayDownloadState(download, str.CompactStates)
+	taskTitle := displayDownloadState(download, str.States)
 	stages := []RouteStage{
-		{Label: str.Stage115, Progress: offline, Status: fmt.Sprintf("%d%%", offline), Class: "is-idle"},
-		{Label: str.StageCopy, Progress: copyProgress, Status: fmt.Sprintf("%d%%", copyProgress), Class: "is-idle"},
-		{Label: str.StageVerify, Progress: 0, Status: str.StatusPending, Class: "is-idle"},
+		{Label: str.Stage115, Status: str.StatusPending, Class: "is-unselected"},
+		{Label: str.StageCopy, Status: str.StatusPending, Class: "is-unselected"},
+		{Label: str.StageVerify, Status: str.StatusPending, Class: "is-unselected"},
 	}
+	listLabel, listTitle := taskLabel, taskTitle
 	switch download.State {
 	case domain.StateAccepted, domain.StateSubmittingOffline, domain.StateWaitingOffline:
 		stages[0].Class = "is-current"
-		stages[0].Status += str.StatusActiveSuffix
-		stages[1].Status = str.StatusQueued
+		stages[1].Class = "is-pending"
+		stages[2].Class = "is-pending"
+		stages[0].Status = fmt.Sprintf("%d%%", offline)
+		listLabel = fmt.Sprintf("%s · %d%%", str.Stage115, offline)
+		listTitle = fmt.Sprintf("%s · %d%% · %s", str.Stage115, offline, taskTitle)
 	case domain.StateSubmittingCopy, domain.StateWaitingCopy:
 		stages[0].Class = "is-passed"
 		stages[0].Status = str.StatusSourceReady
 		stages[1].Class = "is-current"
-		stages[1].Status += str.StatusActiveSuffix
+		stages[2].Class = "is-pending"
+		stages[1].Status = fmt.Sprintf("%d%%", copyProgress)
+		listLabel = fmt.Sprintf("%s · %d%%", str.StageCopy, copyProgress)
+		listTitle = fmt.Sprintf("%s · %d%% · %s", str.StageCopy, copyProgress, taskTitle)
 	case domain.StateVerifyingLocal:
 		stages[0].Class = "is-passed"
 		stages[0].Status = str.StatusSourceReady
@@ -451,21 +460,17 @@ func buildRoute(download domain.Download, str *Strings) RouteView {
 		stages[1].Status = str.StatusCopyPresent
 		stages[2].Class = "is-current"
 		stages[2].Status = str.StatusChecking
+		listLabel = fmt.Sprintf("%s · %s", str.StageVerify, str.StatusChecking)
+		listTitle = fmt.Sprintf("%s · %s · %s", str.StageVerify, str.StatusChecking, taskTitle)
 	case domain.StateCompleted:
 		stages[0].Class = "is-passed"
-		stages[0].Progress = 100
 		stages[0].Status = str.StatusSourceReady
 		stages[1].Class = "is-passed"
-		stages[1].Progress = 100
 		stages[1].Status = str.StatusCopyPresent
-		stages[2].Class = "is-verified"
-		stages[2].Progress = 100
+		stages[2].Class = "is-passed"
 		stages[2].Status = str.StatusVerified
-	default:
-		stages[2].Class = "is-halted"
-		stages[2].Status = displayDownloadState(download, str.States)
 	}
-	return RouteView{Stages: stages, Verified: download.State == domain.StateCompleted, State: string(download.State)}
+	return RouteView{Stages: stages, State: string(download.State), ListLabel: listLabel, ListTitle: listTitle}
 }
 
 func displayDownloadState(download domain.Download, labels StateLabels) string {

@@ -520,7 +520,7 @@ func TestSecurityHeadersAndStaticAssets(t *testing.T) {
 
 	body := login.Body.String()
 	themeInit := strings.Index(body, `<script src="/static/theme-init.js?v=1"></script>`)
-	stylesheet := strings.Index(body, `<link rel="stylesheet" href="/static/app.css?v=13">`)
+	stylesheet := strings.Index(body, `<link rel="stylesheet" href="/static/app.css?v=14">`)
 	if themeInit < 0 || stylesheet < 0 || themeInit > stylesheet {
 		t.Errorf("theme initializer must load before stylesheet: theme=%d stylesheet=%d", themeInit, stylesheet)
 	}
@@ -602,8 +602,8 @@ func TestDashboardFiltersRouteEvidenceRedactionAndCloudStatus(t *testing.T) {
 	all := fixture.request(http.MethodGet, "/?category=movies", nil, true)
 	requireStatus(t, all, http.StatusOK)
 	body := all.Body.String()
-	requireContains(t, body, "CloudDrive2 Online", `<span aria-hidden="true">Online</span>`, "115 OFFLINE", "NAS COPY", "LOCAL VERIFY", "is-verified", "Protected upstream details were redacted.", `value="all" selected`)
-	requireAbsent(t, body, "magnet:?", "tracker.invalid", "secret-token", fixture.sid)
+	requireContains(t, body, "CloudDrive2 Online", `<span aria-hidden="true">Online</span>`, "115 OFFLINE", "NAS COPY", "LOCAL VERIFY", "Protected upstream details were redacted.", `value="all" selected`)
+	requireAbsent(t, body, "stage-strip", "is-verified", "stage-fill", "cell-progress", "magnet:?", "tracker.invalid", "secret-token", fixture.sid)
 	for _, item := range states {
 		requireContains(t, body, "release-"+item.seed, string(item.state))
 	}
@@ -676,16 +676,19 @@ func TestDashboardSearchPaginationAndInlineReturn(t *testing.T) {
 	}
 }
 
-func TestCompletedIsOnlyVerifiedRoute(t *testing.T) {
+func TestDetailSegmentedTrackSelection(t *testing.T) {
 	fixture := newWebFixture(t)
 	states := []struct {
-		seed  string
-		state domain.State
+		seed       string
+		state      domain.State
+		hasCurrent bool
+		passed     int
+		unselected int
 	}{
-		{"1", domain.StateAccepted}, {"2", domain.StateSubmittingOffline}, {"3", domain.StateWaitingOffline},
-		{"4", domain.StateSubmittingCopy}, {"5", domain.StateWaitingCopy}, {"6", domain.StateVerifyingLocal},
-		{"7", domain.StateCompleted}, {"8", domain.StateFailed}, {"9", domain.StateCancelRequested},
-		{"a", domain.StateCancelled}, {"b", domain.StateStopped},
+		{"1", domain.StateAccepted, true, 0, 0}, {"2", domain.StateSubmittingOffline, true, 0, 0}, {"3", domain.StateWaitingOffline, true, 0, 0},
+		{"4", domain.StateSubmittingCopy, true, 1, 0}, {"5", domain.StateWaitingCopy, true, 1, 0}, {"6", domain.StateVerifyingLocal, true, 2, 0},
+		{"7", domain.StateCompleted, false, 3, 0}, {"8", domain.StateFailed, false, 0, 3}, {"9", domain.StateCancelRequested, false, 0, 3},
+		{"a", domain.StateCancelled, false, 0, 3}, {"b", domain.StateStopped, false, 0, 3},
 	}
 	for _, item := range states {
 		download := fixture.seedDownload(item.seed, item.state, nil)
@@ -693,9 +696,19 @@ func TestCompletedIsOnlyVerifiedRoute(t *testing.T) {
 		requireStatus(t, response, http.StatusOK)
 		body := response.Body.String()
 		requireContains(t, body, "115 OFFLINE", "NAS COPY", "LOCAL VERIFY", string(item.state))
-		verified := strings.Contains(body, "is-verified")
-		if verified != (item.state == domain.StateCompleted) {
-			t.Errorf("state %s verified marker = %t", item.state, verified)
+		requireAbsent(t, body, "stage-fill", "is-verified", "is-halted")
+		wantCurrent := 0
+		if item.hasCurrent {
+			wantCurrent = 1
+		}
+		if current := strings.Count(body, `class="stage is-current"`); current != wantCurrent {
+			t.Errorf("state %s current segment count = %d", item.state, current)
+		}
+		if passed := strings.Count(body, `class="stage is-passed"`); passed != item.passed {
+			t.Errorf("state %s passed segment count = %d, want %d", item.state, passed, item.passed)
+		}
+		if unselected := strings.Count(body, `class="stage is-unselected"`); unselected != item.unselected {
+			t.Errorf("state %s unselected segment count = %d, want %d", item.state, unselected, item.unselected)
 		}
 	}
 }
@@ -711,7 +724,7 @@ func TestDetailIsRedactedAndExposesOnlyLegalActions(t *testing.T) {
 		{"a", domain.StateStopped, []string{"/start", "delete_files\" value=\"false", "delete_files\" value=\"true"}, []string{"/retry", "/pause"}},
 		{"b", domain.StateFailed, []string{"/retry", "delete_files\" value=\"false"}, []string{"/start", "/pause"}},
 		{"c", domain.StateWaitingCopy, []string{"/pause", "delete_files\" value=\"true"}, []string{"/start", "/retry", "/cancel"}},
-		{"d", domain.StateCompleted, []string{"delete_files\" value=\"false", "is-verified"}, []string{"/start", "/retry", "/pause"}},
+		{"d", domain.StateCompleted, []string{"delete_files\" value=\"false", `class="stage is-passed"`}, []string{"/start", "/retry", "/pause", `class="stage is-current"`}},
 	}
 	for _, item := range cases {
 		download := fixture.seedDownload(item.seed, item.state, func(download *domain.Download) {
@@ -1181,10 +1194,10 @@ func TestLanguagePreferenceRendersChinese(t *testing.T) {
 
 	downloads := fixture.requestLang(http.MethodGet, "/?view=all", true, "zh")
 	requireStatus(t, downloads, http.StatusOK)
-	requireContains(t, downloads.Body.String(), "115 离线", "复制到 NAS", "本地校验", "CloudDrive2 在线", "下载任务", "分类管理", `data-state="WAITING_OFFLINE" aria-label="等待离线下载" title="等待离线下载">等待 115 完成</span>`)
+	requireContains(t, downloads.Body.String(), "115 离线下载 · 35%", "CloudDrive2 在线", "下载任务", "分类管理", `data-state="WAITING_OFFLINE" aria-label="115 离线下载 · 35% · 等待离线下载" title="115 离线下载 · 35% · 等待离线下载">115 离线下载 · 35%</span>`)
 	englishDownloads := fixture.requestLang(http.MethodGet, "/?view=all", true, "en")
 	requireStatus(t, englishDownloads, http.StatusOK)
-	requireContains(t, englishDownloads.Body.String(), `data-state="WAITING_OFFLINE" aria-label="Waiting for offline download" title="Waiting for offline download">Waiting for 115</span>`)
+	requireContains(t, englishDownloads.Body.String(), `data-state="WAITING_OFFLINE" aria-label="115 OFFLINE · 35% · Waiting for offline download" title="115 OFFLINE · 35% · Waiting for offline download">115 OFFLINE · 35%</span>`)
 
 	detail := fixture.requestLang(http.MethodGet, "/downloads/"+strings.Repeat("a", 40), true, "zh")
 	requireStatus(t, detail, http.StatusOK)

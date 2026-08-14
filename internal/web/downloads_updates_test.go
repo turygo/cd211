@@ -385,7 +385,7 @@ func TestDownloadsUpdatesRowsExited(t *testing.T) {
 	}
 	if !strings.Contains(exit.HTML, `data-download-hash="`+hash+`"`) ||
 		!strings.Contains(exit.HTML, `data-state="COMPLETED"`) ||
-		!strings.Contains(exit.HTML, "is-verified") {
+		strings.Contains(exit.HTML, "stage-fill") {
 		t.Errorf("rows_exited html lacks terminal fragment: %s", exit.HTML)
 	}
 }
@@ -525,7 +525,10 @@ func TestDetailUpdatesReflectsCompletion(t *testing.T) {
 	if payload.State != string(domain.StateCompleted) || !payload.Terminal || payload.RowVersion <= before.RowVersion {
 		t.Errorf("detail after completion = %+v", payload)
 	}
-	if !strings.Contains(payload.HTML, `data-state="COMPLETED"`) || !strings.Contains(payload.HTML, "is-verified") {
+	if !strings.Contains(payload.HTML, `data-state="COMPLETED"`) ||
+		strings.Contains(payload.HTML, "stage-fill") ||
+		strings.Count(payload.HTML, `class="stage is-current"`) != 0 ||
+		strings.Count(payload.HTML, `class="stage is-passed"`) != 3 {
 		t.Errorf("completed detail html: %s", payload.HTML)
 	}
 }
@@ -537,14 +540,14 @@ func TestDownloadsLiveScriptHooksAndVersions(t *testing.T) {
 	list := fixture.request(http.MethodGet, "/", nil, true)
 	requireStatus(t, list, http.StatusOK)
 	listBody := list.Body.String()
-	requireContains(t, listBody, `<script type="module" src="/static/downloads-live.js?v=1"></script>`)
+	requireContains(t, listBody, `<script type="module" src="/static/downloads-live.js?v=2"></script>`)
 	requireContains(t, listBody, `data-download-list`, `data-record-count`, `data-format="%d shown"`,
 		`data-table-wrap`, `data-pagination`, `data-empty-state`, `data-live-announcer`)
 
 	detail := fixture.request(http.MethodGet, "/downloads/"+strings.Repeat("a", 40), nil, true)
 	requireStatus(t, detail, http.StatusOK)
 	detailBody := detail.Body.String()
-	requireContains(t, detailBody, `<script type="module" src="/static/downloads-live.js?v=1"></script>`)
+	requireContains(t, detailBody, `<script type="module" src="/static/downloads-live.js?v=2"></script>`)
 	requireContains(t, detailBody, `data-live-detail`, `data-live-badge`, `data-live-route`,
 		`data-live-actions`, `data-live-chronology`, `data-live-files`, `data-live-announcer`)
 	requireAbsent(t, detailBody, "magnet:?", "tracker.invalid", "secret-token")

@@ -4,12 +4,11 @@
 // modules fetch server-rendered fragments and reconcile the DOM by hash and
 // durable row_version. Without JS the pages keep their native forms and
 // navigation.
-import { animateElement, animateNumber, motionTiming, reducedMotion } from "/static/motion.js?v=1";
+import { animateElement, motionTiming, reducedMotion } from "/static/motion.js?v=1";
 
 const POLL_ACTIVE_MS = 2000;
 const POLL_TERMINAL_MS = 10000;
 const BACKOFF_STEPS = [2000, 4000, 8000, 16000, 30000];
-const SWEEP_MS = 480;
 const SEARCH_DEBOUNCE_MS = 250;
 const VALID_VIEWS = ["active", "completed", "failed", "cancelled", "all"];
 
@@ -327,42 +326,6 @@ window.addEventListener("online", () => {
 
 // ---------- Row reconciliation (list) ----------
 
-function progressDuration(from, to) {
-  const delta = Math.min(100, Math.max(0, to - from));
-  return Math.round(motionTiming.progressMin + (delta / 100) * (motionTiming.progressMax - motionTiming.progressMin));
-}
-
-function captureRoute(root) {
-  const stages = [];
-  for (const stage of root.querySelectorAll(".stage-strip .stage")) {
-    const fill = stage.querySelector(".stage-fill");
-    stages.push({ width: fill ? parseFloat(fill.style.width) || 0 : 0 });
-  }
-  return stages;
-}
-
-function animateStages(root, oldRoute) {
-  if (!oldRoute) return;
-  const stages = Array.from(root.querySelectorAll(".stage-strip .stage"));
-  for (let i = 0; i < stages.length; i++) {
-    const fill = stages[i].querySelector(".stage-fill");
-    if (!fill) continue;
-    const old = oldRoute[i] ? oldRoute[i].width : 0;
-    const next = parseFloat(fill.style.width) || 0;
-    if (next <= old) continue; // never animate backwards; restarts land instantly
-    fill.style.transition = "none";
-    fill.style.width = `${old}%`;
-    animateNumber({
-      from: old,
-      to: next,
-      duration: progressDuration(old, next),
-      onUpdate: (value) => {
-        fill.style.width = `${value}%`;
-        if (value >= next) fill.style.transition = "";
-      },
-    });
-  }
-}
 
 function revealError(root) {
   const error = root.querySelector(".cell-error, [data-live-error]");
@@ -396,7 +359,6 @@ function animateEntry(row) {
 }
 
 function replaceRow(tr, item) {
-  const oldRoute = captureRoute(tr);
   const oldState = tr.dataset.state || "";
   const hadError = tr.querySelector(".cell-error") !== null;
   const openDialog = tr.querySelector("dialog[open]");
@@ -410,7 +372,6 @@ function replaceRow(tr, item) {
     if (replacementDialog) replacementDialog.replaceWith(openDialog);
   }
   tr.replaceWith(next);
-  animateStages(next, oldRoute);
   const hasError = next.querySelector(".cell-error") !== null;
   if (hasError && !hadError) revealError(next);
   const view = listRegion ? listRegion.dataset.view : "";
@@ -508,21 +469,6 @@ async function runCompletionVisuals(root, item) {
       { opacity: [0, 1], transform: ["scale(0.6)", "scale(1)"] },
       { duration: motionTiming.standard }
     );
-    if (!reducedMotion.matches) {
-      const fill = root.querySelector(".stage.is-verified .stage-fill");
-      if (fill) {
-        const sweep = document.createElement("span");
-        sweep.className = "stage-sweep";
-        sweep.setAttribute("aria-hidden", "true");
-        fill.append(sweep);
-        await animateElement(
-          sweep,
-          { transform: ["translateX(-100%)", "translateX(100%)"] },
-          { duration: SWEEP_MS, ease: motionTiming.ease }
-        );
-        sweep.remove();
-      }
-    }
     await wait(motionTiming.completionHold);
     check.remove();
   } else {
@@ -653,7 +599,6 @@ function applyDetailSnapshot(payload) {
   if (!detailRegion) return;
   if (payload.row_version <= Number(detailRegion.dataset.rowVersion)) return; // never regress
   const focus = captureFocusState();
-  const oldRoute = captureRoute(detailRegion);
   const oldState = detailRegion.dataset.state || "";
   const holder = document.createElement("div");
   holder.innerHTML = payload.html;
@@ -666,7 +611,6 @@ function applyDetailSnapshot(payload) {
     badge.dataset.state = next.dataset.state;
     badge.textContent = next.dataset.stateLabel;
   }
-  animateStages(next, oldRoute);
   if (payload.state === "COMPLETED" && oldState !== "COMPLETED") {
     announceTerminal(next, payload);
     void runCompletionVisuals(next, payload);
