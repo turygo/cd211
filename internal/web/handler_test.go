@@ -617,8 +617,8 @@ func TestSecurityHeadersAndStaticAssets(t *testing.T) {
 	}
 
 	body := login.Body.String()
-	themeInit := strings.Index(body, `<script src="/static/theme-init.js?v=1"></script>`)
-	stylesheet := strings.Index(body, `<link rel="stylesheet" href="/static/app.css?v=14">`)
+	themeInit := strings.Index(body, `<script src="/static/theme-init.js?v=2"></script>`)
+	stylesheet := strings.Index(body, `<link rel="stylesheet" href="/static/app.css?v=15">`)
 	if themeInit < 0 || stylesheet < 0 || themeInit > stylesheet {
 		t.Errorf("theme initializer must load before stylesheet: theme=%d stylesheet=%d", themeInit, stylesheet)
 	}

@@ -1,6 +1,7 @@
 "use strict";
 
 (() => {
+  document.documentElement.classList.add("js");
   let theme = "light";
   try {
     const savedTheme = window.localStorage.getItem("cd211-theme");

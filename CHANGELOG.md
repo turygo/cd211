@@ -15,6 +15,7 @@ section using the release version and date.
 ### Fixed
 
 - Kept Web UI and qBittorrent login cookies valid across settings hot swaps and service restarts by making their shared sliding 30-day sessions and logout revocation durable in SQLite.
+- Kept the compact download status column at its intended width so task names receive the remaining table space, and removed the Apply-button flash during filter initialization.
 
 ## [0.3.10] - 2026-08-13
 

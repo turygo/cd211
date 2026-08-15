@@ -437,6 +437,7 @@ html[data-theme="dark"] .theme-icon-sun { display: block; }
 }
 
 .download-filters { align-items: end; }
+.js form[data-auto-submit] > button[type="submit"] { display: none; }
 .search-field { flex: 1 1 260px; max-width: 420px; }
 .search-field input { width: 100%; }
 
@@ -534,7 +535,7 @@ input:focus, select:focus {
   table-layout: fixed;
 }
 
-.download-table .col-name { width: 30%; }
+.download-table .col-name { width: auto; }
 .download-table .col-state { width: 210px; }
 .download-table .col-category { width: 110px; }
 .download-table .col-age { width: 100px; }
@@ -1723,7 +1724,6 @@ html.vt-back::view-transition-new(setup-content) {
 @media (max-width: 1100px) {
   .cell-name { min-width: 180px; }
   .download-table { min-width: 880px; }
-  .download-table .col-name { width: 220px; }
   .download-table .col-state { width: 190px; }
 }
 @media (max-width: 768px) {
