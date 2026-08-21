@@ -8,6 +8,8 @@ section using the release version and date.
 
 ## [Unreleased]
 
+## [0.3.12] - 2026-08-22
+
 ### Added
 
 - Added an independent `qbt_` API key lifecycle in Settings for Bearer-authenticated qBittorrent `/api/v2` clients such as ANI-RSS; generated and rotated keys are shown once, and rotation or revocation takes effect immediately without changing SID login or the `/api/v1` `cd211_api_` Automation Token.
