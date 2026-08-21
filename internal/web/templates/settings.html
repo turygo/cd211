@@ -112,6 +112,38 @@
         {{end}}
       </section>
       </div>
+      <div class="settings-api-token">
+      <section class="panel panel-narrow" aria-labelledby="qbt-api-key-title">
+        <h2 id="qbt-api-key-title">{{.Str.SettingsSectionQBTAPIKey}}</h2>
+        <p class="muted">{{.Str.QBTAPIKeyLede}}</p>
+        {{if .QBTAPIKey.Configured}}
+        <p class="muted">{{.Str.QBTAPIKeyConfigured}}</p>
+        <dl class="detail-list">
+          <div><dt>{{.Str.QBTAPIKeyHintLabel}}</dt><dd><code>{{.QBTAPIKey.Hint}}</code></dd></div>
+          <div><dt>{{.Str.QBTAPIKeyCreatedLabel}}</dt><dd>{{.QBTAPIKey.CreatedAt}}</dd></div>
+          <div><dt>{{.Str.QBTAPIKeyUpdatedLabel}}</dt><dd>{{.QBTAPIKey.UpdatedAt}}</dd></div>
+        </dl>
+        <div class="action-bar">
+          <form action="/settings/qbt-api-key/rotate" method="post" data-confirm="{{.Str.QBTAPIKeyRotateConfirm}}">
+            <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+            <input type="hidden" name="expected_version" value="{{.QBTAPIKey.RowVersion}}">
+            <button class="button button-secondary" type="submit">{{.Str.QBTAPIKeyRotateButton}}</button>
+          </form>
+          <form action="/settings/qbt-api-key/revoke" method="post" data-confirm="{{.Str.QBTAPIKeyRevokeConfirm}}">
+            <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+            <input type="hidden" name="expected_version" value="{{.QBTAPIKey.RowVersion}}">
+            <button class="button button-danger" type="submit">{{.Str.QBTAPIKeyRevokeButton}}</button>
+          </form>
+        </div>
+        {{else}}
+        <p class="muted">{{.Str.QBTAPIKeyNotConfigured}}</p>
+        <form action="/settings/qbt-api-key/generate" method="post">
+          <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+          <button class="button button-secondary" type="submit">{{.Str.QBTAPIKeyGenerateButton}}</button>
+        </form>
+        {{end}}
+      </section>
+      </div>
     </main>
   </div>
 </body>

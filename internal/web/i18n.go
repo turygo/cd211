@@ -300,6 +300,25 @@ type Strings struct {
 	APITokenSecretLabel     string
 	APITokenSecretDone      string
 
+	// qBittorrent-compatible API key (managed inside the Settings page)
+	SettingsSectionQBTAPIKey string
+	QBTAPIKeyLede            string
+	QBTAPIKeyConfigured      string
+	QBTAPIKeyNotConfigured   string
+	QBTAPIKeyHintLabel       string
+	QBTAPIKeyCreatedLabel    string
+	QBTAPIKeyUpdatedLabel    string
+	QBTAPIKeyGenerateButton  string
+	QBTAPIKeyRotateButton    string
+	QBTAPIKeyRevokeButton    string
+	QBTAPIKeyRotateConfirm   string
+	QBTAPIKeyRevokeConfirm   string
+	QBTAPIKeyRevoked         string
+	QBTAPIKeySecretTitle     string
+	QBTAPIKeySecretLede      string
+	QBTAPIKeySecretLabel     string
+	QBTAPIKeySecretDone      string
+
 	// Webhook endpoints
 	NavWebhooks            string
 	TitleWebhooks          string
@@ -670,6 +689,24 @@ var stringsEN = Strings{
 	APITokenSecretLabel:     "Bearer token",
 	APITokenSecretDone:      "Done",
 
+	SettingsSectionQBTAPIKey: "qBittorrent API key",
+	QBTAPIKeyLede:            "This independent key is only for the qBittorrent-compatible /api/v2 API and ANI-RSS. It is not an Automation API token.",
+	QBTAPIKeyConfigured:      "A qBittorrent API key is configured. Send it as the Authorization: Bearer header.",
+	QBTAPIKeyNotConfigured:   "No qBittorrent API key is configured. Generate one for qBittorrent-compatible API access.",
+	QBTAPIKeyHintLabel:       "Key hint",
+	QBTAPIKeyCreatedLabel:    "First configured",
+	QBTAPIKeyUpdatedLabel:    "Current key since",
+	QBTAPIKeyGenerateButton:  "Generate key",
+	QBTAPIKeyRotateButton:    "Rotate key",
+	QBTAPIKeyRevokeButton:    "Revoke key",
+	QBTAPIKeyRotateConfirm:   "Rotate the qBittorrent API key? The old key stops working immediately.",
+	QBTAPIKeyRevokeConfirm:   "Revoke the qBittorrent API key? qBittorrent-compatible API access stops immediately until a new key is generated.",
+	QBTAPIKeyRevoked:         "qBittorrent API key revoked.",
+	QBTAPIKeySecretTitle:     "qBittorrent API key",
+	QBTAPIKeySecretLede:      "Copy this key now. It is shown only once and cannot be recovered later.",
+	QBTAPIKeySecretLabel:     "qBittorrent API key",
+	QBTAPIKeySecretDone:      "Back to Settings",
+
 	NavWebhooks:            "Webhooks",
 	TitleWebhooks:          "Webhook endpoints",
 	WebhooksLede:           "Deliver download completion and failure events to your own services with HMAC-signed HTTP requests.",
@@ -1018,7 +1055,6 @@ var stringsZH = Strings{
 	SettingsFrozenPathsNote: "已有任务仍使用提交时记录的路径，文件不会移动；重新映射后的分类路径仅用于后续任务。",
 	SettingsRemapTitle:      "分类路径变化",
 	SettingsRemapHint:       "修改任一根目录时会保留每个分类的子目录；下方会预览新的完整路径。",
-
 	SettingsSectionAPIToken: "自动化 API 令牌",
 	APITokenLede:            "自动化客户端使用此令牌进行身份验证。同一时刻仅存在一个令牌，生成后不会再显示。",
 	APITokenConfigured:      "已配置 API 令牌。请将其放入 Authorization: Bearer 请求头。",
@@ -1036,6 +1072,24 @@ var stringsZH = Strings{
 	APITokenSecretLede:      "请立即复制并妥善保存此令牌。此令牌仅显示一次，之后无法查看。",
 	APITokenSecretLabel:     "Bearer 令牌",
 	APITokenSecretDone:      "完成",
+
+	SettingsSectionQBTAPIKey: "qBittorrent API 密钥",
+	QBTAPIKeyLede:            "此密钥独立于自动化 API 令牌，仅供 ANI-RSS 等客户端访问兼容 qBittorrent 的 /api/v2 接口。",
+	QBTAPIKeyConfigured:      "已配置 qBittorrent API 密钥。请通过 Authorization 请求头以 Bearer 方式发送此密钥。",
+	QBTAPIKeyNotConfigured:   "尚未配置 qBittorrent API 密钥。请先生成密钥，才能访问兼容 qBittorrent 的 API。",
+	QBTAPIKeyHintLabel:       "密钥提示",
+	QBTAPIKeyCreatedLabel:    "首次配置时间",
+	QBTAPIKeyUpdatedLabel:    "当前密钥生成时间",
+	QBTAPIKeyGenerateButton:  "生成密钥",
+	QBTAPIKeyRotateButton:    "轮换密钥",
+	QBTAPIKeyRevokeButton:    "撤销密钥",
+	QBTAPIKeyRotateConfirm:   "确定轮换 qBittorrent API 密钥吗？旧密钥将立即失效。",
+	QBTAPIKeyRevokeConfirm:   "确定撤销 qBittorrent API 密钥吗？撤销后将无法访问兼容 qBittorrent 的 API，直到生成新密钥。",
+	QBTAPIKeyRevoked:         "qBittorrent API 密钥已撤销。",
+	QBTAPIKeySecretTitle:     "qBittorrent API 密钥",
+	QBTAPIKeySecretLede:      "请立即复制并妥善保存此密钥。此密钥仅显示一次，之后无法查看。",
+	QBTAPIKeySecretLabel:     "qBittorrent API 密钥",
+	QBTAPIKeySecretDone:      "返回设置",
 
 	NavWebhooks:            "Webhook 通知",
 	TitleWebhooks:          "Webhook 通知",

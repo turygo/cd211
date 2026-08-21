@@ -182,6 +182,9 @@ func newWebFixtureAt(t *testing.T, dbPath string, settingsDeps SettingsDeps) *we
 	if settingsDeps.Tokens == nil {
 		settingsDeps.Tokens = database
 	}
+	if settingsDeps.QBTKeys == nil {
+		settingsDeps.QBTKeys = database
+	}
 	webhooks := newFakeWebhookStore()
 	handler, err := New(Config{CloudRoot: "/cloud", LocalRoot: localRoot}, credentials, repo, sessions, clock, waker, cloud, filesystem, settingsDeps, webhooks)
 	if err != nil {
@@ -1097,7 +1100,7 @@ func TestSettingsRootChangeRemapsCategoriesButFreezesExistingDownloads(t *testin
 	handler, err := New(
 		Config{CloudRoot: "/cloud", LocalRoot: fixture.localRoot},
 		fixture.creds, fixture.repo, fixture.sessions, fixture.clock, fixture.waker, fixture.cloud, fixture.filesystem,
-		SettingsDeps{Store: fixture.store, Tokens: fixture.store, Dial: dial.dial}, fixture.webhooks,
+		SettingsDeps{Store: fixture.store, Tokens: fixture.store, QBTKeys: fixture.store, Dial: dial.dial}, fixture.webhooks,
 	)
 	if err != nil {
 		t.Fatalf("New(): %v", err)
@@ -1228,15 +1231,16 @@ func TestConstructorValidation(t *testing.T) {
 		settings SettingsDeps
 		webhooks outbox.EndpointRepository
 	}{
-		{"cloud root", Config{CloudRoot: "relative", LocalRoot: t.TempDir()}, fixture.repo, fixture.clock, fixture.waker, fixture.cloud, SettingsDeps{Store: fixture.store, Tokens: fixture.store}, fixture.webhooks},
-		{"local root", Config{CloudRoot: "/cloud", LocalRoot: "relative"}, fixture.repo, fixture.clock, fixture.waker, fixture.cloud, SettingsDeps{Store: fixture.store, Tokens: fixture.store}, fixture.webhooks},
-		{"repository", config, nil, fixture.clock, fixture.waker, fixture.cloud, SettingsDeps{Store: fixture.store, Tokens: fixture.store}, fixture.webhooks},
-		{"clock", config, fixture.repo, nil, fixture.waker, fixture.cloud, SettingsDeps{Store: fixture.store, Tokens: fixture.store}, fixture.webhooks},
-		{"waker", config, fixture.repo, fixture.clock, nil, fixture.cloud, SettingsDeps{Store: fixture.store, Tokens: fixture.store}, fixture.webhooks},
-		{"cloud status", config, fixture.repo, fixture.clock, fixture.waker, nil, SettingsDeps{Store: fixture.store, Tokens: fixture.store}, fixture.webhooks},
+		{"cloud root", Config{CloudRoot: "relative", LocalRoot: t.TempDir()}, fixture.repo, fixture.clock, fixture.waker, fixture.cloud, SettingsDeps{Store: fixture.store, Tokens: fixture.store, QBTKeys: fixture.store}, fixture.webhooks},
+		{"local root", Config{CloudRoot: "/cloud", LocalRoot: "relative"}, fixture.repo, fixture.clock, fixture.waker, fixture.cloud, SettingsDeps{Store: fixture.store, Tokens: fixture.store, QBTKeys: fixture.store}, fixture.webhooks},
+		{"repository", config, nil, fixture.clock, fixture.waker, fixture.cloud, SettingsDeps{Store: fixture.store, Tokens: fixture.store, QBTKeys: fixture.store}, fixture.webhooks},
+		{"clock", config, fixture.repo, nil, fixture.waker, fixture.cloud, SettingsDeps{Store: fixture.store, Tokens: fixture.store, QBTKeys: fixture.store}, fixture.webhooks},
+		{"waker", config, fixture.repo, fixture.clock, nil, fixture.cloud, SettingsDeps{Store: fixture.store, Tokens: fixture.store, QBTKeys: fixture.store}, fixture.webhooks},
+		{"cloud status", config, fixture.repo, fixture.clock, fixture.waker, nil, SettingsDeps{Store: fixture.store, Tokens: fixture.store, QBTKeys: fixture.store}, fixture.webhooks},
 		{"settings store", config, fixture.repo, fixture.clock, fixture.waker, fixture.cloud, SettingsDeps{}, fixture.webhooks},
 		{"token store", config, fixture.repo, fixture.clock, fixture.waker, fixture.cloud, SettingsDeps{Store: fixture.store}, fixture.webhooks},
-		{"webhook store", config, fixture.repo, fixture.clock, fixture.waker, fixture.cloud, SettingsDeps{Store: fixture.store, Tokens: fixture.store}, nil},
+		{"qbt key store", config, fixture.repo, fixture.clock, fixture.waker, fixture.cloud, SettingsDeps{Store: fixture.store, Tokens: fixture.store}, fixture.webhooks},
+		{"webhook store", config, fixture.repo, fixture.clock, fixture.waker, fixture.cloud, SettingsDeps{Store: fixture.store, Tokens: fixture.store, QBTKeys: fixture.store}, nil},
 	}
 	for _, item := range cases {
 		t.Run(item.name, func(t *testing.T) {
@@ -1245,11 +1249,14 @@ func TestConstructorValidation(t *testing.T) {
 			}
 		})
 	}
-	if handler, err := New(config, fixture.creds, fixture.repo, fixture.sessions, fixture.clock, fixture.waker, fixture.cloud, nil, SettingsDeps{Store: fixture.store, Tokens: fixture.store}, fixture.webhooks); err == nil || handler != nil {
+	if handler, err := New(config, fixture.creds, fixture.repo, fixture.sessions, fixture.clock, fixture.waker, fixture.cloud, nil, SettingsDeps{Store: fixture.store, Tokens: fixture.store, QBTKeys: fixture.store}, fixture.webhooks); err == nil || handler != nil {
 		t.Errorf("New(nil filesystem) = (%v, %v), want validation error", handler, err)
 	}
-	if handler, err := New(config, nil, fixture.repo, fixture.sessions, fixture.clock, fixture.waker, fixture.cloud, fixture.filesystem, SettingsDeps{Store: fixture.store, Tokens: fixture.store}, fixture.webhooks); err == nil || handler != nil {
+	if handler, err := New(config, nil, fixture.repo, fixture.sessions, fixture.clock, fixture.waker, fixture.cloud, fixture.filesystem, SettingsDeps{Store: fixture.store, Tokens: fixture.store, QBTKeys: fixture.store}, fixture.webhooks); err == nil || handler != nil {
 		t.Errorf("New(nil credentials) = (%v, %v), want validation error", handler, err)
+	}
+	if handler, err := New(config, fixture.creds, fixture.repo, fixture.sessions, fixture.clock, fixture.waker, fixture.cloud, fixture.filesystem, SettingsDeps{Store: fixture.store, Tokens: fixture.store}, fixture.webhooks); err == nil || handler != nil {
+		t.Errorf("New(nil qbt key store) = (%v, %v), want validation error", handler, err)
 	}
 }
 

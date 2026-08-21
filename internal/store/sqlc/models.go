@@ -86,6 +86,16 @@ type OperatorPassword struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
+type QbtApiKey struct {
+	ID         int64     `json:"id"`
+	KeyHash    []byte    `json:"key_hash"`
+	KeyHint    string    `json:"key_hint"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+	Active     int64     `json:"active"`
+	RowVersion int64     `json:"row_version"`
+}
+
 type Session struct {
 	SidDigest []byte    `json:"sid_digest"`
 	CsrfToken string    `json:"csrf_token"`

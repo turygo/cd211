@@ -9,11 +9,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/turygo/cd211/internal/qbtkey"
 	"github.com/turygo/cd211/internal/session"
 )
 
 func (h *handler) auth(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if authorization := r.Header.Values("Authorization"); len(authorization) > 0 {
+			h.authQBTAPIKey(w, r, authorization, next)
+			return
+		}
+
 		cookie, err := r.Cookie("SID")
 		if err != nil || cookie.Value == "" {
 			forbidden(w)
@@ -37,6 +43,42 @@ func (h *handler) auth(next http.HandlerFunc) http.Handler {
 		}
 		next(w, r)
 	})
+}
+
+func (h *handler) authQBTAPIKey(w http.ResponseWriter, r *http.Request, values []string, next http.HandlerFunc) {
+	if len(values) != 1 {
+		forbidden(w)
+		return
+	}
+	value := values[0]
+	const bearerPrefix = "Bearer "
+	if !strings.HasPrefix(value, bearerPrefix) {
+		forbidden(w)
+		return
+	}
+	secret := qbtkey.Secret(value[len(bearerPrefix):])
+	if !qbtkey.Valid(secret) {
+		forbidden(w)
+		return
+	}
+	key, err := h.qbtkeys.GetQBTAPIKey(r.Context())
+	if err != nil {
+		if errors.Is(err, qbtkey.ErrNotFound) {
+			forbidden(w)
+			return
+		}
+		internalError(w)
+		return
+	}
+	if !qbtkey.Verify(secret, key.Digest) {
+		forbidden(w)
+		return
+	}
+	if !browserOriginAllowed(r) {
+		forbidden(w)
+		return
+	}
+	next(w, r)
 }
 
 func browserOriginAllowed(r *http.Request) bool {

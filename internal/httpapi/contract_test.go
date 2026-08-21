@@ -18,6 +18,7 @@ import (
 
 	"github.com/turygo/cd211/internal/domain"
 	"github.com/turygo/cd211/internal/fsafe"
+	"github.com/turygo/cd211/internal/qbtkey"
 	"github.com/turygo/cd211/internal/session"
 	"github.com/turygo/cd211/internal/store"
 	"github.com/turygo/cd211/internal/submission"
@@ -39,6 +40,17 @@ type contractFilesystem struct {
 	size         int64
 	prepareErr   error
 	err          error
+}
+
+type contractQBTAPIKeyRepository struct {
+	key  qbtkey.Key
+	err  error
+	gets int
+}
+
+func (r *contractQBTAPIKeyRepository) GetQBTAPIKey(context.Context) (qbtkey.Key, error) {
+	r.gets++
+	return r.key, r.err
 }
 
 func (f *contractFilesystem) Verify(string, fsafe.ExpectedContent) (fsafe.VerifiedContent, error) {
@@ -81,11 +93,12 @@ func TestRealStoreSubmissionChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	qbtkeys := &contractQBTAPIKeyRepository{}
 	api, err := New(Config{
 		CloudRoot: "/cloud", LocalRoot: "/local",
 		TorrentLimits:   torrentmeta.Limits{MaxInputBytes: 1 << 20, MaxInfoBytes: 1 << 18, MaxFiles: 16, MaxNameBytes: 255, MaxPathBytes: 1024, MaxComponentBytes: 255, MaxTrackerCount: 16, MaxTrackerBytes: 1024, MaxTotalSize: 1 << 30},
 		MaxRequestBytes: (1 << 20) + (64 << 10),
-	}, stubCredentials{username: "user", password: "password"}, repository, sessions, clock, waker, filesystem, service)
+	}, stubCredentials{username: "user", password: "password"}, repository, sessions, clock, waker, filesystem, service, qbtkeys)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,6 +184,7 @@ func doRequest(t *testing.T, handler http.Handler, method, target string, body *
 type contractHarness struct {
 	api        http.Handler
 	repository *store.Store
+	qbtkeys    *contractQBTAPIKeyRepository
 	sessions   *session.Store
 	clock      *contractClock
 	waker      *contractWaker
@@ -205,14 +219,15 @@ func newContractHarnessAt(t *testing.T, dbPath string) *contractHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	qbtkeys := &contractQBTAPIKeyRepository{}
 	api, err := New(Config{
 		CloudRoot: "/cloud", LocalRoot: "/local",
 		TorrentLimits: limits, MaxRequestBytes: int64(limits.MaxInputBytes) + (64 << 10),
-	}, stubCredentials{username: "user", password: "password"}, repository, sessions, clock, waker, filesystem, service)
+	}, stubCredentials{username: "user", password: "password"}, repository, sessions, clock, waker, filesystem, service, qbtkeys)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &contractHarness{api: api, repository: repository, sessions: sessions, clock: clock, waker: waker, filesystem: filesystem, limits: limits}
+	return &contractHarness{api: api, repository: repository, qbtkeys: qbtkeys, sessions: sessions, clock: clock, waker: waker, filesystem: filesystem, limits: limits}
 }
 
 type stubCredentials struct {

@@ -124,11 +124,23 @@ Open **Settings → Download Clients → Add → qBittorrent**:
 
 Run the connection test and save. Sonarr or Radarr can now submit and track downloads as if CD211 were qBittorrent.
 
+### 5. Connect ANI-RSS
+
+Generate a qBittorrent API Key on CD211's **Settings** page. In ANI-RSS download settings, select qBittorrent, enter the CD211 address, paste the `qbt_` key into the qBittorrent password/API key field, and run the connection test.
+
+Use a placeholder such as `qbt_<key>` in documentation, logs, and screenshots; never include a real credential.
+
 ## Automation
+
+### qBittorrent Web API
+
+`/api/v2` supports two independent authentication methods: the `SID` cookie issued by `/api/v2/auth/login`, and `Authorization: Bearer qbt_<key>`. Sonarr and Radarr can continue to sign in with a username and password; clients that support qBittorrent API keys can use the independent `qbt_` key.
+
+Generate, rotate, or revoke the qBittorrent API key on the Web UI **Settings** page. The plaintext key is shown only once after generation or rotation, while SQLite stores only its SHA-256 digest and a non-sensitive hint. Rotation immediately invalidates the previous key, and revocation immediately invalidates the current key. When a request contains an `Authorization` header, Bearer authentication takes precedence; an invalid Bearer credential does not fall back to a valid `SID` sent with the same request.
 
 ### Native API
 
-Generate the global API token on the **Settings** page, then call `/api/v1` with `Authorization: Bearer <token>`:
+Generate the global `cd211_api_` Automation Token on the Web UI **Settings** page, then call `/api/v1` with `Authorization: Bearer <cd211_api-token>`:
 
 | Endpoint | Purpose |
 |---|---|
@@ -139,7 +151,7 @@ Generate the global API token on the **Settings** page, then call `/api/v1` with
 
 The API accepts magnets as JSON and torrent files as multipart data. The event feed uses opaque cursors and at-least-once delivery; deduplicate events by ID.
 
-The token is shown only when generated or rotated. Rotation immediately invalidates the previous token, and revocation disables the API. The native API does not expose retry, cancel, or delete endpoints; use the Web UI for those controls.
+The Automation Token is shown only when generated or rotated. Rotation immediately invalidates the previous token, and revocation disables the API. A `cd211_api_` token is valid only for `/api/v1`, not `/api/v2`; the independent `qbt_` key is likewise not valid for `/api/v1`. The native API does not expose retry, cancel, or delete endpoints; use the Web UI for those controls.
 
 ### Webhooks
 
@@ -185,15 +197,15 @@ The following settings are editable in the Web UI and apply immediately to new t
 - Offline download timeout (`24h` by default).
 - NAS copy timeout (`72h` by default).
 - Local verification timeout (`10m` by default).
-- Categories, administrator password, API token, and webhooks.
+- Categories, administrator password, `cd211_api_` Automation Token, `qbt_` qBittorrent API key, and webhooks.
 
 Durations use Go syntax such as `30m`, `24h`, or `72h`.
 
 ## Operating boundaries
 
 - Run CD211 only on a trusted LAN. Do not expose its HTTP port directly to the public Internet.
-- The Web UI and Sonarr or Radarr share the `admin` credentials; the native API uses a separate global token.
-- The global API token does not expire and is not designed for public or multi-tenant deployments.
+- The Web UI and Sonarr or Radarr can share the `admin` credentials; qBittorrent `/api/v2` clients can instead use an independent `qbt_` key. The native `/api/v1` surface accepts only the separate `cd211_api_` Automation Token.
+- Neither key expires, and neither is designed for public or multi-tenant deployments.
 - CD211 does not download BitTorrent data, contact trackers, or seed. It only coordinates 115 offline downloads, NAS copies, and status reporting.
 - Removing a task never deletes files in 115; deleting local files is an explicit choice in the task action.
 

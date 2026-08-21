@@ -30,6 +30,7 @@ import (
 	"github.com/turygo/cd211/internal/domain"
 	"github.com/turygo/cd211/internal/fsafe"
 	"github.com/turygo/cd211/internal/outbox"
+	"github.com/turygo/cd211/internal/qbtkey"
 	"github.com/turygo/cd211/internal/session"
 	"github.com/turygo/cd211/internal/settings"
 	"github.com/turygo/cd211/internal/store"
@@ -111,12 +112,25 @@ type APITokenStore interface {
 	RevokeAPIToken(ctx context.Context, expectedVersion int64) error
 }
 
+// QBTAPIKeyStore persists the independent qBittorrent-compatible API key.
+// The plaintext secret exists only in the one-time generate/rotate response;
+// every read returns metadata only.
+type QBTAPIKeyStore interface {
+	GetQBTAPIKey(ctx context.Context) (qbtkey.Key, error)
+	GenerateQBTAPIKey(ctx context.Context, now time.Time) (qbtkey.Secret, error)
+	RotateQBTAPIKey(ctx context.Context, expectedVersion int64, now time.Time) (qbtkey.Secret, error)
+	RevokeQBTAPIKey(ctx context.Context, expectedVersion int64) error
+}
+
 // SettingsDeps wires the authenticated settings page.
 type SettingsDeps struct {
 	Store SettingsStore
 	// Tokens persists the Automation API token lifecycle managed inside the
 	// Settings page. *store.Store implements it.
 	Tokens APITokenStore
+	// QBTKeys persists the independent qBittorrent-compatible API key
+	// lifecycle managed inside the Settings page.
+	QBTKeys QBTAPIKeyStore
 	// Dial establishes CloudDrive2 test connections; nil uses the default
 	// *clouddrive.Client adapter.
 	Dial DialFunc
@@ -153,7 +167,7 @@ type authenticatedSession struct {
 
 // New constructs the server-rendered operator interface.
 func New(config Config, credentials Credentials, repo Repository, sessions *session.Store, clock Clock, waker Waker, cloudStatus CloudStatus, filesystem Filesystem, settings SettingsDeps, webhooks outbox.EndpointRepository) (http.Handler, error) {
-	if isNil(credentials) || isNil(repo) || sessions == nil || isNil(clock) || isNil(waker) || isNil(cloudStatus) || isNil(filesystem) || isNil(settings.Store) || isNil(settings.Tokens) || isNil(webhooks) {
+	if isNil(credentials) || isNil(repo) || sessions == nil || isNil(clock) || isNil(waker) || isNil(cloudStatus) || isNil(filesystem) || isNil(settings.Store) || isNil(settings.Tokens) || isNil(settings.QBTKeys) || isNil(webhooks) {
 		return nil, errors.New("web dependency is nil")
 	}
 	dial := settings.Dial
@@ -212,6 +226,9 @@ func New(config Config, credentials Credentials, repo Repository, sessions *sess
 	mux.Handle("POST /settings/api-token/generate", h.auth(h.apiTokenGenerate, true))
 	mux.Handle("POST /settings/api-token/rotate", h.auth(h.apiTokenRotate, true))
 	mux.Handle("POST /settings/api-token/revoke", h.auth(h.apiTokenRevoke, true))
+	mux.Handle("POST /settings/qbt-api-key/generate", h.auth(h.qbtAPIKeyGenerate, true))
+	mux.Handle("POST /settings/qbt-api-key/rotate", h.auth(h.qbtAPIKeyRotate, true))
+	mux.Handle("POST /settings/qbt-api-key/revoke", h.auth(h.qbtAPIKeyRevoke, true))
 	mux.Handle("POST /downloads/{hash}/start", h.auth(h.start, true))
 	mux.Handle("POST /downloads/{hash}/pause", h.auth(h.pause, true))
 	mux.Handle("POST /downloads/{hash}/retry", h.auth(h.retry, true))
@@ -262,7 +279,8 @@ func routeMethod(requestPath, requestMethod string) (string, bool) {
 		return http.MethodGet, true
 	case "/logout", "/categories/save", "/settings/test", "/settings/save":
 		return http.MethodPost, true
-	case "/settings/api-token/generate", "/settings/api-token/rotate", "/settings/api-token/revoke":
+	case "/settings/api-token/generate", "/settings/api-token/rotate", "/settings/api-token/revoke",
+		"/settings/qbt-api-key/generate", "/settings/qbt-api-key/rotate", "/settings/qbt-api-key/revoke":
 		return http.MethodPost, true
 	case "/webhooks", "/webhook-deliveries":
 		if requestPath == "/webhooks" && requestMethod == http.MethodPost {
@@ -1008,6 +1026,11 @@ func (h *handler) settingsPage(w http.ResponseWriter, r *http.Request) {
 		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 		return
 	}
+	qbtAPIKeyView, err := h.qbtAPIKeyView(r)
+	if err != nil {
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+		return
+	}
 	str := tr(requestLang(r))
 	notice, success := "", false
 	switch {
@@ -1015,18 +1038,19 @@ func (h *handler) settingsPage(w http.ResponseWriter, r *http.Request) {
 		notice, success = str.SettingsSaved, true
 	case r.URL.Query().Get("token-revoked") == "1":
 		notice, success = str.APITokenRevoked, true
+	case r.URL.Query().Get("qbt-api-key-revoked") == "1":
+		notice, success = str.QBTAPIKeyRevoked, true
 	}
 	view := SettingsView{
 		PageMeta:   pageMeta(str.TitleSettings, "settings", h.authSession(r).CSRFToken, requestLang(r)),
 		Values:     settingsFormFromValues(values),
 		Categories: buildSettingsCategoryPaths(categories, h.config.CloudRoot, h.config.LocalRoot),
 		Notice:     notice, Success: success,
-		APIToken: tokenView,
+		APIToken: tokenView, QBTAPIKey: qbtAPIKeyView,
 	}
 	view.Path = "/settings"
 	h.render(w, http.StatusOK, "settings", view)
 }
-
 func (h *handler) settingsTest(w http.ResponseWriter, r *http.Request) {
 	form, errMsg, ok := parseSettingsForm(r)
 	if !ok {
@@ -1109,11 +1133,16 @@ func (h *handler) renderSettings(w http.ResponseWriter, r *http.Request, status 
 		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 		return
 	}
+	qbtAPIKeyView, err := h.qbtAPIKeyView(r)
+	if err != nil {
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+		return
+	}
 	view := SettingsView{
 		PageMeta: pageMeta(tr(requestLang(r)).TitleSettings, "settings", h.authSession(r).CSRFToken, requestLang(r)),
 		Values:   form, Categories: buildSettingsCategoryPaths(categories, h.config.CloudRoot, h.config.LocalRoot),
 		Notice: notice, Success: success,
-		APIToken: tokenView,
+		APIToken: tokenView, QBTAPIKey: qbtAPIKeyView,
 	}
 	view.Path = "/settings"
 	h.render(w, status, "settings", view)
@@ -1153,6 +1182,26 @@ func (h *handler) apiTokenGenerate(w http.ResponseWriter, r *http.Request) {
 	h.renderAPITokenSecret(w, r, string(secret))
 }
 
+// qbtAPIKeyView loads only persisted qBittorrent API key metadata. Missing
+// keys render as unconfigured; neither plaintext nor digest reaches the view.
+func (h *handler) qbtAPIKeyView(r *http.Request) (QBTAPIKeyView, error) {
+	info, err := h.settings.QBTKeys.GetQBTAPIKey(r.Context())
+	if errors.Is(err, qbtkey.ErrNotFound) {
+		return QBTAPIKeyView{}, nil
+	}
+	if err != nil {
+		return QBTAPIKeyView{}, err
+	}
+	str := tr(requestLang(r))
+	return QBTAPIKeyView{
+		Configured: true,
+		Hint:       info.Hint,
+		CreatedAt:  displayTime(info.CreatedAt, str),
+		UpdatedAt:  displayTime(info.UpdatedAt, str),
+		RowVersion: info.RowVersion,
+	}, nil
+}
+
 // apiTokenRotate handles POST /settings/api-token/rotate. The form carries
 // expected_version and the store CAS rejects stale or absent rows; the old
 // token stops working the moment the rotate commits. Success renders the
@@ -1187,6 +1236,48 @@ func (h *handler) apiTokenRevoke(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/settings?token-revoked=1", http.StatusSeeOther)
 }
 
+// qbtAPIKeyGenerate handles POST /settings/qbt-api-key/generate. A successful
+// response reveals the independent key exactly once and is never cacheable.
+func (h *handler) qbtAPIKeyGenerate(w http.ResponseWriter, r *http.Request) {
+	secret, err := h.settings.QBTKeys.GenerateQBTAPIKey(r.Context(), h.clock.Now().UTC())
+	if err != nil {
+		qbtAPIKeyError(w, err)
+		return
+	}
+	h.renderQBTAPIKeySecret(w, r, string(secret))
+}
+
+// qbtAPIKeyRotate handles POST /settings/qbt-api-key/rotate using row-version
+// compare-and-swap and reveals the replacement key exactly once.
+func (h *handler) qbtAPIKeyRotate(w http.ResponseWriter, r *http.Request) {
+	expected, ok := expectedTokenVersion(r)
+	if !ok {
+		plain(w, http.StatusBadRequest, "Bad Request\n")
+		return
+	}
+	secret, err := h.settings.QBTKeys.RotateQBTAPIKey(r.Context(), expected, h.clock.Now().UTC())
+	if err != nil {
+		qbtAPIKeyError(w, err)
+		return
+	}
+	h.renderQBTAPIKeySecret(w, r, string(secret))
+}
+
+// qbtAPIKeyRevoke handles POST /settings/qbt-api-key/revoke. Successful
+// revocation redirects with a qBittorrent-specific notice.
+func (h *handler) qbtAPIKeyRevoke(w http.ResponseWriter, r *http.Request) {
+	expected, ok := expectedTokenVersion(r)
+	if !ok {
+		plain(w, http.StatusBadRequest, "Bad Request\n")
+		return
+	}
+	if err := h.settings.QBTKeys.RevokeQBTAPIKey(r.Context(), expected); err != nil {
+		qbtAPIKeyError(w, err)
+		return
+	}
+	http.Redirect(w, r, "/settings?qbt-api-key-revoked=1", http.StatusSeeOther)
+}
+
 // expectedTokenVersion parses the form's expected_version CAS field, which
 // must be a non-negative integer matching the persisted row_version.
 func expectedTokenVersion(r *http.Request) (int64, bool) {
@@ -1213,6 +1304,29 @@ func (h *handler) renderAPITokenSecret(w http.ResponseWriter, r *http.Request, s
 	}
 	page.Path = "/settings"
 	h.render(w, http.StatusOK, "api-token-secret", page)
+}
+
+// renderQBTAPIKeySecret renders the one-time qBittorrent key reveal page.
+func (h *handler) renderQBTAPIKeySecret(w http.ResponseWriter, r *http.Request, secret string) {
+	w.Header().Set("Cache-Control", "no-store")
+	lang := requestLang(r)
+	page := QBTAPIKeySecretView{
+		PageMeta: pageMeta(tr(lang).QBTAPIKeySecretTitle, "settings", h.authSession(r).CSRFToken, lang),
+		Secret:   secret,
+	}
+	page.Path = "/settings"
+	h.render(w, http.StatusOK, "qbt-api-key-secret", page)
+}
+
+func qbtAPIKeyError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, qbtkey.ErrNotFound):
+		plain(w, http.StatusNotFound, "Not Found\n")
+	case errors.Is(err, qbtkey.ErrConflict):
+		plain(w, http.StatusConflict, "Conflict\n")
+	default:
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+	}
 }
 
 // tokenError maps token lifecycle failures onto the existing Web error

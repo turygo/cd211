@@ -229,7 +229,7 @@ func (m *manager) build(ctx context.Context, cfg settings.Config) (*runtime, err
 	api, err := httpapi.New(httpapi.Config{
 		CloudRoot: cfg.CloudRoot, LocalRoot: cfg.LocalRoot,
 		TorrentLimits: limits, MaxRequestBytes: int64(limits.MaxInputBytes) + 64<<10,
-	}, credentials, m.store, m.sessions, m.clock, coord, files, service)
+	}, credentials, m.store, m.sessions, m.clock, coord, files, service, m.store)
 	if err != nil {
 		return nil, fmt.Errorf("httpapi: %w", err)
 	}
@@ -248,10 +248,11 @@ func (m *manager) build(ctx context.Context, cfg settings.Config) (*runtime, err
 	ui, err := web.New(web.Config{
 		CloudRoot: cfg.CloudRoot, LocalRoot: cfg.LocalRoot,
 	}, credentials, m.store, m.sessions, m.clock, coord, cloud, files, web.SettingsDeps{
-		Store:  m.store,
-		Tokens: m.store,
-		Dial:   nil,
-		Apply:  m.Apply,
+		Store:   m.store,
+		Tokens:  m.store,
+		QBTKeys: m.store,
+		Dial:    nil,
+		Apply:   m.Apply,
 	}, m.store)
 	if err != nil {
 		return nil, fmt.Errorf("web: %w", err)

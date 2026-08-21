@@ -18,7 +18,7 @@ CD211 is not a BitTorrent client and does not seed. qBittorrent is only the comp
 
 On completion or failure, CD211 also emits signed outbound webhook notifications for external automation and monitoring. Events and their deliveries are committed transactionally with the download mutation and delivered by an independent in-process dispatcher; they are a notification channel and never replace the Sonarr/Radarr polling and import flow.
 
-Alongside the qBittorrent-compatible surface, CD211 exposes a native automation API authenticated by a single system-generated global API token. It submits magnet and torrent downloads, queries durable download state, waits for a terminal outcome, and pulls completed and failed events; it performs no broad management or control actions. Automation consumers may use either the qBittorrent compatibility profile or the native API.
+Alongside the qBittorrent-compatible surface, CD211 exposes a native automation API authenticated by a single system-generated `cd211_api_` Automation Token. The qBittorrent `/api/v2` surface instead accepts either its durable `SID` session cookie or an independent `qbt_` API key. The native API submits magnet and torrent downloads, queries durable download state, waits for a terminal outcome, and pulls completed and failed events; it performs no broad management or control actions. Automation consumers may use either surface, but credentials are scoped to one surface and are not interchangeable.
 
 The first release targets the qBittorrent API calls made by current Sonarr and Radarr versions. It does not attempt to emulate the complete qBittorrent API.
 
@@ -101,8 +101,8 @@ These invariants are correctness requirements:
 
 ```mermaid
 flowchart LR
-    ARR[Sonarr / Radarr] -->|qBittorrent WebAPI| API[HTTP API]
-    AUT[Automation Client] -->|Bearer /api/v1| API
+    ARR[Sonarr / Radarr] -->|qBittorrent /api/v2: SID or qbt_ Bearer| API[HTTP API]
+    AUT[Automation Client] -->|cd211_api_ Bearer /api/v1| API
     WEB[CD211 Web UI] --> API
     API --> DB[(SQLite)]
     REC[Reconciler] --> DB
@@ -119,7 +119,7 @@ CD211 is one process with six internal components:
 ### 7.1 HTTP API
 
 - Implements the supported qBittorrent compatibility profile.
-- Authenticates callers and validates inputs.
+- Authenticates callers with credentials scoped to either `/api/v2` or `/api/v1`, then validates inputs.
 - Persists submissions, category changes, retries, cancellations, and removals.
 - Never waits for a complete 115 or copy operation.
 
@@ -159,7 +159,7 @@ CD211 is one process with six internal components:
 ### 7.6 Native Automation API
 
 - Mounted at `/api/v1` in the configured runtime. The setup-mode mux answers every `/api/v1/*` path with an unauthenticated JSON 503 until first-run setup completes.
-- Authentication is the single system-generated global API token, read from the store on every request so generate, rotate, and revoke apply immediately. Only `Authorization: Bearer <token>` is accepted; SID cookies and the admin password are ignored. Missing or invalid tokens receive the same JSON 401 with `Cache-Control: no-store`, and token material is never logged.
+- Authentication is the single system-generated global `cd211_api_` Automation Token, read from the store on every request so generate, rotate, and revoke apply immediately. Only `Authorization: Bearer <cd211_api_ token>` is accepted; `qbt_` keys, SID cookies, and the admin password are ignored. Missing or invalid tokens receive the same JSON 401 with `Cache-Control: no-store`, and token material is never logged.
 - `POST /api/v1/downloads` accepts a strict JSON magnet body `{magnet, category, stopped}` or a multipart form with a `torrent` file plus `category`/`stopped`, through the same shared submission service as the qBittorrent adapter (Section 11.4). New and revived submissions answer 201 with a `Location` header; an existing active row answers 200 unchanged. The body is `{created, download}`.
 - `GET /api/v1/downloads/{hash}` returns the query model: persisted uppercase state, projected progress, `row_version` as version, terminal/outcome mapping, sanitized error, timestamps, content path, and `links`. Additive nullable `error_code` and `next_retry_at` fields carry the durable problem code and the scheduled retry time when present; existing response semantics remain compatible. A `DELETED` row remains queryable; a never-existing hash is 404. `submission_uri`, raw sources, tracker passkeys, and cloud credentials are never exposed.
 - `GET /api/v1/downloads/{hash}/wait?timeout=1s..25s` is terminal-only: it answers 200 with the model once the download reaches `COMPLETED`, `FAILED`, `CANCELLED`, or `DELETED`, and 204 with the `X-CD211-Download-Version` header on timeout or runtime shutdown. `STOPPED` and all request/in-progress states stay non-terminal. Waiters observe the process-owned event signal (Section 7.5) without holding a database transaction.
@@ -469,9 +469,13 @@ Sonarr and Radarr treat qBittorrent `error` as a warning rather than guaranteed 
 
 CD211 reports qBittorrent WebAPI version `2.11.0`. This implies support for the modern `stopped` add parameter and `stoppedUP`/`stoppedDL` state names.
 
-All API routes require authentication except login and health checks.
+Every `/api/v2` route requires authentication except `POST /api/v2/auth/login`. Health checks are service-native routes outside this namespace.
 
 ### 11.1 Authentication
+
+Protected requests have two authentication paths. If `Authorization` is absent, CD211 validates the `SID` cookie described below. If the header is present, it takes precedence and the request must contain exactly one value in the exact form `Authorization: Bearer qbt_<key>`; malformed, unknown, or revoked keys receive the same HTTP 403 as an invalid SID and never fall back to a valid cookie sent with the request. Repository failures return HTTP 500.
+
+The `qbt_` key authorizes only `/api/v2`; it does not authorize the native `/api/v1` surface, whose independent `cd211_api_` token likewise does not authorize `/api/v2`. Key verification reads the stored digest for every request, so rotation and revocation apply immediately. After either SID or Bearer authentication succeeds, unsafe requests that include `Origin` must be same-origin; Bearer does not bypass this check. Non-browser requests without `Origin` retain the existing behavior and are allowed.
 
 #### `POST /api/v2/auth/login`
 
@@ -493,7 +497,7 @@ Invalid credentials return HTTP 200 with body `Fails.`. Five failures from one c
 
 #### `POST /api/v2/auth/logout`
 
-On success, durably revokes the current session, expires the SID cookie, and returns HTTP 200. A session-repository failure returns HTTP 500 without clearing the cookie or claiming a successful logout.
+On a SID-authenticated request, success durably revokes the current session, expires the SID cookie, and returns HTTP 200. A request authenticated only by a `qbt_` key also succeeds and sends an expired SID response cookie, but has no session to revoke. A session-repository failure returns HTTP 500 without clearing the cookie or claiming a successful logout.
 
 ### 11.2 Application API
 
@@ -946,13 +950,33 @@ updated_at        timestamp not null
 row_version       integer not null default 0 check (row_version >= 0)
 ```
 
-This single-row table holds the SHA-256 digest of the one system-generated global API token; a missing row means the native API is disabled. Lifecycle:
+This single-row table holds the SHA-256 digest of the one system-generated global `cd211_api_` Automation Token; a missing row means the native API is disabled. Lifecycle:
 
 - **Generate** (only while absent) creates the secret `cd211_api_` plus 32 crypto-random bytes encoded base64url, persists its SHA-256 digest with the hint (`cd211_api_…` plus the final six characters of the token), and shows the original token exactly once through a `Cache-Control: no-store` response. The original token is never stored, logged, or recoverable.
 - **Rotate** is the same atomic replace: the old token becomes invalid immediately, `updated_at` advances to the new generation, and `created_at` keeps the first-ever setup time.
-- **Revoke** deletes the row and disables the API until the next generate. Missing, invalid, or revoked tokens and the admin password or SID cookie all receive the same JSON 401; setup mode answers 503.
+- **Revoke** deletes the row and disables the API until the next generate. Missing, invalid, or revoked tokens, `qbt_` keys, the admin password, and SID cookies all receive the same JSON 401; setup mode answers 503.
 - The token does not expire. Row-version CAS makes concurrent generate/rotate/revoke safe: one write wins and stale writers receive 409.
 - Native authentication reads the row on every request, so lifecycle changes apply immediately without a runtime rebuild.
+
+### 12.11 `qbt_api_key`
+
+```text
+id                integer primary key check (id = 1)
+key_hash          blob not null check (length(key_hash) = 32)
+key_hint          text not null
+created_at        timestamp not null
+updated_at        timestamp not null
+active            integer not null default 1 check (active in (0, 1))
+row_version       integer not null default 0 check (row_version >= 0)
+```
+
+This independent singleton table holds only the SHA-256 digest and metadata for the qBittorrent `/api/v2` Bearer key. It is not an alias for `api_token`, and neither credential can authorize the other's API namespace. An inactive row is a revocation tombstone: ordinary reads treat it as absent, while its version prevents stale forms from matching a later key generation. Lifecycle:
+
+- **Generate** (only while absent or inactive) creates `qbt_` plus 32 crypto-random bytes encoded as 43 unpadded base64url characters, persists its digest with the hint (`qbt_…` plus the final six characters), and shows the plaintext exactly once through a `Cache-Control: no-store` HTML response. The plaintext is never stored, logged, or recoverable. Reactivating a tombstone advances `row_version` and resets both timestamps for the new key lifecycle.
+- **Rotate** atomically replaces the digest and hint, immediately invalidates the old key, advances `updated_at`, preserves `created_at`, and increments `row_version`.
+- **Revoke** marks the row inactive and increments `row_version`, immediately invalidating the key. Revoking an already absent or inactive key is idempotent.
+- The key does not expire. Monotonic row-version CAS serializes every lifecycle, including revoke then regenerate, so a stale Settings view receives a conflict instead of mutating a later key.
+- `/api/v2` Bearer authentication reads the row on every request, so rotate and revoke apply immediately without a runtime rebuild.
 
 ## 13. Reconciliation and Crash Safety
 
@@ -1111,11 +1135,20 @@ Allows operators to:
 - identify legacy categories detached from the current roots;
 - see that edits and root remaps apply only to future submissions.
 
-### 16.4 Change Password
+### 16.4 Settings
 
-A form behind authentication (current password, new password, confirmation) that replaces the operator password for both the Web UI and the qBittorrent-compatible API. The new password requires at least 8 characters, a matching confirmation, and proof of the current password; the change is persisted as a PBKDF2-SHA256 hash (Section 12.5). The page reminds the operator to update the qBittorrent password configured in Sonarr and Radarr. Existing sessions stay valid until their TTL expires.
+The authenticated Settings page manages service configuration and the two independent API credentials in separate sections:
 
-### 16.5 Webhooks
+- The Automation Token has the `cd211_api_` prefix and authorizes only the native `/api/v1` surface.
+- The qBittorrent API key has the `qbt_` prefix and authorizes only the qBittorrent-compatible `/api/v2` surface.
+- Each section exposes generate, rotate, and revoke controls plus non-sensitive timestamps and a trailing hint. Generate is available only while its credential is absent.
+- A generated or rotated plaintext credential is rendered once in a `Cache-Control: no-store` response and never appears on the ordinary Settings page. Rotation invalidates the previous credential immediately; revocation invalidates the current credential immediately.
+
+### 16.5 Change Password
+
+A form behind authentication (current password, new password, confirmation) that replaces the operator password for Web UI login and SID-based qBittorrent login. The new password requires at least 8 characters, a matching confirmation, and proof of the current password; the change is persisted as a PBKDF2-SHA256 hash (Section 12.5). The page reminds operators using username/password authentication to update their qBittorrent client configuration. Existing sessions and independent `qbt_` keys stay valid.
+
+### 16.6 Webhooks
 
 Manages multiple named endpoints at `/webhooks` with create, edit, enable/disable, HMAC secret rotation, delete, test, filters, and dead-letter replay. Each endpoint subscribes independently to `download.completed` and/or `download.failed`, and may be created enabled or disabled.
 
@@ -1123,7 +1156,7 @@ Manages multiple named endpoints at `/webhooks` with create, edit, enable/disabl
 - The signing secret is generated on create and rotation, shown once from a no-store response, and is not recoverable through the UI. The optional bearer token is never redisplayed; leaving it blank on edit preserves the stored value, and a dedicated clear control removes it.
 - Test enqueues a durable `webhook.test` event and one delivery targeted at the selected endpoint, using the normal signing, bearer, retry, and history path.
 
-### 16.6 Delivery History
+### 16.7 Delivery History
 
 Shows delivery history at `/webhook-deliveries` with filters and dead-letter replay.
 
@@ -1166,11 +1199,11 @@ CloudDrive2 access tokens
 
 ## 18. Security
 
-1. Every qBittorrent and Web UI route requires authentication except login, health checks, and the setup wizard (which is reachable only before setup completes).
-2. The operator username is fixed. The password is chosen during first-run setup — no default exists — and is stored in SQLite only as a salted PBKDF2-SHA256 hash. The CloudDrive2 credential is stored plaintext in the `settings` table because the CloudDrive2 API authenticates with it directly (Section 8.1); no other plaintext credentials are persisted.
-3. Session cookies contain only the raw cryptographically random SID and are persistent, `HttpOnly`, `SameSite=Lax`, and `Secure` on HTTPS. SQLite stores only the SID's SHA-256 digest plus session metadata; the raw SID is never persisted. The persisted session records and revocation state shared by setup, the Web UI, and the qBittorrent-compatible API survive process restarts, with a sliding 30-day expiry renewed at most once per 24 hours.
+1. Every protected qBittorrent `/api/v2` and Web UI route requires authentication; qBittorrent login, Web UI login, health checks, and the pre-setup wizard are the explicit public boundaries.
+2. The operator username is fixed. The password is chosen during first-run setup — no default exists — and is stored in SQLite only as a salted PBKDF2-SHA256 hash. The CloudDrive2 credential and outbound webhook secrets are stored plaintext because CD211 must send them to their destination services (Sections 8.1 and 12.7); the API credentials described below are digest-only.
+3. Session cookies contain only the raw cryptographically random SID and are persistent, `HttpOnly`, `SameSite=Lax`, and `Secure` on HTTPS. SQLite stores only the SID's SHA-256 digest plus session metadata; the raw SID is never persisted. The persisted session records and revocation state shared by setup, the Web UI, and SID-authenticated `/api/v2` requests survive process restarts, with a sliding 30-day expiry renewed at most once per 24 hours.
 4. Login failures are rate-limited by client address with bounded in-memory state and a temporary authentication ban.
-5. Native Web UI state-changing forms require a per-session CSRF token; authenticated browser mutations must also be same-origin.
+5. Web UI state-changing forms require a per-session CSRF token. Browser-originated mutations must also be same-origin, and the `/api/v2` Origin check runs after either SID or `qbt_` Bearer authentication; a non-browser request without `Origin` retains the existing allowed behavior.
 6. The API accepts only configured category paths and internally generated content paths.
 7. Local deletion verifies containment and refuses a content tree containing any symbolic link.
 8. Uploaded torrent size is bounded before parsing.
@@ -1181,9 +1214,10 @@ CloudDrive2 access tokens
 13. Outbound webhook requests are JSON POSTs with `Content-Type: application/json`, signed `v1=` plus lowercase hex HMAC-SHA256 over `<timestamp>.<raw-body>`, and carry `X-CD211-Event`, `X-CD211-Event-ID`, `X-CD211-Timestamp`, `X-CD211-Signature`, and an optional `Authorization: Bearer <token>`; receivers must verify the signature against the exact raw body before parsing and deduplicate by event ID. Redirects are never followed.
 14. Webhook receiver URLs are validated to be absolute HTTP/HTTPS URLs without userinfo or fragment. Query strings are allowed and delivered, but raw query values are redacted from ordinary Web UI reads and edit forms. Private/LAN receivers are intentionally allowed, so operators must configure only trusted URLs; CD211 provides no public-webhook SSRF allowlist.
 15. Webhook signing secrets and bearer tokens live in the mode-restricted SQLite database, are never logged, and are not recoverable through the UI. Receiver URLs, secrets, and request bodies are never written to logs.
-16. The native automation API is authenticated by the single system-generated global API token: only `Authorization: Bearer <token>` is accepted, and SID cookies or the admin password never authenticate the native surface. SQLite stores only the token's SHA-256 digest and a trailing hint; the original token is shown once from a no-store response and is never logged or recoverable. Rotation invalidates the old token immediately, revocation disables the API, and the token does not expire.
-17. Setup mode answers every `/api/v1/*` request with an unauthenticated JSON 503; a missing or invalid token in the configured runtime receives the same JSON 401 with `Cache-Control: no-store`. API errors are stable `{error: {code, message}}` bodies that never leak raw repository or network errors.
-18. Native long polls and the event feed share the trusted single-token deployment boundary: they provide no public or multi-tenant abuse resistance, and failed-event error output is sanitized, including frozen paths.
+16. The native automation API is authenticated by the single system-generated global `cd211_api_` Automation Token: only `Authorization: Bearer <cd211_api_ token>` is accepted, and `qbt_` keys, SID cookies, or the admin password never authenticate the native surface. SQLite stores only the token's SHA-256 digest and a trailing hint; the original token is shown once from a no-store response and is never logged or recoverable. Rotation invalidates the old token immediately, revocation disables the API, and the token does not expire.
+17. The qBittorrent `/api/v2` surface accepts either a valid SID cookie or the independent `Authorization: Bearer <qbt_ key>`. The presence of any `Authorization` header selects the Bearer path, so malformed, invalid, or revoked credentials fail with HTTP 403 without SID fallback. SQLite stores only the key's SHA-256 digest and trailing hint; generation and rotation reveal plaintext once from a no-store response. Rotation and revocation invalidate the previous key immediately.
+18. Setup mode answers every `/api/v1/*` request with an unauthenticated JSON 503; a missing or invalid token in the configured runtime receives the same JSON 401 with `Cache-Control: no-store`. API errors are stable `{error: {code, message}}` bodies that never leak raw repository or network errors.
+19. Native long polls and the event feed share the trusted single-token deployment boundary: they provide no public or multi-tenant abuse resistance, and failed-event error output is sanitized, including frozen paths.
 
 ## 19. Verification Strategy
 

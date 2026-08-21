@@ -175,6 +175,7 @@ type SettingsView struct {
 	Notice     string
 	Success    bool
 	APIToken   APITokenView
+	QBTAPIKey  QBTAPIKeyView
 }
 
 // APITokenView renders the Automation API token lifecycle section of the
@@ -188,9 +189,26 @@ type APITokenView struct {
 	RowVersion int64
 }
 
+// QBTAPIKeyView renders qBittorrent API key metadata. It never carries the
+// plaintext secret or its digest.
+type QBTAPIKeyView struct {
+	Configured bool
+	Hint       string
+	CreatedAt  string
+	UpdatedAt  string
+	RowVersion int64
+}
+
 // APITokenSecretView renders the one-time token reveal page. It must only be
 // served with Cache-Control: no-store and never linked, redirected, or cached.
 type APITokenSecretView struct {
+	PageMeta
+	Secret string
+}
+
+// QBTAPIKeySecretView renders the one-time qBittorrent API key reveal page.
+// It must only be served with Cache-Control: no-store.
+type QBTAPIKeySecretView struct {
 	PageMeta
 	Secret string
 }

@@ -129,10 +129,9 @@ func TestManagerApplyRejectsRebuildAfterShutdown(t *testing.T) {
 	}
 }
 
-// TestConfiguredRuntimeMountsNativeAPI verifies the Phase 2 routing: a built
-// runtime mounts the authenticated native API at /api/v1/ (401 without a
-// token) while the qBittorrent surface keeps serving.
-func TestConfiguredRuntimeMountsNativeAPI(t *testing.T) {
+// TestConfiguredRuntimeMountsAPIs verifies that the built runtime keeps the
+// native and qBittorrent authentication boundaries independent.
+func TestConfiguredRuntimeMountsAPIs(t *testing.T) {
 	ctx := context.Background()
 	st := openApplyStore(t)
 	cfg := applyTestConfig(t)
@@ -177,5 +176,17 @@ func TestConfiguredRuntimeMountsNativeAPI(t *testing.T) {
 	root.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v2/torrents/add", nil))
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("qBittorrent add status = %d, want 403 without SID", recorder.Code)
+	}
+
+	qbtSecret, err := st.GenerateQBTAPIKey(ctx, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("GenerateQBTAPIKey: %v", err)
+	}
+	recorder = httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v2/app/version", nil)
+	request.Header.Set("Authorization", "Bearer "+string(qbtSecret))
+	root.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("qBittorrent Bearer status = %d, want 200; body=%q", recorder.Code, recorder.Body.String())
 	}
 }

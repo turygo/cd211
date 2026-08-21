@@ -12,6 +12,7 @@ import (
 
 	"github.com/turygo/cd211/internal/domain"
 	"github.com/turygo/cd211/internal/fsafe"
+	"github.com/turygo/cd211/internal/qbtkey"
 	"github.com/turygo/cd211/internal/session"
 	"github.com/turygo/cd211/internal/store"
 	"github.com/turygo/cd211/internal/submission"
@@ -35,6 +36,12 @@ type repository interface {
 	SetCategory(context.Context, string, string, time.Time) error
 	Start(context.Context, string, time.Time) error
 	RequestDelete(context.Context, []string, bool, time.Time) error
+}
+
+// QBTAPIKeyRepository is the narrow qBittorrent API key lookup boundary used
+// by the HTTP authentication middleware.
+type QBTAPIKeyRepository interface {
+	GetQBTAPIKey(context.Context) (qbtkey.Key, error)
 }
 
 // Clock provides the current time to handlers.
@@ -70,6 +77,7 @@ type handler struct {
 	config     Config
 	creds      Credentials
 	repo       repository
+	qbtkeys    QBTAPIKeyRepository
 	sessions   *session.Store
 	clock      Clock
 	waker      Waker
@@ -80,8 +88,8 @@ type handler struct {
 // New creates the authenticated qBittorrent-compatible HTTP handler. service
 // is the shared submission boundary also consumed by the native API; it owns
 // torrents/add parsing, category lookup, and persistence.
-func New(config Config, credentials Credentials, repo repository, sessions *session.Store, clock Clock, waker Waker, files filesystem, service *submission.Service) (http.Handler, error) {
-	if isNil(credentials) || isNil(repo) || sessions == nil || isNil(clock) || isNil(waker) || isNil(files) || isNil(service) {
+func New(config Config, credentials Credentials, repo repository, sessions *session.Store, clock Clock, waker Waker, files filesystem, service *submission.Service, qbtkeys QBTAPIKeyRepository) (http.Handler, error) {
+	if isNil(credentials) || isNil(repo) || isNil(qbtkeys) || sessions == nil || isNil(clock) || isNil(waker) || isNil(files) || isNil(service) {
 		return nil, errors.New("httpapi dependency is nil")
 	}
 	if !validCloudRoot(config.CloudRoot) {
@@ -97,7 +105,7 @@ func New(config Config, credentials Credentials, repo repository, sessions *sess
 		return nil, errors.New("request limit is too small")
 	}
 
-	h := &handler{config: config, creds: credentials, repo: repo, sessions: sessions, clock: clock, waker: waker, filesystem: files, service: service}
+	h := &handler{config: config, creds: credentials, repo: repo, qbtkeys: qbtkeys, sessions: sessions, clock: clock, waker: waker, filesystem: files, service: service}
 	mux := http.NewServeMux()
 	routes := map[string]string{
 		apiPrefix + "auth/login":              http.MethodPost,
