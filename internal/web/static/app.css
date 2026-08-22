@@ -539,6 +539,7 @@ input:focus, select:focus {
 .download-table .col-state { width: 210px; }
 .download-table .col-category { width: 110px; }
 .download-table .col-age { width: 100px; }
+.download-table .col-duration { width: 130px; }
 .download-table .col-actions { width: 86px; }
 
 table {
@@ -600,7 +601,7 @@ tbody tr:hover { background: var(--row-hover); }
 }
 
 .cell-category { white-space: nowrap; }
-.cell-age, .col-age { white-space: nowrap; color: var(--text-tertiary); }
+.cell-age, .cell-duration, .col-age, .col-duration { white-space: nowrap; color: var(--text-tertiary); }
 .cell-status, .col-state { min-width: 210px; width: 210px; }
 .cell-index, .cell-size, .col-size { font-family: var(--font-mono); font-size: 12px; white-space: nowrap; }
 

@@ -1291,7 +1291,10 @@ func (fixture *webFixture) requestLang(method, target string, authenticated bool
 func TestLanguagePreferenceRendersChinese(t *testing.T) {
 	fixture := newWebFixture(t)
 	fixture.seedCategory("movies", true)
-	fixture.seedDownload("a", domain.StateWaitingOffline, nil)
+	fixture.seedDownload("a", domain.StateWaitingOffline, func(download *domain.Download) {
+		started := fixture.clock.now.Add(-9 * 24 * time.Hour)
+		download.OfflineStartedAt = &started
+	})
 
 	login := fixture.requestLang(http.MethodGet, "/login", false, "zh")
 	requireStatus(t, login, http.StatusOK)
@@ -1299,7 +1302,7 @@ func TestLanguagePreferenceRendersChinese(t *testing.T) {
 
 	downloads := fixture.requestLang(http.MethodGet, "/?view=all", true, "zh")
 	requireStatus(t, downloads, http.StatusOK)
-	requireContains(t, downloads.Body.String(), "115 离线下载 · 35%", "CloudDrive2 在线", "下载任务", "分类管理", `data-state="WAITING_OFFLINE" aria-label="115 离线下载 · 35% · 等待离线下载" title="115 离线下载 · 35% · 等待离线下载">115 离线下载 · 35%</span>`)
+	requireContains(t, downloads.Body.String(), "115 离线下载 · 35%", "CloudDrive2 在线", "下载任务", "分类管理", "总共耗时", "9天", `data-state="WAITING_OFFLINE" aria-label="115 离线下载 · 35% · 等待离线下载" title="115 离线下载 · 35% · 等待离线下载">115 离线下载 · 35%</span>`)
 	englishDownloads := fixture.requestLang(http.MethodGet, "/?view=all", true, "en")
 	requireStatus(t, englishDownloads, http.StatusOK)
 	requireContains(t, englishDownloads.Body.String(), `data-state="WAITING_OFFLINE" aria-label="115 OFFLINE · 35% · Waiting for offline download" title="115 OFFLINE · 35% · Waiting for offline download">115 OFFLINE · 35%</span>`)

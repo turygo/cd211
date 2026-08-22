@@ -57,31 +57,40 @@ type Strings struct {
 	LoginFailed string
 
 	// Downloads list
-	TitleDownloads    string
-	ShownFormat       string // printf with row count
-	CloudOnline       string
-	CloudUnavailable  string
-	FilterView        string
-	FilterCategory    string
-	Apply             string
-	SearchLabel       string
-	SearchPlaceholder string
-	AllCategories     string
-	ViewActive        string
-	ViewCompleted     string
-	ViewFailed        string
-	ViewCancelled     string
-	ViewAll           string
-	ThName            string
-	ThState           string
-	ThCategory        string
-	ThUpdated         string
-	ThActions         string
-	AgoFormat         string // printf with age like "5m"
-	EmptyTitle        string
-	EmptyBody         string
-	PaginationFormat  string // printf with first row, last row, and total count
-	PreviousPage      string
+	TitleDownloads       string
+	ShownFormat          string // printf with row count
+	CloudOnline          string
+	CloudUnavailable     string
+	FilterView           string
+	FilterCategory       string
+	Apply                string
+	SearchLabel          string
+	SearchPlaceholder    string
+	AllCategories        string
+	ViewActive           string
+	ViewCompleted        string
+	ViewFailed           string
+	ViewCancelled        string
+	ViewAll              string
+	ThName               string
+	ThState              string
+	ThCategory           string
+	ThUpdated            string
+	ThDuration           string
+	ThActions            string
+	AgoFormat            string // printf with localized relative age
+	AgeSecondFormat      string // printf with a whole-second age
+	AgeMinuteFormat      string // printf with a whole-minute age
+	AgeHourFormat        string // printf with a whole-hour age
+	AgeDayFormat         string // printf with a whole-day age
+	DurationSecondFormat string // printf with a whole-second duration
+	DurationMinuteFormat string // printf with a whole-minute duration
+	DurationHourFormat   string // printf with a whole-hour duration
+	DurationDayFormat    string // printf with a whole-day duration
+	EmptyTitle           string
+	EmptyBody            string
+	PaginationFormat     string // printf with first row, last row, and total count
+	PreviousPage         string
 	// States contains complete labels for detail views and accessible names.
 	States StateLabels
 	// CompactStates contains single-line labels for download-list badges.
@@ -114,6 +123,7 @@ type Strings struct {
 	Created            string
 	Updated            string
 	PhaseStarted       string
+	TotalDuration      string
 	NextRun            string
 	CompletedLabel     string
 	Attempts           string
@@ -168,11 +178,12 @@ type Strings struct {
 	CategoryRemapFailed     string
 
 	// Values produced by view builders
-	NotRecorded   string
-	NotScheduled  string
-	NotCompleted  string
-	Uncategorized string
-	RedactedError string
+	NotRecorded         string
+	NotScheduled        string
+	NotCompleted        string
+	DurationUnavailable string
+	Uncategorized       string
+	RedactedError       string
 
 	// Durable download problems
 	// Problems maps stable problem codes to localized operator messages.
@@ -402,31 +413,40 @@ var stringsEN = Strings{
 	SignIn:      "Sign in",
 	LoginFailed: "The username or password did not match.",
 
-	TitleDownloads:    "Downloads",
-	ShownFormat:       "%d shown",
-	CloudOnline:       "Online",
-	CloudUnavailable:  "Issue",
-	FilterView:        "View",
-	FilterCategory:    "Category",
-	Apply:             "Apply",
-	SearchLabel:       "Search",
-	SearchPlaceholder: "Name or hash",
-	AllCategories:     "All categories",
-	ViewActive:        "Active",
-	ViewCompleted:     "Completed",
-	ViewFailed:        "Failed",
-	ViewCancelled:     "Cancelled",
-	ViewAll:           "All records",
-	ThName:            "Name",
-	ThState:           "State",
-	ThCategory:        "Category",
-	ThUpdated:         "Updated",
-	ThActions:         "Actions",
-	AgoFormat:         "%s ago",
-	EmptyTitle:        "No downloads match this filter.",
-	EmptyBody:         "Pick another view or category, or submit a release from Sonarr or Radarr.",
-	PaginationFormat:  "%d–%d of %d",
-	PreviousPage:      "Previous",
+	TitleDownloads:       "Downloads",
+	ShownFormat:          "%d shown",
+	CloudOnline:          "Online",
+	CloudUnavailable:     "Issue",
+	FilterView:           "View",
+	FilterCategory:       "Category",
+	Apply:                "Apply",
+	SearchLabel:          "Search",
+	SearchPlaceholder:    "Name or hash",
+	AllCategories:        "All categories",
+	ViewActive:           "Active",
+	ViewCompleted:        "Completed",
+	ViewFailed:           "Failed",
+	ViewCancelled:        "Cancelled",
+	ViewAll:              "All records",
+	ThName:               "Name",
+	ThState:              "State",
+	ThCategory:           "Category",
+	ThUpdated:            "Updated",
+	ThDuration:           "Total duration",
+	ThActions:            "Actions",
+	AgoFormat:            "%s ago",
+	AgeSecondFormat:      "%ds",
+	AgeMinuteFormat:      "%dm",
+	AgeHourFormat:        "%dh",
+	AgeDayFormat:         "%dd",
+	DurationSecondFormat: "%ds",
+	DurationMinuteFormat: "%dm",
+	DurationHourFormat:   "%dh",
+	DurationDayFormat:    "%dd",
+	EmptyTitle:           "No downloads match this filter.",
+	EmptyBody:            "Pick another view or category, or submit a release from Sonarr or Radarr.",
+	PaginationFormat:     "%d–%d of %d",
+	PreviousPage:         "Previous",
 	States: StateLabels{
 		Accepted:          "Accepted",
 		Stopped:           "Paused",
@@ -485,6 +505,7 @@ var stringsEN = Strings{
 	Created:            "Created",
 	Updated:            "Updated",
 	PhaseStarted:       "Phase started",
+	TotalDuration:      "Total duration",
 	NextRun:            "Next run",
 	CompletedLabel:     "Completed",
 	Attempts:           "Attempts",
@@ -537,11 +558,12 @@ var stringsEN = Strings{
 	CategoryPrepareFailed:   "The shared staging subfolder could not be prepared. Check the root path and permissions.",
 	CategoryRemapFailed:     "The roots were not changed because one or more category paths could not be safely remapped.",
 
-	NotRecorded:   "Not recorded",
-	NotScheduled:  "Not scheduled",
-	NotCompleted:  "Not completed",
-	Uncategorized: "Uncategorized",
-	RedactedError: "Protected upstream details were redacted.",
+	NotRecorded:         "Not recorded",
+	NotScheduled:        "Not scheduled",
+	NotCompleted:        "Not completed",
+	DurationUnavailable: "Not available",
+	Uncategorized:       "Uncategorized",
+	RedactedError:       "Protected upstream details were redacted.",
 
 	RetryingTitle:        "Retrying automatically",
 	RetryScheduledFormat: "CD211 will retry automatically. Next retry %s.",
@@ -780,31 +802,40 @@ var stringsZH = Strings{
 	SignIn:      "登录",
 	LoginFailed: "用户名或密码不正确。",
 
-	TitleDownloads:    "下载任务",
-	ShownFormat:       "共 %d 条",
-	CloudOnline:       "在线",
-	CloudUnavailable:  "异常",
-	FilterView:        "视图",
-	FilterCategory:    "分类",
-	Apply:             "应用",
-	SearchLabel:       "搜索",
-	SearchPlaceholder: "任务名称或哈希",
-	AllCategories:     "全部分类",
-	ViewActive:        "进行中",
-	ViewCompleted:     "已完成",
-	ViewFailed:        "已失败",
-	ViewCancelled:     "已取消",
-	ViewAll:           "全部记录",
-	ThName:            "名称",
-	ThState:           "状态",
-	ThCategory:        "分类",
-	ThUpdated:         "更新时间",
-	ThActions:         "操作",
-	AgoFormat:         "%s 前",
-	EmptyTitle:        "没有符合筛选条件的下载任务。",
-	EmptyBody:         "可尝试切换视图或分类，也可以从 Sonarr 或 Radarr 提交新任务。",
-	PaginationFormat:  "第 %d–%d 条，共 %d 条",
-	PreviousPage:      "上一页",
+	TitleDownloads:       "下载任务",
+	ShownFormat:          "共 %d 条",
+	CloudOnline:          "在线",
+	CloudUnavailable:     "异常",
+	FilterView:           "视图",
+	FilterCategory:       "分类",
+	Apply:                "应用",
+	SearchLabel:          "搜索",
+	SearchPlaceholder:    "任务名称或哈希",
+	AllCategories:        "全部分类",
+	ViewActive:           "进行中",
+	ViewCompleted:        "已完成",
+	ViewFailed:           "已失败",
+	ViewCancelled:        "已取消",
+	ViewAll:              "全部记录",
+	ThName:               "名称",
+	ThState:              "状态",
+	ThCategory:           "分类",
+	ThUpdated:            "更新时间",
+	ThDuration:           "总共耗时",
+	ThActions:            "操作",
+	AgoFormat:            "%s前",
+	AgeSecondFormat:      "%d秒",
+	AgeMinuteFormat:      "%d分",
+	AgeHourFormat:        "%d小时",
+	AgeDayFormat:         "%d天",
+	DurationSecondFormat: "%d秒",
+	DurationMinuteFormat: "%d分",
+	DurationHourFormat:   "%d小时",
+	DurationDayFormat:    "%d天",
+	EmptyTitle:           "没有符合筛选条件的下载任务。",
+	EmptyBody:            "可尝试切换视图或分类，也可以从 Sonarr 或 Radarr 提交新任务。",
+	PaginationFormat:     "第 %d–%d 条，共 %d 条",
+	PreviousPage:         "上一页",
 	States: StateLabels{
 		Accepted:          "待处理",
 		Stopped:           "已暂停",
@@ -862,6 +893,7 @@ var stringsZH = Strings{
 	Created:            "创建时间",
 	Updated:            "更新时间",
 	PhaseStarted:       "阶段开始时间",
+	TotalDuration:      "总共耗时",
 	NextRun:            "下次调度",
 	CompletedLabel:     "完成时间",
 	Attempts:           "尝试次数",
@@ -914,11 +946,12 @@ var stringsZH = Strings{
 	CategoryPrepareFailed:   "无法准备共享暂存子目录，请检查根目录和目录权限。",
 	CategoryRemapFailed:     "一个或多个分类路径无法安全映射，因此没有修改根目录。",
 
-	NotRecorded:   "未记录",
-	NotScheduled:  "未调度",
-	NotCompleted:  "未完成",
-	Uncategorized: "未分类",
-	RedactedError: "上游错误包含敏感信息，已脱敏。",
+	NotRecorded:         "未记录",
+	NotScheduled:        "未调度",
+	NotCompleted:        "未完成",
+	DurationUnavailable: "暂无数据",
+	Uncategorized:       "未分类",
+	RedactedError:       "上游错误包含敏感信息，已脱敏。",
 
 	RetryingTitle:        "自动重试中",
 	RetryScheduledFormat: "CD211 会自动重试。下次重试时间：%s。",

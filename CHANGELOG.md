@@ -8,6 +8,10 @@ section using the release version and date.
 
 ## [Unreleased]
 
+### Fixed
+
+- 修复中文下载列表相对时间单位显示为英文缩写的问题，并新增排除队列等待时间的 115 到 NAS 总耗时展示。
+
 ## [0.3.13] - 2026-08-22
 
 ### Changed

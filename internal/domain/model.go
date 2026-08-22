@@ -59,6 +59,8 @@ type Download struct {
 	LastError            string
 	LastErrorCode        string
 	PhaseStartedAt       time.Time
+	OfflineStartedAt     *time.Time
+	CopyCompletedAt      *time.Time
 	NextRunAt            *time.Time
 	LeaseUntil           *time.Time
 	LeaseOwner           string

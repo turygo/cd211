@@ -33,6 +33,8 @@ SET
     last_error = sqlc.arg(last_error),
     last_error_code = sqlc.arg(last_error_code),
     phase_started_at = sqlc.arg(phase_started_at),
+    offline_started_at = sqlc.narg(offline_started_at),
+    copy_completed_at = sqlc.narg(copy_completed_at),
     next_run_at = sqlc.arg(next_run_at),
     attempt_count = sqlc.arg(attempt_count),
     delete_files_requested = sqlc.arg(delete_files_requested),

@@ -750,7 +750,7 @@ func downloadRow(row storedb.Download) (domain.Download, error) {
 	}
 	sourceKind := domain.SourceKind(row.SourceKind)
 	state := domain.State(row.State)
-	if !sourceKind.Valid() || !state.Valid() || row.PhaseStartedAt.IsZero() || row.CreatedAt.IsZero() || row.UpdatedAt.IsZero() || row.UpdatedAt.Before(row.CreatedAt) || !validNullableTime(row.NextRunAt) || !validNullableTime(row.LeaseUntil) || !validNullableTime(row.CompletedAt) || !validNullableTime(row.RemovedAt) {
+	if !sourceKind.Valid() || !state.Valid() || row.PhaseStartedAt.IsZero() || row.CreatedAt.IsZero() || row.UpdatedAt.IsZero() || row.UpdatedAt.Before(row.CreatedAt) || !validNullableTime(row.NextRunAt) || !validNullableTime(row.LeaseUntil) || !validNullableTime(row.OfflineStartedAt) || !validNullableTime(row.CopyCompletedAt) || !validNullableTime(row.CompletedAt) || !validNullableTime(row.RemovedAt) {
 		return domain.Download{}, errors.New("stored download is invalid")
 	}
 	download := domain.Download{
@@ -759,7 +759,8 @@ func downloadRow(row storedb.Download) (domain.Download, error) {
 		CloudTaskName: nullString(row.CloudTaskName), CloudSourcePath: nullString(row.CloudSourcePath), ContentPath: nullString(row.ContentPath),
 		TotalSize: row.TotalSize, State: state, OfflineProgress: row.OfflineProgress, CopyProgress: row.CopyProgress, QbitProgress: row.QbitProgress,
 		LastUpstreamStatus: nullString(row.LastUpstreamStatus), LastError: nullString(row.LastError), LastErrorCode: nullString(row.LastErrorCode),
-		PhaseStartedAt: row.PhaseStartedAt, NextRunAt: nullTime(row.NextRunAt), LeaseUntil: nullTime(row.LeaseUntil), LeaseOwner: nullString(row.LeaseOwner),
+		PhaseStartedAt: row.PhaseStartedAt, OfflineStartedAt: nullTime(row.OfflineStartedAt), CopyCompletedAt: nullTime(row.CopyCompletedAt),
+		NextRunAt: nullTime(row.NextRunAt), LeaseUntil: nullTime(row.LeaseUntil), LeaseOwner: nullString(row.LeaseOwner),
 		AttemptCount: row.AttemptCount, DeleteFilesRequested: row.DeleteFilesRequested == 1, PauseRequested: row.PauseRequested == 1,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, CompletedAt: nullTime(row.CompletedAt), RemovedAt: nullTime(row.RemovedAt), RowVersion: row.RowVersion,
 	}
@@ -789,7 +790,8 @@ func insertDownloadParams(download domain.Download) storedb.InsertDownloadParams
 		IsMultiFile: nullableBool(download.IsMultiFile), TotalSize: download.TotalSize, State: string(download.State),
 		OfflineProgress: download.OfflineProgress, CopyProgress: download.CopyProgress, QbitProgress: download.QbitProgress,
 		LastUpstreamStatus: nullableString(download.LastUpstreamStatus), LastError: nullableString(download.LastError), LastErrorCode: nullableString(download.LastErrorCode),
-		PhaseStartedAt: download.PhaseStartedAt, NextRunAt: nullableTime(download.NextRunAt), LeaseUntil: nullableTime(download.LeaseUntil), LeaseOwner: nullableString(download.LeaseOwner),
+		PhaseStartedAt: download.PhaseStartedAt, OfflineStartedAt: nullableTime(download.OfflineStartedAt), CopyCompletedAt: nullableTime(download.CopyCompletedAt),
+		NextRunAt: nullableTime(download.NextRunAt), LeaseUntil: nullableTime(download.LeaseUntil), LeaseOwner: nullableString(download.LeaseOwner),
 		AttemptCount: download.AttemptCount, DeleteFilesRequested: boolInteger(download.DeleteFilesRequested),
 		CreatedAt: download.CreatedAt, UpdatedAt: download.UpdatedAt, CompletedAt: nullableTime(download.CompletedAt), RemovedAt: nullableTime(download.RemovedAt), RowVersion: download.RowVersion,
 	}
@@ -802,7 +804,8 @@ func reviveDownloadParams(download domain.Download) storedb.ReviveDownloadParams
 		CloudTaskName: nullableString(download.CloudTaskName), CloudSourcePath: nullableString(download.CloudSourcePath), ContentPath: nullableString(download.ContentPath),
 		IsMultiFile: nullableBool(download.IsMultiFile), TotalSize: download.TotalSize, State: string(download.State),
 		OfflineProgress: download.OfflineProgress, CopyProgress: download.CopyProgress, QbitProgress: download.QbitProgress, LastUpstreamStatus: nullableString(download.LastUpstreamStatus),
-		PhaseStartedAt: download.PhaseStartedAt, NextRunAt: nullableTime(download.NextRunAt), CreatedAt: download.CreatedAt, UpdatedAt: download.UpdatedAt, Hash: download.Hash,
+		PhaseStartedAt: download.PhaseStartedAt, OfflineStartedAt: nullableTime(download.OfflineStartedAt), CopyCompletedAt: nullableTime(download.CopyCompletedAt),
+		NextRunAt: nullableTime(download.NextRunAt), CreatedAt: download.CreatedAt, UpdatedAt: download.UpdatedAt, Hash: download.Hash,
 	}
 }
 
@@ -814,7 +817,8 @@ func commitClaimParams(claim Claim, download domain.Download) storedb.CommitClai
 		IsMultiFile: nullableBool(download.IsMultiFile), TotalSize: download.TotalSize, State: string(download.State),
 		OfflineProgress: download.OfflineProgress, CopyProgress: download.CopyProgress, QbitProgress: download.QbitProgress,
 		LastUpstreamStatus: nullableString(download.LastUpstreamStatus), LastError: nullableString(download.LastError), LastErrorCode: nullableString(download.LastErrorCode),
-		PhaseStartedAt: download.PhaseStartedAt, NextRunAt: nullableTime(download.NextRunAt), AttemptCount: download.AttemptCount,
+		PhaseStartedAt: download.PhaseStartedAt, OfflineStartedAt: nullableTime(download.OfflineStartedAt), CopyCompletedAt: nullableTime(download.CopyCompletedAt),
+		NextRunAt: nullableTime(download.NextRunAt), AttemptCount: download.AttemptCount,
 		DeleteFilesRequested: boolInteger(download.DeleteFilesRequested), PauseRequested: boolInteger(download.PauseRequested),
 		UpdatedAt: download.UpdatedAt, CompletedAt: nullableTime(download.CompletedAt), RemovedAt: nullableTime(download.RemovedAt),
 		Hash: claim.Download.Hash, ExpectedState: string(claim.State), LeaseOwner: sql.NullString{String: claim.Owner, Valid: true}, ExpectedRowVersion: claim.Version,

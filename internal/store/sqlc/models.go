@@ -72,6 +72,8 @@ type Download struct {
 	RowVersion           int64          `json:"row_version"`
 	PauseRequested       int64          `json:"pause_requested"`
 	LastErrorCode        sql.NullString `json:"last_error_code"`
+	OfflineStartedAt     sql.NullTime   `json:"offline_started_at"`
+	CopyCompletedAt      sql.NullTime   `json:"copy_completed_at"`
 }
 
 type DownloadFile struct {

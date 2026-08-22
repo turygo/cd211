@@ -682,7 +682,7 @@ func (h *handler) detail(w http.ResponseWriter, r *http.Request) {
 		repositoryError(w, err)
 		return
 	}
-	page, err := buildDetailView(download, files, h.authSession(r).CSRFToken, requestLang(r))
+	page, err := buildDetailView(download, files, h.authSession(r).CSRFToken, requestLang(r), h.clock.Now().UTC())
 	if err != nil {
 		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 		return
@@ -979,7 +979,7 @@ func (h *handler) detailUpdates(w http.ResponseWriter, r *http.Request) {
 		repositoryError(w, err)
 		return
 	}
-	page, err := buildDetailView(download, files, h.authSession(r).CSRFToken, requestLang(r))
+	page, err := buildDetailView(download, files, h.authSession(r).CSRFToken, requestLang(r), h.clock.Now().UTC())
 	if err != nil {
 		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 		return

@@ -56,7 +56,7 @@ func (q *Queries) DeleteDownloadFiles(ctx context.Context, downloadHash string) 
 }
 
 const getDownload = `-- name: GetDownload :one
-SELECT hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_source_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version, pause_requested, last_error_code
+SELECT hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_source_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version, pause_requested, last_error_code, offline_started_at, copy_completed_at
 FROM downloads
 WHERE hash = ?1
 `
@@ -97,6 +97,8 @@ func (q *Queries) GetDownload(ctx context.Context, hash string) (Download, error
 		&i.RowVersion,
 		&i.PauseRequested,
 		&i.LastErrorCode,
+		&i.OfflineStartedAt,
+		&i.CopyCompletedAt,
 	)
 	return i, err
 }
@@ -124,6 +126,8 @@ INSERT INTO downloads (
     last_error,
     last_error_code,
     phase_started_at,
+    offline_started_at,
+    copy_completed_at,
     next_run_at,
     lease_until,
     lease_owner,
@@ -165,7 +169,9 @@ INSERT INTO downloads (
     ?28,
     ?29,
     ?30,
-    ?31
+    ?31,
+    ?32,
+    ?33
 )
 `
 
@@ -191,6 +197,8 @@ type InsertDownloadParams struct {
 	LastError            sql.NullString `json:"last_error"`
 	LastErrorCode        sql.NullString `json:"last_error_code"`
 	PhaseStartedAt       time.Time      `json:"phase_started_at"`
+	OfflineStartedAt     sql.NullTime   `json:"offline_started_at"`
+	CopyCompletedAt      sql.NullTime   `json:"copy_completed_at"`
 	NextRunAt            sql.NullTime   `json:"next_run_at"`
 	LeaseUntil           sql.NullTime   `json:"lease_until"`
 	LeaseOwner           sql.NullString `json:"lease_owner"`
@@ -226,6 +234,8 @@ func (q *Queries) InsertDownload(ctx context.Context, arg InsertDownloadParams) 
 		arg.LastError,
 		arg.LastErrorCode,
 		arg.PhaseStartedAt,
+		arg.OfflineStartedAt,
+		arg.CopyCompletedAt,
 		arg.NextRunAt,
 		arg.LeaseUntil,
 		arg.LeaseOwner,
@@ -272,7 +282,7 @@ func (q *Queries) InsertDownloadFile(ctx context.Context, arg InsertDownloadFile
 }
 
 const listAllVisibleDownloads = `-- name: ListAllVisibleDownloads :many
-SELECT hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_source_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version, pause_requested, last_error_code
+SELECT hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_source_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version, pause_requested, last_error_code, offline_started_at, copy_completed_at
 FROM downloads
 WHERE removed_at IS NULL OR (state = 'DELETE_REQUESTED' AND last_error IS NOT NULL)
 ORDER BY created_at DESC, hash ASC
@@ -320,6 +330,8 @@ func (q *Queries) ListAllVisibleDownloads(ctx context.Context) ([]Download, erro
 			&i.RowVersion,
 			&i.PauseRequested,
 			&i.LastErrorCode,
+			&i.OfflineStartedAt,
+			&i.CopyCompletedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -370,7 +382,7 @@ func (q *Queries) ListDownloadFiles(ctx context.Context, downloadHash string) ([
 }
 
 const listVisibleDownloads = `-- name: ListVisibleDownloads :many
-SELECT hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_source_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version, pause_requested, last_error_code
+SELECT hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_source_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version, pause_requested, last_error_code, offline_started_at, copy_completed_at
 FROM downloads
 WHERE category = ?1
   AND (removed_at IS NULL OR (state = 'DELETE_REQUESTED' AND last_error IS NOT NULL))
@@ -419,6 +431,8 @@ func (q *Queries) ListVisibleDownloads(ctx context.Context, category string) ([]
 			&i.RowVersion,
 			&i.PauseRequested,
 			&i.LastErrorCode,
+			&i.OfflineStartedAt,
+			&i.CopyCompletedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -613,18 +627,20 @@ SET
     last_error = NULL,
     last_error_code = NULL,
     phase_started_at = ?18,
-    next_run_at = ?19,
+    offline_started_at = ?19,
+    copy_completed_at = ?20,
+    next_run_at = ?21,
     lease_until = NULL,
     lease_owner = NULL,
     attempt_count = 0,
     delete_files_requested = 0,
     pause_requested = 0,
-    created_at = ?20,
-    updated_at = ?21,
+    created_at = ?22,
+    updated_at = ?23,
     completed_at = NULL,
     removed_at = NULL,
     row_version = row_version + 1
-WHERE hash = ?22
+WHERE hash = ?24
   AND state = 'DELETED'
 `
 
@@ -647,6 +663,8 @@ type ReviveDownloadParams struct {
 	QbitProgress       float64        `json:"qbit_progress"`
 	LastUpstreamStatus sql.NullString `json:"last_upstream_status"`
 	PhaseStartedAt     time.Time      `json:"phase_started_at"`
+	OfflineStartedAt   sql.NullTime   `json:"offline_started_at"`
+	CopyCompletedAt    sql.NullTime   `json:"copy_completed_at"`
 	NextRunAt          sql.NullTime   `json:"next_run_at"`
 	CreatedAt          time.Time      `json:"created_at"`
 	UpdatedAt          time.Time      `json:"updated_at"`
@@ -673,6 +691,8 @@ func (q *Queries) ReviveDownload(ctx context.Context, arg ReviveDownloadParams) 
 		arg.QbitProgress,
 		arg.LastUpstreamStatus,
 		arg.PhaseStartedAt,
+		arg.OfflineStartedAt,
+		arg.CopyCompletedAt,
 		arg.NextRunAt,
 		arg.CreatedAt,
 		arg.UpdatedAt,

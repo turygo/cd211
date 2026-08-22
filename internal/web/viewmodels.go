@@ -82,6 +82,7 @@ type DownloadRow struct {
 	Offline        string
 	Copy           string
 	Age            string
+	Duration       string
 	Error          string
 	ErrorIsWarning bool
 	CloudSource    string
@@ -135,6 +136,7 @@ type DetailView struct {
 	CreatedAt       string
 	UpdatedAt       string
 	PhaseStartedAt  string
+	TotalDuration   string
 	CompletedAt     string
 	NextRunAt       string
 	AttemptCount    int64
@@ -304,7 +306,6 @@ func buildDownloadsView(downloads []domain.Download, categories []domain.Categor
 	}
 	return page, nil
 }
-
 func buildDownloadRow(download domain.Download, projection domain.Projection, now time.Time, str *Strings) (DownloadRow, error) {
 	if len(download.Hash) < 8 {
 		return DownloadRow{}, errors.New("download hash is too short")
@@ -322,7 +323,8 @@ func buildDownloadRow(download domain.Download, projection domain.Projection, no
 		Projected:      percent(projection.Progress),
 		Offline:        percent(download.OfflineProgress),
 		Copy:           percent(download.CopyProgress),
-		Age:            displayAge(now, download.UpdatedAt),
+		Age:            displayAge(now, download.UpdatedAt, str),
+		Duration:       displayDownloadDuration(download, now, str),
 		Error:          message,
 		ErrorIsWarning: warning,
 		CloudSource:    displayPath(download.CloudSourcePath, str),
@@ -337,7 +339,7 @@ func buildDownloadRow(download domain.Download, projection domain.Projection, no
 	}, nil
 }
 
-func buildDetailView(download domain.Download, files []domain.DownloadFile, csrfToken string, lang Lang) (DetailView, error) {
+func buildDetailView(download domain.Download, files []domain.DownloadFile, csrfToken string, lang Lang, now time.Time) (DetailView, error) {
 	projection, err := domain.Project(download)
 	if err != nil {
 		return DetailView{}, err
@@ -362,8 +364,8 @@ func buildDetailView(download domain.Download, files []domain.DownloadFile, csrf
 		CreatedAt:       displayTime(download.CreatedAt, str),
 		UpdatedAt:       displayTime(download.UpdatedAt, str),
 		PhaseStartedAt:  displayTime(download.PhaseStartedAt, str),
+		TotalDuration:   displayDownloadDuration(download, now, str),
 		CompletedAt:     displayOptionalTime(download.CompletedAt, str.NotCompleted, str),
-		NextRunAt:       displayOptionalTime(download.NextRunAt, str.NotScheduled, str),
 		AttemptCount:    download.AttemptCount,
 		Error:           message,
 		ErrorIsWarning:  warning,
@@ -648,7 +650,7 @@ func activeWorkflowState(state domain.State) bool {
 	}
 }
 
-func displayAge(now, updated time.Time) string {
+func displayAge(now, updated time.Time, str *Strings) string {
 	age := now.UTC().Sub(updated.UTC())
 	if age < 0 {
 		age = 0
@@ -656,14 +658,46 @@ func displayAge(now, updated time.Time) string {
 	seconds := int64(age / time.Second)
 	switch {
 	case seconds < 60:
-		return fmt.Sprintf("%ds", seconds)
+		return fmt.Sprintf(str.AgeSecondFormat, seconds)
 	case seconds < 60*60:
-		return fmt.Sprintf("%dm", seconds/60)
+		return fmt.Sprintf(str.AgeMinuteFormat, seconds/60)
 	case seconds < 24*60*60:
-		return fmt.Sprintf("%dh", seconds/(60*60))
+		return fmt.Sprintf(str.AgeHourFormat, seconds/(60*60))
 	default:
-		return fmt.Sprintf("%dd", seconds/(24*60*60))
+		return fmt.Sprintf(str.AgeDayFormat, seconds/(24*60*60))
 	}
+}
+
+func displayDownloadDuration(download domain.Download, now time.Time, str *Strings) string {
+	if download.OfflineStartedAt == nil {
+		return str.DurationUnavailable
+	}
+	end := now.UTC()
+	if download.CopyCompletedAt != nil {
+		end = download.CopyCompletedAt.UTC()
+	}
+	duration := end.Sub(download.OfflineStartedAt.UTC())
+	if duration < 0 {
+		duration = 0
+	}
+	seconds := int64(duration / time.Second)
+	parts := make([]string, 0, 4)
+	days, seconds := seconds/(24*60*60), seconds%(24*60*60)
+	hours, seconds := seconds/(60*60), seconds%(60*60)
+	minutes, seconds := seconds/60, seconds%60
+	if days > 0 {
+		parts = append(parts, fmt.Sprintf(str.DurationDayFormat, days))
+	}
+	if hours > 0 {
+		parts = append(parts, fmt.Sprintf(str.DurationHourFormat, hours))
+	}
+	if minutes > 0 {
+		parts = append(parts, fmt.Sprintf(str.DurationMinuteFormat, minutes))
+	}
+	if seconds > 0 || len(parts) == 0 {
+		parts = append(parts, fmt.Sprintf(str.DurationSecondFormat, seconds))
+	}
+	return strings.Join(parts, " ")
 }
 
 func percent(value float64) string {

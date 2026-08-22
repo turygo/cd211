@@ -200,6 +200,10 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 			d.NextRunAt = new(now)
 			return "retry_cancel_offline", nil
 		}
+		if d.OfflineStartedAt == nil {
+			started := s.clock.Now()
+			d.OfflineStartedAt = &started
+		}
 		task, err := s.cloud.EnsureOffline(ctx, clouddrive.OfflineSpec{SubmissionURI: d.SubmissionURI, CloudFolder: d.CloudFolder, Hash: d.Hash})
 		if err != nil {
 			return "ensure_offline", s.cloudFailure(d, err, "ensure_offline")
@@ -307,6 +311,7 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 		case clouddrive.CopyPending, clouddrive.CopyScanning, clouddrive.CopyScanned:
 			s.advance(d, domain.StateWaitingCopy, now, now.Add(s.config.PollInterval))
 		case clouddrive.CopyCompleted:
+			recordCopyCompleted(d, now)
 			s.advance(d, domain.StateVerifyingLocal, now, now)
 		case clouddrive.CopyFailed:
 			s.fail(d, domain.ProblemCopyTaskFailed)
@@ -324,6 +329,7 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 		if !found {
 			verifyErr := s.verifyAndRecord(d)
 			if verifyErr == nil {
+				recordCopyCompleted(d, now)
 				s.advance(d, domain.StateVerifyingLocal, now, now)
 				return "verify_local", nil
 			}
@@ -344,6 +350,7 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 		case clouddrive.CopyPending, clouddrive.CopyScanning, clouddrive.CopyScanned:
 			s.poll(d, now)
 		case clouddrive.CopyCompleted:
+			recordCopyCompleted(d, now)
 			s.advance(d, domain.StateVerifyingLocal, now, now)
 		case clouddrive.CopyFailed:
 			s.fail(d, domain.ProblemCopyTaskFailed)
@@ -733,6 +740,12 @@ func (s *Scheduler) recordOffline(d *domain.Download, task clouddrive.OfflineTas
 	}
 	if d.TotalSize == 0 && task.Size > 0 {
 		d.TotalSize = task.Size
+	}
+}
+
+func recordCopyCompleted(d *domain.Download, at time.Time) {
+	if d.CopyCompletedAt == nil {
+		d.CopyCompletedAt = &at
 	}
 }
 

@@ -7,6 +7,7 @@
   <td><span class="state-badge" data-state="{{.InternalState}}" aria-label="{{.Route.ListTitle}}" title="{{.Route.ListTitle}}">{{.Route.ListLabel}}</span></td>
   <td class="cell-category">{{.Category}}</td>
   <td class="cell-age">{{printf .Str.AgoFormat .Age}}</td>
+  <td class="cell-duration">{{.Duration}}</td>
   <td class="cell-actions">
     <div class="task-actions">
       {{if .CanPause}}
@@ -99,6 +100,7 @@
         <div><dt>{{.Str.Created}}</dt><dd>{{.CreatedAt}}</dd></div>
         <div><dt>{{.Str.Updated}}</dt><dd>{{.UpdatedAt}}</dd></div>
         <div><dt>{{.Str.PhaseStarted}}</dt><dd>{{.PhaseStartedAt}}</dd></div>
+        <div><dt>{{.Str.TotalDuration}}</dt><dd>{{.TotalDuration}}</dd></div>
         <div><dt>{{.Str.NextRun}}</dt><dd>{{.NextRunAt}}</dd></div>
         <div><dt>{{.Str.CompletedLabel}}</dt><dd>{{.CompletedAt}}</dd></div>
         <div><dt>{{.Str.Attempts}}</dt><dd>{{.AttemptCount}}</dd></div>
