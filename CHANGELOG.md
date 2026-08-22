@@ -8,6 +8,12 @@ section using the release version and date.
 
 ## [Unreleased]
 
+## [0.3.13] - 2026-08-22
+
+### Changed
+
+- Kept the Automation API token and qBittorrent API key stable instead of rotating them, persisted their plaintext values, and displayed both on every authenticated Settings page visit; revocation remains available to disable either credential.
+
 ## [0.3.12] - 2026-08-22
 
 ### Added

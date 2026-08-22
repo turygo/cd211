@@ -8,6 +8,7 @@ INSERT INTO api_token (
     id,
     token_hash,
     token_hint,
+    token_secret,
     created_at,
     updated_at,
     row_version
@@ -15,20 +16,12 @@ INSERT INTO api_token (
     1,
     sqlc.arg(token_hash),
     sqlc.arg(token_hint),
+    sqlc.arg(token_secret),
     sqlc.arg(created_at),
     sqlc.arg(updated_at),
     0
 );
 
--- name: UpdateAPIToken :execrows
-UPDATE api_token
-SET
-    token_hash = sqlc.arg(token_hash),
-    token_hint = sqlc.arg(token_hint),
-    updated_at = sqlc.arg(updated_at),
-    row_version = row_version + 1
-WHERE id = 1
-  AND row_version = sqlc.arg(expected_row_version);
 
 -- name: DeleteAPIToken :execrows
 DELETE FROM api_token

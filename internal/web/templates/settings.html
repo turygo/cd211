@@ -87,16 +87,12 @@
         {{if .APIToken.Configured}}
         <p class="muted">{{.Str.APITokenConfigured}}</p>
         <dl class="detail-list">
+          <div><dt>{{.Str.APITokenSecretLabel}}</dt><dd>{{if .APIToken.Secret}}<code>{{.APIToken.Secret}}</code>{{else}}{{.Str.APITokenSecretUnavailable}}{{end}}</dd></div>
           <div><dt>{{.Str.APITokenHintLabel}}</dt><dd><code>{{.APIToken.Hint}}</code></dd></div>
           <div><dt>{{.Str.APITokenCreatedLabel}}</dt><dd>{{.APIToken.CreatedAt}}</dd></div>
           <div><dt>{{.Str.APITokenUpdatedLabel}}</dt><dd>{{.APIToken.UpdatedAt}}</dd></div>
         </dl>
         <div class="action-bar">
-          <form action="/settings/api-token/rotate" method="post" data-confirm="{{.Str.APITokenRotateConfirm}}">
-            <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-            <input type="hidden" name="expected_version" value="{{.APIToken.RowVersion}}">
-            <button class="button button-secondary" type="submit">{{.Str.APITokenRotateButton}}</button>
-          </form>
           <form action="/settings/api-token/revoke" method="post" data-confirm="{{.Str.APITokenRevokeConfirm}}">
             <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
             <input type="hidden" name="expected_version" value="{{.APIToken.RowVersion}}">
@@ -119,16 +115,12 @@
         {{if .QBTAPIKey.Configured}}
         <p class="muted">{{.Str.QBTAPIKeyConfigured}}</p>
         <dl class="detail-list">
+          <div><dt>{{.Str.QBTAPIKeySecretLabel}}</dt><dd>{{if .QBTAPIKey.Secret}}<code>{{.QBTAPIKey.Secret}}</code>{{else}}{{.Str.QBTAPIKeySecretUnavailable}}{{end}}</dd></div>
           <div><dt>{{.Str.QBTAPIKeyHintLabel}}</dt><dd><code>{{.QBTAPIKey.Hint}}</code></dd></div>
           <div><dt>{{.Str.QBTAPIKeyCreatedLabel}}</dt><dd>{{.QBTAPIKey.CreatedAt}}</dd></div>
           <div><dt>{{.Str.QBTAPIKeyUpdatedLabel}}</dt><dd>{{.QBTAPIKey.UpdatedAt}}</dd></div>
         </dl>
         <div class="action-bar">
-          <form action="/settings/qbt-api-key/rotate" method="post" data-confirm="{{.Str.QBTAPIKeyRotateConfirm}}">
-            <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-            <input type="hidden" name="expected_version" value="{{.QBTAPIKey.RowVersion}}">
-            <button class="button button-secondary" type="submit">{{.Str.QBTAPIKeyRotateButton}}</button>
-          </form>
           <form action="/settings/qbt-api-key/revoke" method="post" data-confirm="{{.Str.QBTAPIKeyRevokeConfirm}}">
             <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
             <input type="hidden" name="expected_version" value="{{.QBTAPIKey.RowVersion}}">

@@ -1,8 +1,7 @@
 // Package qbtkey implements the single global qBittorrent WebUI API key:
 // plaintext generation, SHA-256 hashing, display hints, and constant-time
-// verification. Only the digest of a key is ever persisted; the plaintext
-// exists only in the one-time generate/rotate response and in-memory request
-// authentication.
+// verification. The plaintext is persisted so the authenticated Settings page
+// can display it on every visit.
 package qbtkey
 
 import (
@@ -41,13 +40,16 @@ var (
 	ErrConflict = errors.New("qbtkey: qBittorrent API key state changed")
 )
 
-// Secret is a plaintext qBittorrent API key. It must never be persisted,
-// logged, placed in a session, or carried in a redirect.
+// Secret is a plaintext qBittorrent API key. It is persisted so the
+// authenticated Settings page can display the configured key on every visit.
 type Secret string
 
-// Key is the durable metadata of the single qBittorrent API key row. Digest is
-// the SHA-256 of the plaintext secret, which is never stored in plaintext.
+// Key is the durable single qBittorrent API key row. Secret is persisted for
+// Settings display and Digest is used for constant-time request verification.
+// Secret is empty only for rows created before persistent key display was
+// introduced.
 type Key struct {
+	Secret     Secret
 	Digest     []byte
 	Hint       string
 	CreatedAt  time.Time
@@ -61,7 +63,6 @@ type Key struct {
 type Repository interface {
 	GetQBTAPIKey(context.Context) (Key, error)
 	GenerateQBTAPIKey(context.Context, time.Time) (Secret, error)
-	RotateQBTAPIKey(context.Context, int64, time.Time) (Secret, error)
 	RevokeQBTAPIKey(context.Context, int64) error
 }
 

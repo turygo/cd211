@@ -178,39 +178,28 @@ type SettingsView struct {
 	QBTAPIKey  QBTAPIKeyView
 }
 
-// APITokenView renders the Automation API token lifecycle section of the
-// Settings page. It never carries the plaintext secret or its digest; Hint
-// and the timestamps are the only stored token details shown.
+// APITokenView renders the Automation API token on every authenticated
+// Settings page visit. Secret is empty only for legacy rows migrated from the
+// digest-only schema.
 type APITokenView struct {
 	Configured bool
+	Secret     string
 	Hint       string
 	CreatedAt  string
 	UpdatedAt  string
 	RowVersion int64
 }
 
-// QBTAPIKeyView renders qBittorrent API key metadata. It never carries the
-// plaintext secret or its digest.
+// QBTAPIKeyView renders the qBittorrent API key on every authenticated
+// Settings page visit. Secret is empty only for legacy rows migrated from the
+// digest-only schema.
 type QBTAPIKeyView struct {
 	Configured bool
+	Secret     string
 	Hint       string
 	CreatedAt  string
 	UpdatedAt  string
 	RowVersion int64
-}
-
-// APITokenSecretView renders the one-time token reveal page. It must only be
-// served with Cache-Control: no-store and never linked, redirected, or cached.
-type APITokenSecretView struct {
-	PageMeta
-	Secret string
-}
-
-// QBTAPIKeySecretView renders the one-time qBittorrent API key reveal page.
-// It must only be served with Cache-Control: no-store.
-type QBTAPIKeySecretView struct {
-	PageMeta
-	Secret string
 }
 
 // SettingsFormValues carries the prefilled settings form fields. CD2Password

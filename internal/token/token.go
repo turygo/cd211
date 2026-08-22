@@ -1,8 +1,7 @@
 // Package token implements the single global Automation API token: plaintext
 // generation, SHA-256 hashing, display hints, and constant-time verification.
-// Only the digest of a token is ever persisted; the plaintext exists only in
-// the one-time generate/rotate response and in the in-memory Authorization
-// header of a request.
+// The plaintext is persisted so the authenticated Settings page can display it
+// on every visit.
 package token
 
 import (
@@ -37,18 +36,20 @@ var (
 	// ErrNotFound is returned when no API token row is configured.
 	ErrNotFound = errors.New("token: API token is not configured")
 	// ErrConflict is returned when a lifecycle transition fails its invariant:
-	// generating while a token exists, or a rotate/revoke whose expected row
-	// version no longer matches the stored row.
+	// generating while a token exists, or a revoke whose expected row version
+	// no longer matches the stored row.
 	ErrConflict = errors.New("token: API token state changed")
 )
 
-// Secret is a plaintext API token. It must never be persisted, logged, placed
-// in a session, or carried in a redirect.
+// Secret is a plaintext API token. It is persisted so the authenticated
+// Settings page can display the configured token on every visit.
 type Secret string
 
-// Token is the durable metadata of the single API token row. Digest is the
-// SHA-256 of the plaintext secret, which is never stored.
+// Token is the durable single API token row. Secret is persisted for Settings
+// display and Digest is used for constant-time request verification. Secret is
+// empty only for rows created before persistent token display was introduced.
 type Token struct {
+	Secret     Secret
 	Digest     []byte
 	Hint       string
 	CreatedAt  time.Time
@@ -61,7 +62,6 @@ type Token struct {
 type Repository interface {
 	GetAPIToken(context.Context) (Token, error)
 	GenerateAPIToken(context.Context, time.Time) (Secret, error)
-	RotateAPIToken(context.Context, int64, time.Time) (Secret, error)
 	RevokeAPIToken(context.Context, int64) error
 }
 

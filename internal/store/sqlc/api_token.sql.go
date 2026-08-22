@@ -25,7 +25,7 @@ func (q *Queries) DeleteAPIToken(ctx context.Context, expectedRowVersion int64) 
 }
 
 const getAPIToken = `-- name: GetAPIToken :one
-SELECT id, token_hash, token_hint, created_at, updated_at, row_version
+SELECT id, token_hash, token_hint, created_at, updated_at, row_version, token_secret
 FROM api_token
 WHERE id = 1
 `
@@ -40,6 +40,7 @@ func (q *Queries) GetAPIToken(ctx context.Context) (ApiToken, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RowVersion,
+		&i.TokenSecret,
 	)
 	return i, err
 }
@@ -49,6 +50,7 @@ INSERT INTO api_token (
     id,
     token_hash,
     token_hint,
+    token_secret,
     created_at,
     updated_at,
     row_version
@@ -58,54 +60,26 @@ INSERT INTO api_token (
     ?2,
     ?3,
     ?4,
+    ?5,
     0
 )
 `
 
 type InsertAPITokenParams struct {
-	TokenHash []byte    `json:"token_hash"`
-	TokenHint string    `json:"token_hint"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	TokenHash   []byte    `json:"token_hash"`
+	TokenHint   string    `json:"token_hint"`
+	TokenSecret string    `json:"token_secret"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 func (q *Queries) InsertAPIToken(ctx context.Context, arg InsertAPITokenParams) error {
 	_, err := q.db.ExecContext(ctx, insertAPIToken,
 		arg.TokenHash,
 		arg.TokenHint,
+		arg.TokenSecret,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 	)
 	return err
-}
-
-const updateAPIToken = `-- name: UpdateAPIToken :execrows
-UPDATE api_token
-SET
-    token_hash = ?1,
-    token_hint = ?2,
-    updated_at = ?3,
-    row_version = row_version + 1
-WHERE id = 1
-  AND row_version = ?4
-`
-
-type UpdateAPITokenParams struct {
-	TokenHash          []byte    `json:"token_hash"`
-	TokenHint          string    `json:"token_hint"`
-	UpdatedAt          time.Time `json:"updated_at"`
-	ExpectedRowVersion int64     `json:"expected_row_version"`
-}
-
-func (q *Queries) UpdateAPIToken(ctx context.Context, arg UpdateAPITokenParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, updateAPIToken,
-		arg.TokenHash,
-		arg.TokenHint,
-		arg.UpdatedAt,
-		arg.ExpectedRowVersion,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
 }

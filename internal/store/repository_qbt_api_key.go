@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -17,9 +18,9 @@ import (
 // persistence contract.
 var _ qbtkey.Repository = (*Store)(nil)
 
-// GetQBTAPIKey returns the metadata of the single configured qBittorrent API
-// key row. The plaintext secret is never exposed to ordinary readers; Digest
-// is populated for constant-time verification.
+// GetQBTAPIKey returns the configured qBittorrent API key, including its
+// persisted plaintext for the authenticated Settings page and its digest for
+// request verification.
 func (s *Store) GetQBTAPIKey(ctx context.Context) (qbtkey.Key, error) {
 	row, err := s.queries.GetQBTAPIKey(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -31,9 +32,9 @@ func (s *Store) GetQBTAPIKey(ctx context.Context) (qbtkey.Key, error) {
 	return qbtKeyFromDB(row)
 }
 
-// GenerateQBTAPIKey creates the single qBittorrent API key row and returns the
-// plaintext secret exactly once. An existing row is a conflict, never a
-// silent replacement.
+// GenerateQBTAPIKey creates the single qBittorrent API key row and persists
+// the generated secret so Settings can display it on every visit. An inactive
+// tombstone is reactivated with a new key after revocation.
 func (s *Store) GenerateQBTAPIKey(ctx context.Context, now time.Time) (qbtkey.Secret, error) {
 	if now.IsZero() {
 		return "", errors.New("qBittorrent API key generation time is required")
@@ -48,6 +49,7 @@ func (s *Store) GenerateQBTAPIKey(ctx context.Context, now time.Time) (qbtkey.Se
 	err = s.queries.InsertQBTAPIKey(ctx, storedb.InsertQBTAPIKeyParams{
 		KeyHash:   keyHash,
 		KeyHint:   keyHint,
+		KeySecret: string(secret),
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
@@ -60,6 +62,7 @@ func (s *Store) GenerateQBTAPIKey(ctx context.Context, now time.Time) (qbtkey.Se
 	updated, err := s.queries.ActivateQBTAPIKey(ctx, storedb.ActivateQBTAPIKeyParams{
 		KeyHash:   keyHash,
 		KeyHint:   keyHint,
+		KeySecret: string(secret),
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
@@ -67,38 +70,6 @@ func (s *Store) GenerateQBTAPIKey(ctx context.Context, now time.Time) (qbtkey.Se
 		return "", fmt.Errorf("reactivate qBittorrent API key: %w", err)
 	}
 	if updated == 0 {
-		return "", qbtkey.ErrConflict
-	}
-	return secret, nil
-}
-
-// RotateQBTAPIKey replaces the qBittorrent API key under a CAS on
-// row_version, preserving created_at and bumping updated_at and row_version.
-// The old key becomes invalid when the update commits. A missing row is
-// ErrNotFound; a stale version is ErrConflict.
-func (s *Store) RotateQBTAPIKey(ctx context.Context, expectedVersion int64, now time.Time) (qbtkey.Secret, error) {
-	if expectedVersion < 0 || now.IsZero() {
-		return "", errors.New("qBittorrent API key version or rotation time is invalid")
-	}
-	secret, err := qbtkey.Generate()
-	if err != nil {
-		return "", err
-	}
-	updated, err := s.queries.UpdateQBTAPIKey(ctx, storedb.UpdateQBTAPIKeyParams{
-		KeyHash:            qbtkey.Hash(secret),
-		KeyHint:            qbtkey.Hint(secret),
-		UpdatedAt:          now.UTC(),
-		ExpectedRowVersion: expectedVersion,
-	})
-	if err != nil {
-		return "", fmt.Errorf("rotate qBittorrent API key: %w", err)
-	}
-	if updated == 0 {
-		if _, err := s.queries.GetQBTAPIKey(ctx); errors.Is(err, sql.ErrNoRows) {
-			return "", qbtkey.ErrNotFound
-		} else if err != nil {
-			return "", fmt.Errorf("read qBittorrent API key after rotate miss: %w", err)
-		}
 		return "", qbtkey.ErrConflict
 	}
 	return secret, nil
@@ -132,7 +103,14 @@ func qbtKeyFromDB(row storedb.QbtApiKey) (qbtkey.Key, error) {
 		row.UpdatedAt.IsZero() || row.UpdatedAt.Before(row.CreatedAt) || row.RowVersion < 0 {
 		return qbtkey.Key{}, errors.New("stored qBittorrent API key is invalid")
 	}
+	if row.KeySecret != "" {
+		secret := qbtkey.Secret(row.KeySecret)
+		if !qbtkey.Valid(secret) || !bytes.Equal(qbtkey.Hash(secret), row.KeyHash) {
+			return qbtkey.Key{}, errors.New("stored qBittorrent API key secret is invalid")
+		}
+	}
 	return qbtkey.Key{
+		Secret:     qbtkey.Secret(row.KeySecret),
 		Digest:     row.KeyHash,
 		Hint:       row.KeyHint,
 		CreatedAt:  row.CreatedAt,

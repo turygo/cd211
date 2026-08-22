@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -16,9 +17,9 @@ import (
 // Compile-time check that the store satisfies the token persistence contract.
 var _ token.Repository = (*Store)(nil)
 
-// GetAPIToken returns the metadata of the single configured API token row.
-// The plaintext secret and its digest are never exposed to ordinary readers;
-// Digest is populated for the auth middleware's constant-time verification.
+// GetAPIToken returns the configured API token, including its persisted
+// plaintext for the authenticated Settings page and its digest for request
+// verification.
 func (s *Store) GetAPIToken(ctx context.Context) (token.Token, error) {
 	row, err := s.queries.GetAPIToken(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -30,10 +31,9 @@ func (s *Store) GetAPIToken(ctx context.Context) (token.Token, error) {
 	return apiTokenFromDB(row)
 }
 
-// GenerateAPIToken creates the single API token row and returns the plaintext
-// secret exactly once. It is only valid while no token exists: an existing row
-// is a conflict, never a silent replacement, so a concurrent generate has
-// exactly one winner.
+// GenerateAPIToken creates the single API token row and returns the generated
+// secret. The same secret is persisted so Settings can display it on every
+// visit.
 func (s *Store) GenerateAPIToken(ctx context.Context, now time.Time) (token.Secret, error) {
 	if now.IsZero() {
 		return "", errors.New("API token generation time is required")
@@ -43,49 +43,17 @@ func (s *Store) GenerateAPIToken(ctx context.Context, now time.Time) (token.Secr
 		return "", err
 	}
 	err = s.queries.InsertAPIToken(ctx, storedb.InsertAPITokenParams{
-		TokenHash: token.Hash(secret),
-		TokenHint: token.Hint(secret),
-		CreatedAt: now.UTC(),
-		UpdatedAt: now.UTC(),
+		TokenHash:   token.Hash(secret),
+		TokenHint:   token.Hint(secret),
+		TokenSecret: string(secret),
+		CreatedAt:   now.UTC(),
+		UpdatedAt:   now.UTC(),
 	})
 	if err != nil {
 		if tokenRowConflict(err) {
 			return "", token.ErrConflict
 		}
 		return "", fmt.Errorf("insert API token: %w", err)
-	}
-	return secret, nil
-}
-
-// RotateAPIToken replaces the token value of the single row under a CAS on
-// row_version, preserving created_at and bumping updated_at and row_version.
-// The old token becomes invalid the moment the update commits. A missing row
-// is ErrNotFound; a row whose version moved since the form was rendered is
-// ErrConflict and the operator must reload Settings.
-func (s *Store) RotateAPIToken(ctx context.Context, expectedVersion int64, now time.Time) (token.Secret, error) {
-	if expectedVersion < 0 || now.IsZero() {
-		return "", errors.New("API token version or rotation time is invalid")
-	}
-	secret, err := token.Generate()
-	if err != nil {
-		return "", err
-	}
-	updated, err := s.queries.UpdateAPIToken(ctx, storedb.UpdateAPITokenParams{
-		TokenHash:          token.Hash(secret),
-		TokenHint:          token.Hint(secret),
-		UpdatedAt:          now.UTC(),
-		ExpectedRowVersion: expectedVersion,
-	})
-	if err != nil {
-		return "", fmt.Errorf("rotate API token: %w", err)
-	}
-	if updated == 0 {
-		if _, err := s.queries.GetAPIToken(ctx); errors.Is(err, sql.ErrNoRows) {
-			return "", token.ErrNotFound
-		} else if err != nil {
-			return "", fmt.Errorf("read API token after rotate miss: %w", err)
-		}
-		return "", token.ErrConflict
 	}
 	return secret, nil
 }
@@ -118,7 +86,14 @@ func apiTokenFromDB(row storedb.ApiToken) (token.Token, error) {
 		row.UpdatedAt.IsZero() || row.UpdatedAt.Before(row.CreatedAt) || row.RowVersion < 0 {
 		return token.Token{}, errors.New("stored API token is invalid")
 	}
+	if row.TokenSecret != "" {
+		secret := token.Secret(row.TokenSecret)
+		if !token.Valid(secret) || !bytes.Equal(token.Hash(secret), row.TokenHash) {
+			return token.Token{}, errors.New("stored API token secret is invalid")
+		}
+	}
 	return token.Token{
+		Secret:     token.Secret(row.TokenSecret),
 		Digest:     row.TokenHash,
 		Hint:       row.TokenHint,
 		CreatedAt:  row.CreatedAt,

@@ -1,18 +1,18 @@
 // Progressive submit feedback for the shared secondary action forms:
-// settings test/save and API-token generate/rotate/revoke (settings.html),
-// category create/save (categories.html), webhook enable/disable/rotate
-// secret/delete/test (webhooks.html and webhook-form.html), and delivery
-// replay (webhook-deliveries.html).
+// settings test/save and API-token generate/revoke (settings.html),
+// category create/save (categories.html), webhook enable/disable/rotate-secret
+// delete/test (webhooks.html and webhook-form.html), and delivery replay
+// (webhook-deliveries.html).
 //
 // The server remains authoritative. This module never renders a result or
 // invents success: it marks the submitting button busy, blocks duplicate
 // submissions, and lets the native submission carry the request so the
-// server's own response — notice, redirect, or one-time secret page — is
-// what the operator sees. Forms owned by the download and setup slices are
-// intentionally not matched, and pages keep working unchanged without JS.
+// server's own response — notice or redirect — is what the operator sees.
+// Forms owned by the download and setup slices are intentionally not matched,
+// and pages keep working unchanged without JS.
 
 const SECONDARY_ACTION =
-  /^\/(settings\/(save|api-token\/(generate|rotate|revoke))|categories\/save|webhooks\/\d+\/(enable|disable|rotate-secret|delete|test)|webhook-deliveries\/\d+\/replay)$/;
+  /^\/(settings\/(save|api-token\/(generate|revoke)|qbt-api-key\/(generate|revoke))|categories\/save|webhooks\/\d+\/(enable|disable|rotate-secret|delete|test)|webhook-deliveries\/\d+\/replay)$/;
 
 for (const form of document.querySelectorAll("form[action]")) {
   const action = new URL(form.getAttribute("action") || "", window.location.href).pathname;

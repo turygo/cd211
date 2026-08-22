@@ -136,7 +136,7 @@ PGID=100
 
 `/api/v2` 支持两种独立的认证方式：通过 `/api/v2/auth/login` 获得的 `SID` Cookie，以及 `Authorization: Bearer qbt_<key>`。Sonarr / Radarr 可继续使用用户名和密码登录；支持 qBittorrent API 密钥的客户端可使用独立的 `qbt_` 密钥。
 
-可在 Web 界面的**设置**页面生成、轮换或撤销 qBittorrent API 密钥。密钥明文仅在生成或轮换后显示一次，SQLite 中只保存其 SHA-256 摘要和不含敏感信息的密钥提示；轮换后旧密钥立即失效，撤销后当前密钥立即失效。如果请求带有 `Authorization` 请求头，则 Bearer 认证优先；Bearer 凭据无效时，即使请求同时携带有效的 `SID`，也不会改用 SID 认证。
+可在 Web 界面的**设置**页面生成或撤销 qBittorrent API 密钥。生成后明文会持久保存，并在每次进入设置页时显示；撤销后当前密钥立即失效。SQLite 同时保存密钥明文、SHA-256 摘要和不含敏感信息的密钥提示。如果请求带有 `Authorization` 请求头，则 Bearer 认证优先；Bearer 凭据无效时，即使请求同时携带有效的 `SID`，也不会改用 SID 认证。
 
 ### 原生 API
 
@@ -151,7 +151,7 @@ PGID=100
 
 可通过 JSON 提交磁力链接，也可通过 multipart 表单上传种子文件。事件接口使用不透明游标，事件可能重复投递；调用方应按事件 ID 去重。
 
-自动化 API 令牌只在生成或轮换时显示一次；轮换后旧令牌立即失效，撤销后 API 停用。以 `cd211_api_` 开头的自动化 API 令牌只用于 `/api/v1`，不能用于 `/api/v2`；独立的 `qbt_` 密钥也不能用于 `/api/v1`。原生 API 不提供重试、取消或删除端点，这些操作请在 Web 界面完成。
+自动化 API 令牌生成后明文会持久保存，并在每次进入设置页时显示；撤销后 API 停用。以 `cd211_api_` 开头的自动化 API 令牌只用于 `/api/v1`，不能用于 `/api/v2`；独立的 `qbt_` 密钥也不能用于 `/api/v1`。原生 API 不提供重试、取消或删除端点，这些操作请在 Web 界面完成。
 
 ### Webhook
 

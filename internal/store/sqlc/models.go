@@ -10,12 +10,13 @@ import (
 )
 
 type ApiToken struct {
-	ID         int64     `json:"id"`
-	TokenHash  []byte    `json:"token_hash"`
-	TokenHint  string    `json:"token_hint"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
-	RowVersion int64     `json:"row_version"`
+	ID          int64     `json:"id"`
+	TokenHash   []byte    `json:"token_hash"`
+	TokenHint   string    `json:"token_hint"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	RowVersion  int64     `json:"row_version"`
+	TokenSecret string    `json:"token_secret"`
 }
 
 type Category struct {
@@ -94,6 +95,7 @@ type QbtApiKey struct {
 	UpdatedAt  time.Time `json:"updated_at"`
 	Active     int64     `json:"active"`
 	RowVersion int64     `json:"row_version"`
+	KeySecret  string    `json:"key_secret"`
 }
 
 type Session struct {

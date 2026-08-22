@@ -282,42 +282,34 @@ type Strings struct {
 	SettingsRemapHint       string
 
 	// Automation API token (managed inside the Settings page)
-	SettingsSectionAPIToken string
-	APITokenLede            string
-	APITokenConfigured      string
-	APITokenNotConfigured   string
-	APITokenHintLabel       string
-	APITokenCreatedLabel    string
-	APITokenUpdatedLabel    string
-	APITokenGenerateButton  string
-	APITokenRotateButton    string
-	APITokenRevokeButton    string
-	APITokenRotateConfirm   string
-	APITokenRevokeConfirm   string
-	APITokenRevoked         string
-	APITokenSecretTitle     string
-	APITokenSecretLede      string
-	APITokenSecretLabel     string
-	APITokenSecretDone      string
+	SettingsSectionAPIToken   string
+	APITokenLede              string
+	APITokenConfigured        string
+	APITokenNotConfigured     string
+	APITokenHintLabel         string
+	APITokenCreatedLabel      string
+	APITokenUpdatedLabel      string
+	APITokenGenerateButton    string
+	APITokenRevokeButton      string
+	APITokenRevokeConfirm     string
+	APITokenRevoked           string
+	APITokenSecretLabel       string
+	APITokenSecretUnavailable string
 
 	// qBittorrent-compatible API key (managed inside the Settings page)
-	SettingsSectionQBTAPIKey string
-	QBTAPIKeyLede            string
-	QBTAPIKeyConfigured      string
-	QBTAPIKeyNotConfigured   string
-	QBTAPIKeyHintLabel       string
-	QBTAPIKeyCreatedLabel    string
-	QBTAPIKeyUpdatedLabel    string
-	QBTAPIKeyGenerateButton  string
-	QBTAPIKeyRotateButton    string
-	QBTAPIKeyRevokeButton    string
-	QBTAPIKeyRotateConfirm   string
-	QBTAPIKeyRevokeConfirm   string
-	QBTAPIKeyRevoked         string
-	QBTAPIKeySecretTitle     string
-	QBTAPIKeySecretLede      string
-	QBTAPIKeySecretLabel     string
-	QBTAPIKeySecretDone      string
+	SettingsSectionQBTAPIKey   string
+	QBTAPIKeyLede              string
+	QBTAPIKeyConfigured        string
+	QBTAPIKeyNotConfigured     string
+	QBTAPIKeyHintLabel         string
+	QBTAPIKeyCreatedLabel      string
+	QBTAPIKeyUpdatedLabel      string
+	QBTAPIKeyGenerateButton    string
+	QBTAPIKeyRevokeButton      string
+	QBTAPIKeyRevokeConfirm     string
+	QBTAPIKeyRevoked           string
+	QBTAPIKeySecretLabel       string
+	QBTAPIKeySecretUnavailable string
 
 	// Webhook endpoints
 	NavWebhooks            string
@@ -671,41 +663,33 @@ var stringsEN = Strings{
 	SettingsRemapTitle:      "Category path changes",
 	SettingsRemapHint:       "Changing either root keeps every category subfolder and previews its new full path below.",
 
-	SettingsSectionAPIToken: "Automation API token",
-	APITokenLede:            "Automation clients authenticate with this token. Only one token exists at a time and it is never shown again after it is generated.",
-	APITokenConfigured:      "An API token is configured. Send it as the Authorization: Bearer header.",
-	APITokenNotConfigured:   "No API token is configured. Generate one to enable automation API access.",
-	APITokenHintLabel:       "Token hint",
-	APITokenCreatedLabel:    "First configured",
-	APITokenUpdatedLabel:    "Current token since",
-	APITokenGenerateButton:  "Generate token",
-	APITokenRotateButton:    "Rotate token",
-	APITokenRevokeButton:    "Revoke token",
-	APITokenRotateConfirm:   "Rotate the API token? The old token stops working immediately.",
-	APITokenRevokeConfirm:   "Revoke the API token? Automation API access stops immediately until a new token is generated.",
-	APITokenRevoked:         "API token revoked.",
-	APITokenSecretTitle:     "Automation API token",
-	APITokenSecretLede:      "Copy this token now. It is shown only once and cannot be recovered later.",
-	APITokenSecretLabel:     "Bearer token",
-	APITokenSecretDone:      "Done",
+	SettingsSectionAPIToken:   "Automation API token",
+	APITokenLede:              "Automation clients authenticate with this token. The same token remains visible on every authenticated Settings visit.",
+	APITokenConfigured:        "An API token is configured. Send it as the Authorization: Bearer header.",
+	APITokenNotConfigured:     "No API token is configured. Generate one to enable automation API access.",
+	APITokenHintLabel:         "Token hint",
+	APITokenCreatedLabel:      "First configured",
+	APITokenUpdatedLabel:      "Current token since",
+	APITokenGenerateButton:    "Generate token",
+	APITokenRevokeButton:      "Revoke token",
+	APITokenRevokeConfirm:     "Revoke the API token? Automation API access stops immediately until a new token is generated.",
+	APITokenRevoked:           "API token revoked.",
+	APITokenSecretLabel:       "Bearer token",
+	APITokenSecretUnavailable: "The token value is unavailable for this legacy row. Revoke it and generate a new token.",
 
-	SettingsSectionQBTAPIKey: "qBittorrent API key",
-	QBTAPIKeyLede:            "This independent key is only for the qBittorrent-compatible /api/v2 API and ANI-RSS. It is not an Automation API token.",
-	QBTAPIKeyConfigured:      "A qBittorrent API key is configured. Send it as the Authorization: Bearer header.",
-	QBTAPIKeyNotConfigured:   "No qBittorrent API key is configured. Generate one for qBittorrent-compatible API access.",
-	QBTAPIKeyHintLabel:       "Key hint",
-	QBTAPIKeyCreatedLabel:    "First configured",
-	QBTAPIKeyUpdatedLabel:    "Current key since",
-	QBTAPIKeyGenerateButton:  "Generate key",
-	QBTAPIKeyRotateButton:    "Rotate key",
-	QBTAPIKeyRevokeButton:    "Revoke key",
-	QBTAPIKeyRotateConfirm:   "Rotate the qBittorrent API key? The old key stops working immediately.",
-	QBTAPIKeyRevokeConfirm:   "Revoke the qBittorrent API key? qBittorrent-compatible API access stops immediately until a new key is generated.",
-	QBTAPIKeyRevoked:         "qBittorrent API key revoked.",
-	QBTAPIKeySecretTitle:     "qBittorrent API key",
-	QBTAPIKeySecretLede:      "Copy this key now. It is shown only once and cannot be recovered later.",
-	QBTAPIKeySecretLabel:     "qBittorrent API key",
-	QBTAPIKeySecretDone:      "Back to Settings",
+	SettingsSectionQBTAPIKey:   "qBittorrent API key",
+	QBTAPIKeyLede:              "This independent key is only for the qBittorrent-compatible /api/v2 API and ANI-RSS. The same key remains visible on every authenticated Settings visit.",
+	QBTAPIKeyConfigured:        "A qBittorrent API key is configured. Send it as the Authorization: Bearer header.",
+	QBTAPIKeyNotConfigured:     "No qBittorrent API key is configured. Generate one for qBittorrent-compatible API access.",
+	QBTAPIKeyHintLabel:         "Key hint",
+	QBTAPIKeyCreatedLabel:      "First configured",
+	QBTAPIKeyUpdatedLabel:      "Current key since",
+	QBTAPIKeyGenerateButton:    "Generate key",
+	QBTAPIKeyRevokeButton:      "Revoke key",
+	QBTAPIKeyRevokeConfirm:     "Revoke the qBittorrent API key? qBittorrent-compatible API access stops immediately until a new key is generated.",
+	QBTAPIKeyRevoked:           "qBittorrent API key revoked.",
+	QBTAPIKeySecretLabel:       "qBittorrent API key",
+	QBTAPIKeySecretUnavailable: "The key value is unavailable for this legacy row. Revoke it and generate a new key.",
 
 	NavWebhooks:            "Webhooks",
 	TitleWebhooks:          "Webhook endpoints",
@@ -1042,102 +1026,93 @@ var stringsZH = Strings{
 	TimeoutInvalid:       "超时时间必须大于 0，例如 24h 或 10m。",
 	ActivationFailed:     "设置已保存，但未能生效。请重启服务以应用设置。",
 
-	NavSettings:             "设置",
-	TitleSettings:           "设置",
-	SettingsLede:            "保存前会测试连接和根目录。修改根目录时，分类子目录会自动映射到新位置并用于后续任务。",
-	SettingsSectionCD2:      "CloudDrive2 连接",
-	SettingsSectionPaths:    "根目录与文件流向",
-	SettingsSectionTimeouts: "超时",
-	CD2PasswordKeep:         "留空则保留当前密码。",
-	SettingsSaveButton:      "保存设置",
-	SettingsSaved:           "设置已保存并生效。",
-	SettingsApplyFailed:     "设置已保存，但未能立即生效；重启服务后将自动生效。",
-	SettingsFrozenPathsNote: "已有任务仍使用提交时记录的路径，文件不会移动；重新映射后的分类路径仅用于后续任务。",
-	SettingsRemapTitle:      "分类路径变化",
-	SettingsRemapHint:       "修改任一根目录时会保留每个分类的子目录；下方会预览新的完整路径。",
-	SettingsSectionAPIToken: "自动化 API 令牌",
-	APITokenLede:            "自动化客户端使用此令牌进行身份验证。同一时刻仅存在一个令牌，生成后不会再显示。",
-	APITokenConfigured:      "已配置 API 令牌。请将其放入 Authorization: Bearer 请求头。",
-	APITokenNotConfigured:   "尚未配置 API 令牌。生成一个以启用自动化 API 访问。",
-	APITokenHintLabel:       "令牌提示",
-	APITokenCreatedLabel:    "首次配置时间",
-	APITokenUpdatedLabel:    "当前令牌生成时间",
-	APITokenGenerateButton:  "生成令牌",
-	APITokenRotateButton:    "轮换令牌",
-	APITokenRevokeButton:    "撤销令牌",
-	APITokenRotateConfirm:   "确定轮换 API 令牌吗？旧令牌将立即失效。",
-	APITokenRevokeConfirm:   "确定撤销 API 令牌吗？撤销后自动化 API 将立即停止访问，直到生成新令牌。",
-	APITokenRevoked:         "API 令牌已撤销。",
-	APITokenSecretTitle:     "自动化 API 令牌",
-	APITokenSecretLede:      "请立即复制并妥善保存此令牌。此令牌仅显示一次，之后无法查看。",
-	APITokenSecretLabel:     "Bearer 令牌",
-	APITokenSecretDone:      "完成",
+	NavSettings:               "设置",
+	TitleSettings:             "设置",
+	SettingsLede:              "保存前会测试连接和根目录。修改根目录时，分类子目录会自动映射到新位置并用于后续任务。",
+	SettingsSectionCD2:        "CloudDrive2 连接",
+	SettingsSectionPaths:      "根目录与文件流向",
+	SettingsSectionTimeouts:   "超时",
+	CD2PasswordKeep:           "留空则保留当前密码。",
+	SettingsSaveButton:        "保存设置",
+	SettingsSaved:             "设置已保存并生效。",
+	SettingsApplyFailed:       "设置已保存，但未能立即生效；重启服务后将自动生效。",
+	SettingsFrozenPathsNote:   "已有任务仍使用提交时记录的路径，文件不会移动；重新映射后的分类路径仅用于后续任务。",
+	SettingsRemapTitle:        "分类路径变化",
+	SettingsRemapHint:         "修改任一根目录时会保留每个分类的子目录；下方会预览新的完整路径。",
+	SettingsSectionAPIToken:   "自动化 API 令牌",
+	APITokenLede:              "自动化客户端使用此令牌进行身份验证。登录设置页后，每次都可以看到同一个令牌。",
+	APITokenConfigured:        "已配置 API 令牌。请将其放入 Authorization: Bearer 请求头。",
+	APITokenNotConfigured:     "尚未配置 API 令牌。生成一个以启用自动化 API 访问。",
+	APITokenHintLabel:         "令牌提示",
+	APITokenCreatedLabel:      "首次配置时间",
+	APITokenUpdatedLabel:      "当前令牌生成时间",
+	APITokenGenerateButton:    "生成令牌",
+	APITokenRevokeButton:      "撤销令牌",
+	APITokenRevokeConfirm:     "确定撤销 API 令牌吗？撤销后自动化 API 将立即停止访问，直到生成新令牌。",
+	APITokenRevoked:           "API 令牌已撤销。",
+	APITokenSecretLabel:       "Bearer 令牌",
+	APITokenSecretUnavailable: "此旧令牌没有可显示的原文。请先撤销，再生成新令牌。",
 
-	SettingsSectionQBTAPIKey: "qBittorrent API 密钥",
-	QBTAPIKeyLede:            "此密钥独立于自动化 API 令牌，仅供 ANI-RSS 等客户端访问兼容 qBittorrent 的 /api/v2 接口。",
-	QBTAPIKeyConfigured:      "已配置 qBittorrent API 密钥。请通过 Authorization 请求头以 Bearer 方式发送此密钥。",
-	QBTAPIKeyNotConfigured:   "尚未配置 qBittorrent API 密钥。请先生成密钥，才能访问兼容 qBittorrent 的 API。",
-	QBTAPIKeyHintLabel:       "密钥提示",
-	QBTAPIKeyCreatedLabel:    "首次配置时间",
-	QBTAPIKeyUpdatedLabel:    "当前密钥生成时间",
-	QBTAPIKeyGenerateButton:  "生成密钥",
-	QBTAPIKeyRotateButton:    "轮换密钥",
-	QBTAPIKeyRevokeButton:    "撤销密钥",
-	QBTAPIKeyRotateConfirm:   "确定轮换 qBittorrent API 密钥吗？旧密钥将立即失效。",
-	QBTAPIKeyRevokeConfirm:   "确定撤销 qBittorrent API 密钥吗？撤销后将无法访问兼容 qBittorrent 的 API，直到生成新密钥。",
-	QBTAPIKeyRevoked:         "qBittorrent API 密钥已撤销。",
-	QBTAPIKeySecretTitle:     "qBittorrent API 密钥",
-	QBTAPIKeySecretLede:      "请立即复制并妥善保存此密钥。此密钥仅显示一次，之后无法查看。",
-	QBTAPIKeySecretLabel:     "qBittorrent API 密钥",
-	QBTAPIKeySecretDone:      "返回设置",
-
-	NavWebhooks:            "Webhook 通知",
-	TitleWebhooks:          "Webhook 通知",
-	WebhooksLede:           "下载完成或失败时，向指定的 HTTP 服务发送带 HMAC 签名的请求。",
-	SectionEndpoints:       "接收方",
-	NoEndpoints:            "还没有接收方。添加一个即可开始接收下载通知。",
-	AddEndpoint:            "添加接收方",
-	EditEndpoint:           "编辑接收方",
-	CancelButton:           "取消",
-	EndpointName:           "名称",
-	FieldURL:               "接收地址",
-	HintURL:                "请填写绝对 HTTP 或 HTTPS URL，且不能包含用户名、密码或片段标识符（fragment）。",
-	FieldBearerToken:       "接收服务的 Bearer 令牌（可选）",
-	OptionalAuthentication: "可选鉴权",
-	BearerCreateHint:       "仅当接收服务要求 Bearer 鉴权时填写。请使用该服务提供的令牌；保存后不会再次显示。",
-	BearerEditHint:         "当前令牌不会显示。留空保持不变；填写新令牌将覆盖原值。",
-	ClearBearerToken:       "清除 Bearer 令牌",
-	SubscriptionsLabel:     "触发条件",
-	SubscriptionCompleted:  "下载完成",
-	SubscriptionFailed:     "下载失败",
-	EventExampleSummary:    "查看 JSON 请求示例",
-	EventDeliveryHint:      "CD211 会以 POST 请求发送 JSON。X-CD211-Event 标识事件类型，X-CD211-Signature 提供 HMAC-SHA256 签名。",
-	CreateEndpointButton:   "保存接收方",
-	EndpointSaved:          "接收方设置已更新。",
-	URLQueryRedacted:       "查询字符串仅用于投递；界面一律显示为“?…”，不会展示原始内容。",
-	EndpointNameInvalid:    "名称不能为空，长度须为 1–64 个字符且不能包含控制字符。",
-	EndpointURLInvalid:     "接收地址必须是绝对 HTTP 或 HTTPS URL，且不能包含用户名、密码或片段标识符。",
-	SubscriptionRequired:   "请至少选择一种触发条件。",
-	BearerTooLong:          "Bearer 令牌不能超过 4096 字节。",
-	RotateSecret:           "轮换密钥",
-	RotateSecretConfirm:    "确定轮换签名密钥吗？旧密钥将立即失效。",
-	DeleteEndpoint:         "删除",
-	DeleteEndpointConfirm:  "确定删除这个接收方吗？删除后将取消待投递的请求，但保留历史记录。",
-	SendTest:               "发送测试请求",
-	SendTestConfirm:        "确定向这个接收方发送一次测试请求吗？",
-	TestWebhookTitle:       "测试 Webhook",
-	TestWebhookLede:        "使用当前保存的地址、鉴权令牌和签名密钥发送一条 webhook.test 请求，并经过与真实通知相同的队列和重试流程。",
-	TestPausedHint:         "这个接收方当前已停用。测试请求会先排队，启用后再发送。",
-	TestAfterSaveHint:      "保存后可继续进入接收方设置，发送测试请求。",
-	ViewDeliveries:         "查看投递记录",
-	DisableEndpoint:        "停用",
-	EnableEndpoint:         "启用",
-	SecretSetMasked:        "已设置签名密钥。需要更换时请点击“轮换密钥”。",
-	SecretTitle:            "Webhook 签名密钥",
-	SecretLede:             "请立即复制并妥善保存此密钥。此密钥仅显示一次，之后无法查看。",
-	SecretLabel:            "HMAC-SHA256 签名密钥",
-	SecretDone:             "继续配置与测试",
-	TestEnqueued:           "测试请求已加入队列。",
+	SettingsSectionQBTAPIKey:   "qBittorrent API 密钥",
+	QBTAPIKeyLede:              "此密钥独立于自动化 API 令牌，仅供 ANI-RSS 等客户端访问兼容 qBittorrent 的 /api/v2 接口。登录设置页后，每次都可以看到同一个密钥。",
+	QBTAPIKeyConfigured:        "已配置 qBittorrent API 密钥。请通过 Authorization 请求头以 Bearer 方式发送此密钥。",
+	QBTAPIKeyNotConfigured:     "尚未配置 qBittorrent API 密钥。请先生成密钥，才能访问兼容 qBittorrent 的 API。",
+	QBTAPIKeyHintLabel:         "密钥提示",
+	QBTAPIKeyCreatedLabel:      "首次配置时间",
+	QBTAPIKeyUpdatedLabel:      "当前密钥生成时间",
+	QBTAPIKeyGenerateButton:    "生成密钥",
+	QBTAPIKeyRevokeButton:      "撤销密钥",
+	QBTAPIKeyRevokeConfirm:     "确定撤销 qBittorrent API 密钥吗？撤销后将无法访问兼容 qBittorrent 的 API，直到生成新密钥。",
+	QBTAPIKeyRevoked:           "qBittorrent API 密钥已撤销。",
+	QBTAPIKeySecretLabel:       "qBittorrent API 密钥",
+	QBTAPIKeySecretUnavailable: "此旧密钥没有可显示的原文。请先撤销，再生成新密钥。",
+	NavWebhooks:                "Webhook 通知",
+	TitleWebhooks:              "Webhook 通知",
+	WebhooksLede:               "下载完成或失败时，向指定的 HTTP 服务发送带 HMAC 签名的请求。",
+	SectionEndpoints:           "接收方",
+	NoEndpoints:                "还没有接收方。添加一个即可开始接收下载通知。",
+	AddEndpoint:                "添加接收方",
+	EditEndpoint:               "编辑接收方",
+	CancelButton:               "取消",
+	EndpointName:               "名称",
+	FieldURL:                   "接收地址",
+	HintURL:                    "请填写绝对 HTTP 或 HTTPS URL，且不能包含用户名、密码或片段标识符（fragment）。",
+	FieldBearerToken:           "接收服务的 Bearer 令牌（可选）",
+	OptionalAuthentication:     "可选鉴权",
+	BearerCreateHint:           "仅当接收服务要求 Bearer 鉴权时填写。请使用该服务提供的令牌；保存后不会再次显示。",
+	BearerEditHint:             "当前令牌不会显示。留空保持不变；填写新令牌将覆盖原值。",
+	ClearBearerToken:           "清除 Bearer 令牌",
+	SubscriptionsLabel:         "触发条件",
+	SubscriptionCompleted:      "下载完成",
+	SubscriptionFailed:         "下载失败",
+	EventExampleSummary:        "查看 JSON 请求示例",
+	EventDeliveryHint:          "CD211 会以 POST 请求发送 JSON。X-CD211-Event 标识事件类型，X-CD211-Signature 提供 HMAC-SHA256 签名。",
+	CreateEndpointButton:       "保存接收方",
+	EndpointSaved:              "接收方设置已更新。",
+	URLQueryRedacted:           "查询字符串仅用于投递；界面一律显示为“?…”，不会展示原始内容。",
+	EndpointNameInvalid:        "名称不能为空，长度须为 1–64 个字符且不能包含控制字符。",
+	EndpointURLInvalid:         "接收地址必须是绝对 HTTP 或 HTTPS URL，且不能包含用户名、密码或片段标识符。",
+	SubscriptionRequired:       "请至少选择一种触发条件。",
+	BearerTooLong:              "Bearer 令牌不能超过 4096 字节。",
+	RotateSecret:               "轮换密钥",
+	RotateSecretConfirm:        "确定轮换签名密钥吗？旧密钥将立即失效。",
+	DeleteEndpoint:             "删除",
+	DeleteEndpointConfirm:      "确定删除这个接收方吗？删除后将取消待投递的请求，但保留历史记录。",
+	SendTest:                   "发送测试请求",
+	SendTestConfirm:            "确定向这个接收方发送一次测试请求吗？",
+	TestWebhookTitle:           "测试 Webhook",
+	TestWebhookLede:            "使用当前保存的地址、鉴权令牌和签名密钥发送一条 webhook.test 请求，并经过与真实通知相同的队列和重试流程。",
+	TestPausedHint:             "这个接收方当前已停用。测试请求会先排队，启用后再发送。",
+	TestAfterSaveHint:          "保存后可继续进入接收方设置，发送测试请求。",
+	ViewDeliveries:             "查看投递记录",
+	DisableEndpoint:            "停用",
+	EnableEndpoint:             "启用",
+	SecretSetMasked:            "已设置签名密钥。需要更换时请点击“轮换密钥”。",
+	SecretTitle:                "Webhook 签名密钥",
+	SecretLede:                 "请立即复制并妥善保存此密钥。此密钥仅显示一次，之后无法查看。",
+	SecretLabel:                "HMAC-SHA256 签名密钥",
+	SecretDone:                 "继续配置与测试",
+	TestEnqueued:               "测试请求已加入队列。",
 
 	TitleDeliveries:    "Webhook 投递记录",
 	DeliveriesLede:     "查看每条 Webhook 通知的投递历史，包括重试与死信记录。",
