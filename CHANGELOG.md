@@ -9,7 +9,8 @@ section using the release version and date.
 ## [Unreleased]
 ### Changed
 
-- Simplified Settings credential display to show only the generation time, with single-line token and key rows and copy controls.
+- Localized every Web UI timestamp in the browser's locale and timezone while retaining machine-readable `<time>` values for live updates and accessibility.
+- 明确语言约定：`CHANGELOG.md` 使用简体中文；其余仓库内容（包括源码注释和提交信息）使用英文。
 
 ## [0.3.14] - 2026-08-23
 

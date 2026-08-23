@@ -2,7 +2,7 @@
   <td class="cell-name">
     <a class="task-title" href="/downloads/{{.Hash}}" title="{{.Name}}">{{.Name}}</a>
     <span class="cell-meta"><code>{{.HashPrefix}}</code></span>
-    {{if .Error}}<span class="cell-error{{if .ErrorIsWarning}} is-warning{{end}}">{{.Error}}</span>{{end}}
+    {{if .Error}}<span class="cell-error{{if .ErrorIsWarning}} is-warning{{end}}">{{.Error}}{{if .RetryScheduledAt}} {{localTimeFormat .Str.RetryScheduledFormat .RetryScheduledAt}}{{end}}</span>{{end}}
   </td>
   <td><span class="state-badge" data-state="{{.InternalState}}" aria-label="{{.Route.ListTitle}}" title="{{.Route.ListTitle}}">{{.Route.ListLabel}}</span></td>
   <td class="cell-category">{{.Category}}</td>
@@ -79,7 +79,7 @@
   <section class="panel" data-live-route>
     {{template "segmented-track" .Route}}
   </section>
-  {{if .Error}}<div class="notice {{if .ErrorIsWarning}}notice-warning{{else}}notice-error{{end}}" data-live-error role="{{if .ErrorIsWarning}}status{{else}}alert{{end}}"><strong>{{if .ErrorIsWarning}}{{.Str.RetryingTitle}}{{else}}{{.Str.RecordedError}}{{end}}</strong><p>{{.Error}}</p></div>{{end}}
+  {{if .Error}}<div class="notice {{if .ErrorIsWarning}}notice-warning{{else}}notice-error{{end}}" data-live-error role="{{if .ErrorIsWarning}}status{{else}}alert{{end}}"><strong>{{if .ErrorIsWarning}}{{.Str.RetryingTitle}}{{else}}{{.Str.RecordedError}}{{end}}</strong><p>{{.Error}}{{if .RetryScheduledAt}} {{localTimeFormat .Str.RetryScheduledFormat .RetryScheduledAt}}{{end}}</p></div>{{end}}
   <div class="panel-grid">
     <section class="panel" aria-labelledby="paths-title" data-live-paths>
       <h2 id="paths-title">{{.Str.SectionPaths}}</h2>
@@ -98,12 +98,12 @@
       <dl class="detail-list">
         <div><dt>{{.Str.ProgressLabel}}</dt><dd>{{printf .Str.ProgressSummary .Projected .Offline .Copy}}</dd></div>
         <div><dt>{{.Str.ProjectedState}}</dt><dd>{{.ProjectedState}}</dd></div>
-        <div><dt>{{.Str.Created}}</dt><dd>{{.CreatedAt}}</dd></div>
-        <div><dt>{{.Str.Updated}}</dt><dd>{{.UpdatedAt}}</dd></div>
-        <div><dt>{{.Str.PhaseStarted}}</dt><dd>{{.PhaseStartedAt}}</dd></div>
+        <div><dt>{{.Str.Created}}</dt><dd>{{localTime .CreatedAt}}</dd></div>
+        <div><dt>{{.Str.Updated}}</dt><dd>{{localTime .UpdatedAt}}</dd></div>
+        <div><dt>{{.Str.PhaseStarted}}</dt><dd>{{localTime .PhaseStartedAt}}</dd></div>
         <div><dt>{{.Str.TotalDuration}}</dt><dd>{{.TotalDuration}}</dd></div>
-        <div><dt>{{.Str.NextRun}}</dt><dd>{{.NextRunAt}}</dd></div>
-        <div><dt>{{.Str.CompletedLabel}}</dt><dd>{{.CompletedAt}}</dd></div>
+        <div><dt>{{.Str.NextRun}}</dt><dd>{{localTime .NextRunAt}}</dd></div>
+        <div><dt>{{.Str.CompletedLabel}}</dt><dd>{{localTime .CompletedAt}}</dd></div>
         <div><dt>{{.Str.Attempts}}</dt><dd>{{.AttemptCount}}</dd></div>
       </dl>
     </section>

@@ -1,4 +1,43 @@
 import { animateElement, motionTiming, staggerDelay } from "/static/motion.js?v=1";
+const localDateTimeFormatter = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
+
+// Server-rendered timestamps carry an ISO value for machine-readable
+// semantics; the browser renders them in the operator's local timezone and
+// locale. A mutation observer keeps live download fragments localized too.
+function formatLocalTimes(root = document) {
+  const elements = [];
+  if (root instanceof Element && root.matches("[data-local-time]")) {
+    elements.push(root);
+  }
+  if (root.querySelectorAll) {
+    elements.push(...root.querySelectorAll("[data-local-time]"));
+  }
+  for (const element of elements) {
+    const value = element.getAttribute("datetime");
+    if (!value || element.dataset.localTimeValue === value) continue;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) continue;
+    element.textContent = localDateTimeFormatter.format(date);
+    element.dataset.localTimeValue = value;
+  }
+}
+
+formatLocalTimes();
+if (document.body) {
+  const localTimeObserver = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      for (const node of mutation.addedNodes) {
+        if (node.nodeType === Node.ELEMENT_NODE) {
+          formatLocalTimes(node);
+        }
+      }
+    }
+  });
+  localTimeObserver.observe(document.body, { childList: true, subtree: true });
+}
 
 const themeStorageKey = "cd211-theme";
 let savedTheme = document.documentElement.dataset.theme === "dark" ? "dark" : "light";

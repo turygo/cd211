@@ -179,7 +179,10 @@ func New(config Config, credentials Credentials, repo Repository, sessions *sess
 	if !filepath.IsAbs(config.LocalRoot) || filepath.Clean(config.LocalRoot) != config.LocalRoot {
 		return nil, errors.New("local root must be an absolute clean host path")
 	}
-	templates, err := template.ParseFS(assets, "templates/*.html")
+	templates, err := template.New("root").Funcs(template.FuncMap{
+		"localTime":       localTime,
+		"localTimeFormat": localTimeFormat,
+	}).ParseFS(assets, "templates/*.html")
 	if err != nil {
 		return nil, errors.New("parse web templates")
 	}

@@ -94,7 +94,7 @@
           {{if .APIToken.Secret}}<button class="credential-copy iconfont" type="button" aria-label="{{.Str.CredentialCopyButton}}" title="{{.Str.CredentialCopyButton}}" data-copy-value="{{.APIToken.Secret}}" data-copy-label="{{.Str.CredentialCopyButton}}" data-copied-label="{{.Str.CredentialCopied}}" data-copy-failed-label="{{.Str.CredentialCopyFailed}}">⧉</button>{{end}}
         </div>
         <dl class="credential-meta">
-          <div><dt>{{.Str.APITokenGeneratedLabel}}</dt><dd>{{.APIToken.GeneratedAt}}</dd></div>
+          <div><dt>{{.Str.APITokenGeneratedLabel}}</dt><dd>{{localTime .APIToken.GeneratedAt}}</dd></div>
         </dl>
         <div class="action-bar">
           <form action="/settings/api-token/revoke" method="post" data-confirm="{{.Str.APITokenRevokeConfirm}}">
@@ -126,7 +126,7 @@
           {{if .QBTAPIKey.Secret}}<button class="credential-copy iconfont" type="button" aria-label="{{.Str.CredentialCopyButton}}" title="{{.Str.CredentialCopyButton}}" data-copy-value="{{.QBTAPIKey.Secret}}" data-copy-label="{{.Str.CredentialCopyButton}}" data-copied-label="{{.Str.CredentialCopied}}" data-copy-failed-label="{{.Str.CredentialCopyFailed}}">⧉</button>{{end}}
         </div>
         <dl class="credential-meta">
-          <div><dt>{{.Str.QBTAPIKeyGeneratedLabel}}</dt><dd>{{.QBTAPIKey.GeneratedAt}}</dd></div>
+          <div><dt>{{.Str.QBTAPIKeyGeneratedLabel}}</dt><dd>{{localTime .QBTAPIKey.GeneratedAt}}</dd></div>
         </dl>
         <div class="action-bar">
           <form action="/settings/qbt-api-key/revoke" method="post" data-confirm="{{.Str.QBTAPIKeyRevokeConfirm}}">

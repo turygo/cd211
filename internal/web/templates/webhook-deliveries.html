@@ -65,9 +65,9 @@
               <td class="cell-index">{{.AttemptCount}}</td>
               <td class="cell-index">{{.LastHTTPStatus}}</td>
               <td class="cell-error">{{.LastError}}</td>
-              <td class="cell-age">{{.NextAttemptAt}}</td>
-              <td class="cell-age">{{.DeliveredAt}}</td>
-              <td class="cell-age">{{.UpdatedAt}}</td>
+              <td class="cell-age">{{localTime .NextAttemptAt}}</td>
+              <td class="cell-age">{{localTime .DeliveredAt}}</td>
+              <td class="cell-age">{{localTime .UpdatedAt}}</td>
               <td class="cell-action">
                 {{if .CanReplay}}
                 <form action="/webhook-deliveries/{{.ID}}/replay" method="post" data-confirm="{{$.Str.ReplayConfirm}}"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><button class="button button-ghost" type="submit">{{$.Str.Replay}}</button></form>

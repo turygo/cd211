@@ -129,7 +129,10 @@ func NewSetup(cfg SetupConfig) (http.Handler, error) {
 	if dial == nil {
 		dial = defaultDial
 	}
-	templates, err := template.ParseFS(assets, "templates/*.html")
+	templates, err := template.New("root").Funcs(template.FuncMap{
+		"localTime":       localTime,
+		"localTimeFormat": localTimeFormat,
+	}).ParseFS(assets, "templates/*.html")
 	if err != nil {
 		return nil, errors.New("parse web templates")
 	}

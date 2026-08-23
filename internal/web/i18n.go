@@ -155,7 +155,7 @@ type Strings struct {
 	ThCloudPath             string
 	ThSavePath              string
 	ThAvailability          string
-	UpdatedAtFormat         string // printf with RFC3339 time
+	UpdatedAtFormat         string // printf with one localized timestamp
 	Save                    string
 	NoCategories            string
 	SectionRegister         string
@@ -192,7 +192,7 @@ type Strings struct {
 	// RetryScheduledFormat renders the automatic-retry statement with the
 	// scheduled next-run time.
 	RetryingTitle        string
-	RetryScheduledFormat string // printf with RFC3339 next-run time
+	RetryScheduledFormat string // printf with one localized next-run timestamp
 	Problems             map[domain.ProblemCode]string
 
 	// Password page

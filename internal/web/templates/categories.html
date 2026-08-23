@@ -53,7 +53,7 @@
                   <input type="hidden" name="name" value="{{$row.Name}}">
                 </form>
                 <span class="category-name">{{$row.Name}}</span>
-                <span class="cell-meta">{{printf $.Str.UpdatedAtFormat $row.UpdatedAt}}</span>
+                <span class="cell-meta">{{localTimeFormat $.Str.UpdatedAtFormat $row.UpdatedAt}}</span>
                 {{if not $row.PathValid}}<span class="category-path-error">{{$.Str.CategoryPathDetached}}</span>{{end}}
               </th>
               <td>
