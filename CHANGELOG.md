@@ -7,6 +7,9 @@ Agents must add every repository change to the appropriate category under
 section using the release version and date.
 
 ## [Unreleased]
+### Changed
+
+- Simplified Settings credential display to show only the generation time, with single-line token and key rows and copy controls.
 
 ## [0.3.14] - 2026-08-23
 

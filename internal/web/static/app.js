@@ -555,6 +555,56 @@ for (const preview of document.querySelectorAll("[data-settings-remap]")) {
   renderRemap();
 }
 
+async function copyText(value) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.append(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) {
+    throw new Error("copy command failed");
+  }
+}
+
+for (const button of document.querySelectorAll("[data-copy-value]")) {
+  const initialGlyph = button.textContent;
+  let resetTimer;
+  button.addEventListener("click", async () => {
+    clearTimeout(resetTimer);
+    const copyLabel = button.getAttribute("data-copy-label") || button.getAttribute("aria-label") || "";
+    const copiedLabel = button.getAttribute("data-copied-label") || copyLabel;
+    const failedLabel = button.getAttribute("data-copy-failed-label") || copyLabel;
+    try {
+      await copyText(button.getAttribute("data-copy-value") || "");
+      button.classList.add("is-copied");
+      button.classList.remove("is-failed");
+      button.textContent = "✓";
+      button.setAttribute("aria-label", copiedLabel);
+      button.setAttribute("title", copiedLabel);
+    } catch {
+      button.classList.add("is-failed");
+      button.classList.remove("is-copied");
+      button.textContent = "!";
+      button.setAttribute("aria-label", failedLabel);
+      button.setAttribute("title", failedLabel);
+    }
+    resetTimer = window.setTimeout(() => {
+      button.classList.remove("is-copied", "is-failed");
+      button.textContent = initialGlyph;
+      button.setAttribute("aria-label", copyLabel);
+      button.setAttribute("title", copyLabel);
+    }, 1400);
+  });
+}
+
 // Sticky action columns need separation only while they overlap horizontally
 // scrollable table content. Without overflow—or at the right edge—the shadow
 // would render as a broken vertical gray stripe through every body row.

@@ -1159,12 +1159,10 @@ func (h *handler) tokenView(r *http.Request) (APITokenView, error) {
 	}
 	str := tr(requestLang(r))
 	return APITokenView{
-		Configured: true,
-		Secret:     string(info.Secret),
-		Hint:       info.Hint,
-		CreatedAt:  displayTime(info.CreatedAt, str),
-		UpdatedAt:  displayTime(info.UpdatedAt, str),
-		RowVersion: info.RowVersion,
+		Configured:  true,
+		Secret:      string(info.Secret),
+		GeneratedAt: displayTime(info.UpdatedAt, str),
+		RowVersion:  info.RowVersion,
 	}, nil
 }
 
@@ -1191,12 +1189,10 @@ func (h *handler) qbtAPIKeyView(r *http.Request) (QBTAPIKeyView, error) {
 	}
 	str := tr(requestLang(r))
 	return QBTAPIKeyView{
-		Configured: true,
-		Secret:     string(info.Secret),
-		Hint:       info.Hint,
-		CreatedAt:  displayTime(info.CreatedAt, str),
-		UpdatedAt:  displayTime(info.UpdatedAt, str),
-		RowVersion: info.RowVersion,
+		Configured:  true,
+		Secret:      string(info.Secret),
+		GeneratedAt: displayTime(info.UpdatedAt, str),
+		RowVersion:  info.RowVersion,
 	}, nil
 }
 

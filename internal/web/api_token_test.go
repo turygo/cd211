@@ -53,8 +53,8 @@ func TestAPITokenGeneratePersistsAndSettingsAlwaysDisplays(t *testing.T) {
 		t.Errorf("settings Cache-Control = %q, want no-store", got)
 	}
 	body := page.Body.String()
-	requireContains(t, body, secret, info.Hint, `action="/settings/api-token/revoke"`, "Automation API token")
-	requireAbsent(t, body, `action="/settings/api-token/rotate"`, "Rotate token", "sha256", "token_hash")
+	requireContains(t, body, secret, tr(LangEN).APITokenGeneratedLabel, `data-copy-value="`+secret+`"`, `action="/settings/api-token/revoke"`, "Automation API token")
+	requireAbsent(t, body, info.Hint, "First configured", "Token hint", `action="/settings/api-token/rotate"`, "Rotate token", "sha256", "token_hash")
 }
 
 func TestAPITokenGenerateWhenPresentConflicts(t *testing.T) {

@@ -86,11 +86,15 @@
         <p class="muted">{{.Str.APITokenLede}}</p>
         {{if .APIToken.Configured}}
         <p class="muted">{{.Str.APITokenConfigured}}</p>
-        <dl class="detail-list">
-          <div><dt>{{.Str.APITokenSecretLabel}}</dt><dd>{{if .APIToken.Secret}}<code>{{.APIToken.Secret}}</code>{{else}}{{.Str.APITokenSecretUnavailable}}{{end}}</dd></div>
-          <div><dt>{{.Str.APITokenHintLabel}}</dt><dd><code>{{.APIToken.Hint}}</code></dd></div>
-          <div><dt>{{.Str.APITokenCreatedLabel}}</dt><dd>{{.APIToken.CreatedAt}}</dd></div>
-          <div><dt>{{.Str.APITokenUpdatedLabel}}</dt><dd>{{.APIToken.UpdatedAt}}</dd></div>
+        <div class="credential-row">
+          <div class="credential-main">
+            <span class="credential-label">{{.Str.APITokenSecretLabel}}</span>
+            {{if .APIToken.Secret}}<code class="credential-value" title="{{.APIToken.Secret}}">{{.APIToken.Secret}}</code>{{else}}<span class="credential-value credential-unavailable">{{.Str.APITokenSecretUnavailable}}</span>{{end}}
+          </div>
+          {{if .APIToken.Secret}}<button class="credential-copy iconfont" type="button" aria-label="{{.Str.CredentialCopyButton}}" title="{{.Str.CredentialCopyButton}}" data-copy-value="{{.APIToken.Secret}}" data-copy-label="{{.Str.CredentialCopyButton}}" data-copied-label="{{.Str.CredentialCopied}}" data-copy-failed-label="{{.Str.CredentialCopyFailed}}">⧉</button>{{end}}
+        </div>
+        <dl class="credential-meta">
+          <div><dt>{{.Str.APITokenGeneratedLabel}}</dt><dd>{{.APIToken.GeneratedAt}}</dd></div>
         </dl>
         <div class="action-bar">
           <form action="/settings/api-token/revoke" method="post" data-confirm="{{.Str.APITokenRevokeConfirm}}">
@@ -114,11 +118,15 @@
         <p class="muted">{{.Str.QBTAPIKeyLede}}</p>
         {{if .QBTAPIKey.Configured}}
         <p class="muted">{{.Str.QBTAPIKeyConfigured}}</p>
-        <dl class="detail-list">
-          <div><dt>{{.Str.QBTAPIKeySecretLabel}}</dt><dd>{{if .QBTAPIKey.Secret}}<code>{{.QBTAPIKey.Secret}}</code>{{else}}{{.Str.QBTAPIKeySecretUnavailable}}{{end}}</dd></div>
-          <div><dt>{{.Str.QBTAPIKeyHintLabel}}</dt><dd><code>{{.QBTAPIKey.Hint}}</code></dd></div>
-          <div><dt>{{.Str.QBTAPIKeyCreatedLabel}}</dt><dd>{{.QBTAPIKey.CreatedAt}}</dd></div>
-          <div><dt>{{.Str.QBTAPIKeyUpdatedLabel}}</dt><dd>{{.QBTAPIKey.UpdatedAt}}</dd></div>
+        <div class="credential-row">
+          <div class="credential-main">
+            <span class="credential-label">{{.Str.QBTAPIKeySecretLabel}}</span>
+            {{if .QBTAPIKey.Secret}}<code class="credential-value" title="{{.QBTAPIKey.Secret}}">{{.QBTAPIKey.Secret}}</code>{{else}}<span class="credential-value credential-unavailable">{{.Str.QBTAPIKeySecretUnavailable}}</span>{{end}}
+          </div>
+          {{if .QBTAPIKey.Secret}}<button class="credential-copy iconfont" type="button" aria-label="{{.Str.CredentialCopyButton}}" title="{{.Str.CredentialCopyButton}}" data-copy-value="{{.QBTAPIKey.Secret}}" data-copy-label="{{.Str.CredentialCopyButton}}" data-copied-label="{{.Str.CredentialCopied}}" data-copy-failed-label="{{.Str.CredentialCopyFailed}}">⧉</button>{{end}}
+        </div>
+        <dl class="credential-meta">
+          <div><dt>{{.Str.QBTAPIKeyGeneratedLabel}}</dt><dd>{{.QBTAPIKey.GeneratedAt}}</dd></div>
         </dl>
         <div class="action-bar">
           <form action="/settings/qbt-api-key/revoke" method="post" data-confirm="{{.Str.QBTAPIKeyRevokeConfirm}}">

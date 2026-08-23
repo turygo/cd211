@@ -186,24 +186,20 @@ type SettingsView struct {
 // Settings page visit. Secret is empty only for legacy rows migrated from the
 // digest-only schema.
 type APITokenView struct {
-	Configured bool
-	Secret     string
-	Hint       string
-	CreatedAt  string
-	UpdatedAt  string
-	RowVersion int64
+	Configured  bool
+	Secret      string
+	GeneratedAt string
+	RowVersion  int64
 }
 
 // QBTAPIKeyView renders the qBittorrent API key on every authenticated
 // Settings page visit. Secret is empty only for legacy rows migrated from the
 // digest-only schema.
 type QBTAPIKeyView struct {
-	Configured bool
-	Secret     string
-	Hint       string
-	CreatedAt  string
-	UpdatedAt  string
-	RowVersion int64
+	Configured  bool
+	Secret      string
+	GeneratedAt string
+	RowVersion  int64
 }
 
 // SettingsFormValues carries the prefilled settings form fields. CD2Password

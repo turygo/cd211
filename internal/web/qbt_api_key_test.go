@@ -48,8 +48,8 @@ func TestQBTAPIKeyGeneratePersistsAndSettingsAlwaysDisplays(t *testing.T) {
 		t.Errorf("settings Cache-Control = %q, want no-store", got)
 	}
 	body := page.Body.String()
-	requireContains(t, body, secret, info.Hint, `action="/settings/qbt-api-key/revoke"`, "qBittorrent API key")
-	requireAbsent(t, body, `action="/settings/qbt-api-key/rotate"`, "Rotate key", "sha256", "qbt_api_key")
+	requireContains(t, body, secret, tr(LangEN).QBTAPIKeyGeneratedLabel, `data-copy-value="`+secret+`"`, `action="/settings/qbt-api-key/revoke"`, "qBittorrent API key")
+	requireAbsent(t, body, info.Hint, "First configured", "Key hint", `action="/settings/qbt-api-key/rotate"`, "Rotate key", "sha256", "qbt_api_key")
 }
 
 func TestQBTAPIKeyGenerateWhenPresentConflicts(t *testing.T) {
