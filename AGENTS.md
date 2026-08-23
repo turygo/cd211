@@ -72,6 +72,11 @@ There is no dedicated run, format, typecheck, coverage, or race target. After `m
 - Preserve security boundaries: redact magnet trackers/passkeys from errors, constrain filesystem operations to configured roots, and do not make CloudDrive2 availability part of SQLite liveness.
 - For every Web UI change under `internal/web/`, follow `docs/ref/linear-design-tokens.md`: preserve the dark-first high-density layout, Inter/monospace typography, 4px spacing grid, 2-6px dominant radii, restrained indigo accents, and subtle border/shadow elevation. Reuse its tokens; do not invent a parallel visual system.
 
+## Language Requirements
+
+- Write all new `CHANGELOG.md` entries in Simplified Chinese.
+- Write all other repository content in English, including source comments and commit messages.
+
 ## Changelog
 
 - Every agent-authored change set must update `CHANGELOG.md` in the same change. Add a concise entry under `Unreleased` for code, documentation, configuration, CI, and repository-guidance changes; changelog-only edits are exempt.

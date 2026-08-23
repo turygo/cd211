@@ -1,15 +1,16 @@
-# Changelog
+# 变更日志
 
-All notable changes to CD211 are documented in this file.
+CD211 的所有重要变更均记录在此文件中。
 
-Agents must add every repository change to the appropriate category under
-`Unreleased`. Before tagging a release, move those entries into a versioned
-section using the release version and date.
+每项仓库变更都必须在 `Unreleased` 下的适当类别中记录。创建版本标签前，将这些条目移入包含版本号和日期的版本化章节。
 
 ## [Unreleased]
+
+## [0.3.15] - 2026-08-23
+
 ### Changed
 
-- Localized every Web UI timestamp in the browser's locale and timezone while retaining machine-readable `<time>` values for live updates and accessibility.
+- 将 Web UI 中的所有时间戳本地化为浏览器的语言环境和时区，同时保留机器可读的 `<time>` 值，以支持实时更新和无障碍访问。
 - 明确语言约定：`CHANGELOG.md` 使用简体中文；其余仓库内容（包括源码注释和提交信息）使用英文。
 
 ## [0.3.14] - 2026-08-23
@@ -17,167 +18,167 @@ section using the release version and date.
 ### Fixed
 
 - 修复中文下载列表相对时间单位显示为英文缩写的问题，并新增排除队列等待时间的 115 到 NAS 总耗时展示。
-- Fixed torrent cloud-copy resolution so directory-wrapped single-file offline results select the declared inner file, preserve immutable torrent manifests, and verify uploaded files against their stored layout before completion.
+- 修复 torrent 云复制解析：目录包装的单文件离线结果现在会选择声明的内部文件，保留不可变的 torrent 清单，并在完成前按照其存储布局验证上传文件。
 
 ## [0.3.13] - 2026-08-22
 
 ### Changed
 
-- Kept the Automation API token and qBittorrent API key stable instead of rotating them, persisted their plaintext values, and displayed both on every authenticated Settings page visit; revocation remains available to disable either credential.
+- 保持 Automation API token 和 qBittorrent API key 稳定，不再自动轮换；持久化保存其明文值，并在每次访问已认证的 Settings 页面时显示两者。仍可通过撤销操作禁用任一凭据。
 
 ## [0.3.12] - 2026-08-22
 
 ### Added
 
-- Added an independent `qbt_` API key lifecycle in Settings for Bearer-authenticated qBittorrent `/api/v2` clients such as ANI-RSS; generated and rotated keys are shown once, and rotation or revocation takes effect immediately without changing SID login or the `/api/v1` `cd211_api_` Automation Token.
+- 在 Settings 中新增独立的 `qbt_` API key 生命周期，用于支持 ANI-RSS 等通过 Bearer 认证的 qBittorrent `/api/v2` 客户端；生成和轮换后的 key 仅显示一次，轮换或撤销会立即生效，且不会改变 SID 登录或 `/api/v1` 的 `cd211_api_` Automation Token。
 
 ## [0.3.11] - 2026-08-15
 
 ### Changed
 
-- Replaced download-list route strips with compact bilingual step/progress statuses and redesigned detail progress as a mutually exclusive three-segment track; terminal states remain task-level and completion keeps its state-badge confirmation.
+- 将下载列表中的路径条替换为紧凑的双语步骤/进度状态，并将详情进度重新设计为互斥的三段式轨道；终态仍属于任务级别，完成状态继续保留状态徽章确认。
 
 ### Fixed
 
-- Kept Web UI and qBittorrent login cookies valid across settings hot swaps and service restarts by making their shared sliding 30-day sessions and logout revocation durable in SQLite.
-- Kept the compact download status column at its intended width so task names receive the remaining table space, and removed the Apply-button flash during filter initialization.
+- 通过将共享的滑动 30 天会话和退出登录撤销状态持久化到 SQLite，确保 Web UI 和 qBittorrent 登录 cookie 在设置热切换和服务重启后仍然有效。
+- 保持紧凑下载状态列的预期宽度，使任务名称获得剩余表格空间，并移除筛选器初始化期间 Apply 按钮的闪烁。
 
 ## [0.3.10] - 2026-08-13
 
 ### Fixed
 
-- Kept English and Chinese navigation, setup steps, action groups, and download states readable at narrow widths; download lists now use compact state labels while preserving full accessible descriptions.
+- 确保英文和中文导航、设置步骤、操作分组及下载状态在窄屏下仍然可读；下载列表现在使用紧凑状态标签，同时保留完整的无障碍描述。
 
 ## [0.3.9] - 2026-08-13
 
 ### Added
 
-- Added live download updates on the Downloads dashboard and detail pages: authenticated ETag/304 conditional polling (2s while any task is active, 10s terminal-only, bounded backoff with immediate resume on visibility and online events), server-rendered row/detail fragments keyed by hash and durable row_version, real progress interpolation with left-to-right stage handoff, a completion confirmation with a 1.2s hold before active-view exit, and filter/search/pagination/history updates that preserve focus and scroll without full page reloads. Forms and navigation keep working without JavaScript.
+- 为 Downloads 仪表盘和详情页新增实时下载更新：经过认证的 ETag/304 条件轮询（任务活跃时每 2 秒一次、仅有终态任务时每 10 秒一次，并采用有界退避，在页面可见和网络恢复事件发生时立即恢复）；新增以 hash 和持久化 `row_version` 为键的服务端渲染行/详情片段；新增真实进度插值和从左到右的阶段交接；新增完成确认，并在退出当前视图前保持 1.2 秒；筛选、搜索、分页和历史记录更新会在不完整刷新页面的情况下保留焦点和滚动位置。无 JavaScript 时表单和导航仍可正常工作。
 
 ### Changed
 
-- Consolidated all JS-driven motion behind one shared module (`motion.js`) with a single timing policy; same-origin navigation now keeps the sidebar steady and slides only the main content while the active nav item stays in place, and the delete dialog uses a shared purposeful open/close path that is safe under rapid reopen. All motion honors `prefers-reduced-motion`.
-- Settings test/save, category create/save, webhook enable/disable/test/replay, and API-token generate/rotate/revoke submissions mark the button busy and block duplicate submissions while the server's own response stays authoritative.
-- Reworked first-run setup step navigation: step URLs keep browser Back/Forward on reached steps without regressing wizard state, directional transitions keep the step rail continuous, connection feedback and directory results transition in place, and failed connection/path tests retain entered values with an explicit busy state.
-- Defined the pinned Light theme alongside Dark, added explicit English and Simplified Chinese font fallback tokens, and made shared typography and radius tokens resolve consistently in both themes.
+- 将所有由 JS 驱动的动效统一到共享的 `motion.js` 模块中，并采用单一时间策略；同源导航现在保持侧边栏稳定，只滑动主内容，当前导航项保持原位；删除对话框使用共享且有明确目的的打开/关闭流程，可安全应对快速重复打开。所有动效均遵循 `prefers-reduced-motion`。
+- Settings 测试/保存、分类创建/保存、webhook 启用/禁用/测试/重放，以及 API token 生成/轮换/撤销提交都会将按钮标记为忙碌状态并阻止重复提交，同时以服务器自身的响应为准。
+- 重新设计首次运行设置的步骤导航：步骤 URL 会让浏览器的后退/前进操作停留在已到达的步骤，而不会回退向导状态；方向性过渡保持步骤轨道连续；连接反馈和目录结果在原位过渡；连接/路径测试失败时保留已输入的值，并显示明确的忙碌状态。
+- 在 Dark 主题旁定义固定的 Light 主题，新增明确的英文和简体中文字体回退 token，并使共享的字体排版和圆角 token 在两种主题中保持一致解析。
 
 ### Fixed
 
-- Show the fixed action-column shadow only while it overlaps horizontally scrollable table content, removing the segmented gray stripe from wide tables.
-- Kept primary-button labels and current setup-step numbers white and readable on indigo backgrounds in Light mode, including after cached stylesheet upgrades.
+- 仅在固定操作列阴影与可水平滚动的表格内容重叠时显示该阴影，移除宽表格中的分段灰色条纹。
+- 确保 Light 模式下主按钮标签和当前设置步骤编号在靛蓝色背景上保持白色且清晰可读，包括缓存样式表升级之后。
 
 ## [0.3.8] - 2026-08-13
 
 ### Fixed
 
-- Made light mode the default and applied saved theme preferences before styles load, preventing a dark-to-light flash during page and browser-history navigation.
+- 将 Light 模式设为默认主题，并在样式加载前应用已保存的主题偏好，避免页面导航和浏览器历史导航期间出现从深色到浅色的闪烁。
 
 ## [0.3.7] - 2026-08-13
 
 ### Fixed
 
-- Redirected authenticated operators away from the login page to the dashboard.
+- 将已认证的操作员从登录页重定向到仪表盘。
 
 ## [0.3.6] - 2026-08-12
 
 ### Added
 
-- Added durable structured problem codes for download failures, with localized English/Chinese warnings for automatic retries that show the next retry time and corrective guidance for terminal failures.
-- Added nullable `error_code` and `next_retry_at` fields to the native automation API query model.
+- 为下载失败新增持久化的结构化问题代码，并为自动重试提供本地化的中英文警告，其中显示下次重试时间；终态失败则提供纠正指导。
+- 为原生 automation API 查询模型新增可为空的 `error_code` 和 `next_retry_at` 字段。
 
 ### Changed
 
-- Reworked copy submission retry: CloudDrive2 not-ready, unreachable, and authentication observations keep a download non-terminal with persisted backoff, and a phase deadline now maps to a specific terminal code instead of a generic timeout.
-- Magnet submissions no longer depend on CloudDrive2 directory metadata: the verified local copy decides file-vs-directory, size, and content path before completion, while uploaded `.torrent` submissions keep strict expected verification.
+- 重新设计复制提交重试：CloudDrive2 未就绪、无法访问和认证相关的观测结果会使下载保持非终态，并持久化退避状态；阶段截止时间现在会映射到具体终态代码，而不是通用超时。
+- 磁力提交不再依赖 CloudDrive2 的目录元数据：完成前由已验证的本地副本决定文件或目录类型、大小和内容路径；上传的 `.torrent` 提交则继续执行严格的预期验证。
 
 ### Fixed
 
-- Fixed premature terminal failures when a finished 115 offline task is not yet accepted by the CloudDrive2 copy service: the download now retries with an actionable structured problem instead of failing immediately.
-- Prevented CloudDrive2 folder creation on temporary, authentication, or rejected lookup errors; only a verified not-found lookup creates the leaf folder.
+- 修复已完成的 115 离线任务尚未被 CloudDrive2 复制服务接受时过早进入终态失败的问题：下载现在会携带可操作的结构化问题重试，而不是立即失败。
+- 防止 CloudDrive2 在临时错误、认证错误或拒绝的查询错误下创建文件夹；只有经过验证的“未找到”查询才会创建叶文件夹。
 
 ## [0.3.5] - 2026-08-12
 
 ### Added
 
-- Added a system-aware light theme with an accessible dashboard toggle and saved user preference.
+- 新增感知系统设置的 Light 主题，提供无障碍的仪表盘切换控件，并保存用户偏好。
 
 ### Changed
 
-- Shortened the dashboard CloudDrive2 status to compact localized labels while preserving the full accessible description.
+- 将仪表盘上的 CloudDrive2 状态缩短为紧凑的本地化标签，同时保留完整的无障碍描述。
 
 ## [0.3.4] - 2026-08-12
 
 ### Added
 
-- Added safe per-task pause and resume controls, with explicit record-only or record-and-local-files deletion choices.
-- Added download name/hash search and 25-row pagination that preserve the active list filters after task actions.
+- 新增安全的单任务暂停和恢复控件，并明确区分仅删除记录或同时删除记录与本地文件。
+- 新增按下载名称/hash 搜索及每页 25 行的分页功能，任务操作后仍保留当前列表筛选条件。
 
 ### Changed
 
-- Kept long download names to one line with ellipsis truncation and full-title hover text.
+- 将过长的下载名称保持在单行内，使用省略号截断，并通过悬停文本显示完整标题。
 
 ## [0.3.3] - 2026-08-12
 
 ### Changed
 
-- Reworked the Chinese and English READMEs around user value, current setup, automation features, and a new dashboard hero image.
-- Updated Docker CI and publishing actions to Node.js 24-based major versions.
+- 围绕用户价值、当前设置流程、自动化功能和新的仪表盘主视觉图，重新编写中文和英文 README。
+- 将 Docker CI 和发布操作更新为基于 Node.js 24 的主要版本。
 
 ### Fixed
 
-- Filled unknown download sizes from CloudDrive2 offline task metadata without overwriting known totals.
+- 使用 CloudDrive2 离线任务元数据补全未知下载大小，同时不覆盖已知总大小。
 
 ## [0.3.2] - 2026-08-11
 
 ### Fixed
 
-- Added a forward migration for webhook outbox databases missing the domain event sequence, preserving existing events, delivery references, and feed cursors.
-- Logged the underlying webhook repository failure instead of a literal placeholder.
+- 为缺少领域事件序列的 webhook outbox 数据库新增向前迁移，同时保留已有事件、投递引用和 feed 游标。
+- 记录底层 webhook repository 错误，而不再记录字面量占位符。
 
 ## [0.3.1] - 2026-08-11
 
 ### Changed
 
-- Separated API token management from the main settings save actions.
-- Clarified webhook endpoint setup with authentication guidance, event payload examples, and a dedicated delivery test action.
+- 将 API token 管理从主要设置保存操作中分离出来。
+- 通过认证说明、事件 payload 示例和专用投递测试操作，明确 webhook 端点的设置方式。
 
 ## [0.3.0] - 2026-08-10
 
 ### Added
 
-- Added a native automation API secured by a single system-generated global API token, with JSON magnet and multipart torrent submission, status queries, terminal wait, and a completed/failed event pull feed.
+- 新增受单个系统生成的全局 API token 保护的原生 automation API，支持 JSON 磁力链接和 multipart torrent 提交、状态查询、终态等待，以及已完成/失败事件拉取 feed。
 
 ### Changed
 
-- Index-backed completed/failed event scans and sanitized, path-safe error output for the native automation API.
+- 为原生 automation API 新增基于索引的已完成/失败事件扫描，并输出经过清理且路径安全的错误信息。
 
 ## [0.2.3] - 2026-08-10
 
 ### Added
 
-- Added CloudDrive2 and local directory pickers to the first-run setup flow, including directory creation.
-- Added signed outbound webhook notifications for completed and failed downloads: a transactional outbox, per-endpoint subscriptions, HMAC signing, bounded retry for up to 24 hours, dead-letter, and manual replay from delivery history.
+- 在首次运行设置流程中新增 CloudDrive2 和本地目录选择器，包括目录创建功能。
+- 新增已完成和失败下载的签名出站 webhook 通知：事务性 outbox、按端点订阅、HMAC 签名、最长 24 小时的有界重试、死信，以及从投递历史手动重放。
 
 ### Changed
 
-- Focused the README on operator setup and runtime configuration.
-- Added repository guidance for contributors and coding agents.
-- Made versioned `CHANGELOG.md` entries the source for GitHub release notes.
-- Made category paths relative to their storage roots, with automatic remapping when roots change and guided category setup after onboarding.
+- 将 README 的重点放在操作员设置和运行时配置上。
+- 新增面向贡献者和 coding agent 的仓库指南。
+- 将版本化的 `CHANGELOG.md` 条目作为 GitHub release notes 的来源。
+- 将分类路径改为相对于存储根目录的路径；存储根目录变更时自动重新映射，并在引导流程完成后提供分类设置指引。
 
 ### Fixed
 
-- Made the download dashboard default to all qBittorrent-visible tasks and show localized state labels.
-- Prevented startup permission hardening from invalidating SQLite WAL locks.
-- Included CloudDrive2's rejection message in failed NAS copy diagnostics.
+- 将下载仪表盘默认范围设为所有 qBittorrent 可见任务，并显示本地化状态标签。
+- 防止启动时的权限加固使 SQLite WAL 锁失效。
+- 在失败的 NAS 复制诊断中包含 CloudDrive2 的拒绝消息。
 
 ## [0.2.2] - 2026-08-09
 
 ### Changed
 
-- Redesigned first-run setup as a clearer four-step wizard with responsive desktop and mobile layouts.
-- Added visible step progress, improved form grouping, and a cleaner final configuration review.
+- 将首次运行设置重新设计为更清晰的四步向导，并提供响应式桌面和移动端布局。
+- 显示步骤进度，改进表单分组，并提供更清晰的最终配置审查。
 
 ### Fixed
 
-- Made localization and static asset routes available during setup so language switching, styling, and scripts work before setup completes.
+- 使本地化和静态资源路由在设置完成前也可用，确保语言切换、样式和脚本正常工作。
