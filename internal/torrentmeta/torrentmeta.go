@@ -288,6 +288,30 @@ func normalizeTrackers(raw []string, limits Limits) ([]string, error) {
 	return trackers, nil
 }
 
+// NormalizeTrackers validates, normalizes, and de-duplicates tracker URLs.
+func NormalizeTrackers(raw []string, limits Limits) ([]string, error) {
+	return normalizeTrackers(raw, limits)
+}
+
+// AddTrackers appends validated trackers to a magnet while preserving all
+// existing query parameters and tracker order.
+func AddTrackers(raw string, additional []string, limits Limits) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil || !strings.EqualFold(u.Scheme, "magnet") {
+		return "", errInvalidMagnet
+	}
+	query := u.Query()
+	source := append([]string(nil), query["tr"]...)
+	combined := append(source, additional...)
+	trackers, err := normalizeTrackers(combined, limits)
+	if err != nil {
+		return "", err
+	}
+	query["tr"] = trackers
+	u.RawQuery = query.Encode()
+	return u.String(), nil
+}
+
 func validateName(name string, limits Limits) error {
 	if len(name) > limits.MaxNameBytes || len(name) > limits.MaxComponentBytes || len(name) > limits.MaxPathBytes {
 		return errResourceLimit

@@ -17,10 +17,12 @@ type Projection struct {
 	Hash                     string
 	Name                     string
 	Size                     int64
+	Completed                int64
 	Progress                 float64
 	ETA                      int64
 	State                    string
 	Category                 string
+	Tags                     string
 	SavePath                 string
 	ContentPath              string
 	Ratio                    float64
@@ -128,7 +130,9 @@ func ValidateDownload(download Download) error {
 	} else if download.CompletedAt != nil {
 		return errors.New("completed at is only allowed for completed or deletion state")
 	}
-
+	if len(download.Tags) > 64<<10 || strings.ContainsFunc(download.Tags, unicode.IsControl) {
+		return errors.New("tags are invalid")
+	}
 	return nil
 }
 
@@ -201,7 +205,23 @@ func Project(download Download) (Projection, error) {
 		return Projection{}, fmt.Errorf("state %s is not projectable", download.State)
 	}
 
+	projection.Completed = completedBytes(projection.Size, projection.Progress)
+	projection.Tags = download.Tags
 	return projection, nil
+}
+func completedBytes(size int64, progress float64) int64 {
+	if size <= 0 {
+		return 0
+	}
+	progress = clamp(progress)
+	completed := int64(float64(size) * progress)
+	if completed < 0 {
+		return 0
+	}
+	if completed > size {
+		return size
+	}
+	return completed
 }
 
 func validHash(hash string) bool {

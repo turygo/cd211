@@ -33,9 +33,21 @@ type repository interface {
 	GetDownload(context.Context, string) (domain.Download, error)
 	ListDownloads(context.Context, *string) ([]domain.Download, error)
 	ListDownloadFiles(context.Context, string) ([]domain.DownloadFile, error)
+	ListDownloadFileOverrides(context.Context, string) ([]domain.FileOverride, error)
 	SetCategory(context.Context, string, string, time.Time) error
 	Start(context.Context, string, time.Time) error
 	RequestDelete(context.Context, []string, bool, time.Time) error
+	UpdateTags(context.Context, []string, string, time.Time) error
+	AddTags(context.Context, []string, string, time.Time) error
+	SetAutoTMM(context.Context, []string, bool, time.Time) error
+	StartMany(context.Context, []string, time.Time) error
+	SetSavePath(context.Context, string, string, int64, time.Time) error
+	SetSavePaths(context.Context, []string, string, time.Time) error
+	SetFileOverride(context.Context, string, int64, string, int64, time.Time) error
+	SetFilePriorities(context.Context, string, []int64, int64, time.Time) error
+	ListSettings(context.Context) (map[string]string, error)
+	ReplaceSettings(context.Context, map[string]string, time.Time) error
+	UpdateQBTPreferences(context.Context, *string, *bool, time.Time) error
 }
 
 // QBTAPIKeyRepository is the narrow qBittorrent API key lookup boundary used
@@ -108,37 +120,46 @@ func New(config Config, credentials Credentials, repo repository, sessions *sess
 	h := &handler{config: config, creds: credentials, repo: repo, qbtkeys: qbtkeys, sessions: sessions, clock: clock, waker: waker, filesystem: files, service: service}
 	mux := http.NewServeMux()
 	routes := map[string]string{
-		apiPrefix + "auth/login":              http.MethodPost,
-		apiPrefix + "auth/logout":             http.MethodPost,
-		apiPrefix + "app/webapiVersion":       http.MethodGet,
-		apiPrefix + "app/version":             http.MethodGet,
-		apiPrefix + "app/preferences":         http.MethodGet,
-		apiPrefix + "torrents/categories":     http.MethodGet,
-		apiPrefix + "torrents/createCategory": http.MethodPost,
-		apiPrefix + "torrents/setCategory":    http.MethodPost,
-		apiPrefix + "torrents/add":            http.MethodPost,
-		apiPrefix + "torrents/info":           http.MethodGet,
-		apiPrefix + "torrents/properties":     http.MethodGet,
-		apiPrefix + "torrents/files":          http.MethodGet,
-		apiPrefix + "torrents/delete":         http.MethodPost,
-		apiPrefix + "torrents/setForceStart":  http.MethodPost,
-		apiPrefix + "torrents/setShareLimits": http.MethodPost,
-		apiPrefix + "torrents/topPrio":        http.MethodPost,
+		apiPrefix + "auth/login": http.MethodPost, apiPrefix + "auth/logout": http.MethodPost,
+		apiPrefix + "app/webapiVersion": "read", apiPrefix + "app/version": "read", apiPrefix + "app/preferences": "read",
+		apiPrefix + "app/setPreferences":  http.MethodPost,
+		apiPrefix + "torrents/categories": "read", apiPrefix + "torrents/createCategory": http.MethodPost, apiPrefix + "torrents/setCategory": http.MethodPost,
+		apiPrefix + "torrents/add": http.MethodPost, apiPrefix + "torrents/info": "read", apiPrefix + "torrents/properties": "read", apiPrefix + "torrents/files": "read",
+		apiPrefix + "torrents/delete": http.MethodPost, apiPrefix + "torrents/start": http.MethodPost, apiPrefix + "torrents/setForceStart": http.MethodPost,
+		apiPrefix + "torrents/addTags": http.MethodPost, apiPrefix + "torrents/setAutoManagement": http.MethodPost,
+		apiPrefix + "torrents/setSavePath": http.MethodPost, apiPrefix + "torrents/setLocation": http.MethodPost,
+		apiPrefix + "torrents/renameFile": http.MethodPost, apiPrefix + "torrents/filePrio": http.MethodPost,
+		apiPrefix + "torrents/setShareLimits": http.MethodPost, apiPrefix + "torrents/topPrio": http.MethodPost,
 	}
 	mux.Handle("POST "+apiPrefix+"auth/login", http.HandlerFunc(h.login))
 	mux.Handle("POST "+apiPrefix+"auth/logout", h.auth(h.logout))
 	mux.Handle("GET "+apiPrefix+"app/webapiVersion", h.auth(h.webAPIVersion))
+	mux.Handle("POST "+apiPrefix+"app/webapiVersion", h.auth(h.webAPIVersion))
 	mux.Handle("GET "+apiPrefix+"app/version", h.auth(h.version))
+	mux.Handle("POST "+apiPrefix+"app/version", h.auth(h.version))
 	mux.Handle("GET "+apiPrefix+"app/preferences", h.auth(h.preferences))
+	mux.Handle("POST "+apiPrefix+"app/preferences", h.auth(h.preferences))
+	mux.Handle("POST "+apiPrefix+"app/setPreferences", h.auth(h.setPreferences))
 	mux.Handle("GET "+apiPrefix+"torrents/categories", h.auth(h.categories))
+	mux.Handle("POST "+apiPrefix+"torrents/categories", h.auth(h.categories))
 	mux.Handle("POST "+apiPrefix+"torrents/createCategory", h.auth(h.createCategory))
 	mux.Handle("POST "+apiPrefix+"torrents/setCategory", h.auth(h.setCategory))
 	mux.Handle("POST "+apiPrefix+"torrents/add", h.auth(h.addTorrent))
 	mux.Handle("GET "+apiPrefix+"torrents/info", h.auth(h.info))
+	mux.Handle("POST "+apiPrefix+"torrents/info", h.auth(h.info))
 	mux.Handle("GET "+apiPrefix+"torrents/properties", h.auth(h.properties))
+	mux.Handle("POST "+apiPrefix+"torrents/properties", h.auth(h.properties))
 	mux.Handle("GET "+apiPrefix+"torrents/files", h.auth(h.files))
+	mux.Handle("POST "+apiPrefix+"torrents/files", h.auth(h.files))
 	mux.Handle("POST "+apiPrefix+"torrents/delete", h.auth(h.deleteTorrents))
+	mux.Handle("POST "+apiPrefix+"torrents/start", h.auth(h.start))
 	mux.Handle("POST "+apiPrefix+"torrents/setForceStart", h.auth(h.setForceStart))
+	mux.Handle("POST "+apiPrefix+"torrents/addTags", h.auth(h.addTags))
+	mux.Handle("POST "+apiPrefix+"torrents/setAutoManagement", h.auth(h.setAutoManagement))
+	mux.Handle("POST "+apiPrefix+"torrents/setSavePath", h.auth(h.setSavePath))
+	mux.Handle("POST "+apiPrefix+"torrents/setLocation", h.auth(h.setLocation))
+	mux.Handle("POST "+apiPrefix+"torrents/renameFile", h.auth(h.renameFile))
+	mux.Handle("POST "+apiPrefix+"torrents/filePrio", h.auth(h.filePriority))
 	mux.Handle("POST "+apiPrefix+"torrents/setShareLimits", h.auth(h.emptyFormPost))
 	mux.Handle("POST "+apiPrefix+"torrents/topPrio", h.auth(h.emptyFormPost))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -147,7 +168,12 @@ func New(config Config, credentials Credentials, repo repository, sessions *sess
 			notFound(w)
 			return
 		}
-		if r.Method != method {
+		if method == "read" {
+			if r.Method != http.MethodGet && r.Method != http.MethodPost {
+				plain(w, http.StatusMethodNotAllowed, "Method Not Allowed\n")
+				return
+			}
+		} else if r.Method != method {
 			plain(w, http.StatusMethodNotAllowed, "Method Not Allowed\n")
 			return
 		}

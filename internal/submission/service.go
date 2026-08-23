@@ -23,16 +23,23 @@ import (
 	"github.com/turygo/cd211/internal/torrentmeta"
 )
 
-// Sentinel errors classify a submission outcome so HTTP adapters can map them
-// without knowing the underlying cause.
 var (
-	// ErrInvalidSource reports a magnet or torrent that failed bounded parsing,
-	// including a magnet that is not exactly one non-empty line after trim.
-	ErrInvalidSource = errors.New("submission: invalid torrent source")
-	// ErrCategoryInvalid reports a category name that violates the canonical
-	// category rules, a category that is not configured, or a disabled one.
+	ErrInvalidSource   = errors.New("submission: invalid torrent source")
 	ErrCategoryInvalid = errors.New("submission: category is unavailable")
+	ErrInvalidOptions  = errors.New("submission: invalid options")
 )
+
+// Options are qBittorrent-visible fields committed atomically with submission.
+type Options struct {
+	Rename      string
+	RenameSet   bool
+	Tags        string
+	TagsSet     bool
+	AutoTMM     bool
+	AutoTMMSet  bool
+	SavePath    string
+	SavePathSet bool
+}
 
 // Repository is the durable boundary the service needs. *store.Store
 // implements it.
@@ -91,14 +98,11 @@ func New(config Config, repo Repository, clock Clock, waker Waker, files Filesys
 	}
 	return &Service{repo: repo, files: files, clock: clock, waker: waker, config: config}, nil
 }
-
-// SubmitMagnet parses and persists a magnet submission. raw is the request
-// value exactly as decoded by the adapter; the service applies the one-line
-// rule, bounded metadata parsing, category lookup, revival verification, and
-// the stopped override. The returned download is the persisted row: a fresh
-// insert or a revived DELETED row when created is true, otherwise the
-// untouched existing row.
 func (s *Service) SubmitMagnet(ctx context.Context, raw, category string, stopped bool) (domain.Download, bool, error) {
+	return s.SubmitMagnetWithOptions(ctx, raw, category, stopped, Options{})
+}
+
+func (s *Service) SubmitMagnetWithOptions(ctx context.Context, raw, category string, stopped bool, options Options) (domain.Download, bool, error) {
 	category, cloudFolder, savePath, err := s.submissionPaths(ctx, category)
 	if err != nil {
 		return domain.Download{}, false, err
@@ -111,13 +115,14 @@ func (s *Service) SubmitMagnet(ctx context.Context, raw, category string, stoppe
 	if err != nil {
 		return domain.Download{}, false, ErrInvalidSource
 	}
-	return s.submit(ctx, result, domain.SourceMagnet, category, cloudFolder, savePath, stopped)
+	return s.submit(ctx, result, domain.SourceMagnet, category, cloudFolder, savePath, stopped, options)
 }
 
-// SubmitTorrent parses and persists a torrent submission. data is the decoded
-// file bytes; the filename is informational only. The same category lookup,
-// revival verification, and stopped override apply as for magnets.
 func (s *Service) SubmitTorrent(ctx context.Context, data []byte, category string, stopped bool) (domain.Download, bool, error) {
+	return s.SubmitTorrentWithOptions(ctx, data, category, stopped, Options{})
+}
+
+func (s *Service) SubmitTorrentWithOptions(ctx context.Context, data []byte, category string, stopped bool, options Options) (domain.Download, bool, error) {
 	category, cloudFolder, savePath, err := s.submissionPaths(ctx, category)
 	if err != nil {
 		return domain.Download{}, false, err
@@ -126,7 +131,7 @@ func (s *Service) SubmitTorrent(ctx context.Context, data []byte, category strin
 	if err != nil {
 		return domain.Download{}, false, ErrInvalidSource
 	}
-	return s.submit(ctx, result, domain.SourceTorrent, category, cloudFolder, savePath, stopped)
+	return s.submit(ctx, result, domain.SourceTorrent, category, cloudFolder, savePath, stopped, options)
 }
 
 // submissionPaths resolves the canonical category and its frozen destination
@@ -153,13 +158,77 @@ func (s *Service) submissionPaths(ctx context.Context, rawCategory string) (cate
 	}
 	return category, configured.CloudPath, configured.SavePath, nil
 }
-
-func (s *Service) submit(ctx context.Context, result torrentmeta.Result, source domain.SourceKind, category, cloudFolder, savePath string, stopped bool) (domain.Download, bool, error) {
+func (s *Service) submit(ctx context.Context, result torrentmeta.Result, source domain.SourceKind, category, cloudFolder, savePath string, stopped bool, options Options) (domain.Download, bool, error) {
+	if settingsRepo, ok := s.repo.(interface {
+		ListSettings(context.Context) (map[string]string, error)
+	}); ok {
+		settings, settingsErr := settingsRepo.ListSettings(ctx)
+		if settingsErr != nil {
+			return domain.Download{}, false, fmt.Errorf("load qBittorrent preferences: %w", settingsErr)
+		}
+		if settings["qbt.add_trackers_enabled"] == "true" && strings.TrimSpace(settings["qbt.add_trackers"]) != "" {
+			rawTrackers := strings.Split(settings["qbt.add_trackers"], "\n")
+			trackers := make([]string, 0, len(rawTrackers))
+			for _, tracker := range rawTrackers {
+				tracker = strings.TrimSpace(tracker)
+				if tracker == "" {
+					return domain.Download{}, false, ErrInvalidSource
+				}
+				trackers = append(trackers, tracker)
+			}
+			if _, normalizeErr := torrentmeta.NormalizeTrackers(trackers, s.config.TorrentLimits); normalizeErr != nil {
+				return domain.Download{}, false, ErrInvalidSource
+			}
+			var mergeErr error
+			result.Magnet, mergeErr = torrentmeta.AddTrackers(result.Magnet, trackers, s.config.TorrentLimits)
+			if mergeErr != nil {
+				return domain.Download{}, false, ErrInvalidSource
+			}
+		}
+	}
+	if options.AutoTMMSet && options.AutoTMM {
+		return domain.Download{}, false, ErrInvalidOptions
+	}
+	if options.RenameSet {
+		options.Rename = strings.TrimSpace(options.Rename)
+		if !safeRetainedName(options.Rename) {
+			return domain.Download{}, false, ErrInvalidOptions
+		}
+	}
+	if options.TagsSet {
+		var valid bool
+		options.Tags, valid = canonicalTags(options.Tags, false)
+		if !valid {
+			return domain.Download{}, false, ErrInvalidOptions
+		}
+	}
+	if options.SavePathSet {
+		if !filepath.IsAbs(options.SavePath) || filepath.Clean(options.SavePath) != options.SavePath {
+			return domain.Download{}, false, ErrInvalidOptions
+		}
+		resolver, ok := s.files.(interface {
+			ResolveSaveRoot(string) (string, bool, error)
+			PrepareSaveRoot(string) (string, error)
+		})
+		if !ok {
+			return domain.Download{}, false, ErrInvalidOptions
+		}
+		resolved, _, resolveErr := resolver.ResolveSaveRoot(options.SavePath)
+		if resolveErr != nil {
+			return domain.Download{}, false, ErrInvalidOptions
+		}
+		if _, prepareErr := resolver.PrepareSaveRoot(resolved); prepareErr != nil {
+			return domain.Download{}, false, prepareErr
+		}
+		savePath = resolved
+	}
 	now := s.clock.Now().UTC()
-	download := domain.Download{
-		Hash: result.Hash, Name: result.Name, SourceKind: source, SubmissionURI: result.Magnet,
-		Category: category, CloudFolder: cloudFolder, SavePath: savePath, TotalSize: result.TotalSize,
-		State: domain.StateAccepted, PhaseStartedAt: now, NextRunAt: &now, CreatedAt: now, UpdatedAt: now,
+	download := domain.Download{Hash: result.Hash, Name: result.Name, SourceKind: source, SubmissionURI: result.Magnet, Category: category, CloudFolder: cloudFolder, SavePath: savePath, TotalSize: result.TotalSize, State: domain.StateAccepted, PhaseStartedAt: now, NextRunAt: &now, CreatedAt: now, UpdatedAt: now}
+	if options.TagsSet {
+		download.Tags = options.Tags
+	}
+	if options.AutoTMMSet {
+		download.AutoTMM = options.AutoTMM
 	}
 	filesToCreate := make([]domain.DownloadFile, 0, len(result.Files))
 	if source == domain.SourceTorrent {
@@ -170,6 +239,10 @@ func (s *Service) submit(ctx context.Context, result torrentmeta.Result, source 
 		}
 	}
 	s.prepareRetainedContent(ctx, &download, filesToCreate)
+	if options.RenameSet {
+		download.Name = options.Rename
+		download.NameOverridden = true
+	}
 	if stopped {
 		download.State = domain.StateStopped
 		download.NextRunAt = nil
@@ -213,8 +286,30 @@ func (s *Service) prepareRetainedContent(ctx context.Context, download *domain.D
 	if download.SourceKind == domain.SourceTorrent {
 		expected.MultiFile = *download.IsMultiFile
 		expected.Files = make([]fsafe.ExpectedFile, 0, len(files))
+		overrides := make(map[int64]domain.FileOverride)
+		if overrideRepo, ok := s.repo.(interface {
+			ListDownloadFileOverrides(context.Context, string) ([]domain.FileOverride, error)
+		}); ok {
+			values, overrideErr := overrideRepo.ListDownloadFileOverrides(ctx, download.Hash)
+			if overrideErr != nil {
+				return
+			}
+			for _, value := range values {
+				overrides[value.FileIndex] = value
+			}
+		}
 		for _, file := range files {
-			expected.Files = append(expected.Files, fsafe.ExpectedFile{RelativePath: file.RelativePath, Size: file.Size})
+			path, priority := file.RelativePath, int64(1)
+			if override, exists := overrides[file.Index]; exists {
+				path, priority = override.RelativePath, override.Priority
+			}
+			if priority == 0 {
+				continue
+			}
+			expected.Files = append(expected.Files, fsafe.ExpectedFile{RelativePath: path, Size: file.Size})
+		}
+		if len(expected.Files) == 0 {
+			return
 		}
 	} else {
 		expected.MultiFile = *existing.IsMultiFile
@@ -284,6 +379,29 @@ func oneMagnetLine(value string) (string, bool) {
 	}
 	line := strings.TrimSpace(lines[0])
 	return line, line != ""
+}
+func canonicalTags(raw string, required bool) (string, bool) {
+	parts := strings.Split(raw, ",")
+	seen := make(map[string]struct{}, len(parts))
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if strings.ContainsAny(part, ",\x00") || strings.ContainsFunc(part, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+			return "", false
+		}
+		if _, exists := seen[part]; exists {
+			continue
+		}
+		seen[part] = struct{}{}
+		result = append(result, part)
+	}
+	if required && len(result) == 0 {
+		return "", false
+	}
+	return strings.Join(result, ","), true
 }
 
 func validCloudRoot(root string) bool {

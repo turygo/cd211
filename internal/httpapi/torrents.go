@@ -6,6 +6,8 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/turygo/cd211/internal/domain"
@@ -61,13 +63,66 @@ func (h *handler) addTorrent(w http.ResponseWriter, r *http.Request) {
 		badRequest(w)
 		return
 	}
+	if values, present := r.PostForm["rename"]; present {
+		if len(values) != 1 || strings.TrimSpace(values[0]) == "" || strings.ContainsAny(values[0], "/\\\x00") {
+			badRequest(w)
+			return
+		}
+	}
+	if values, present := r.PostForm["tags"]; present {
+		if len(values) != 1 {
+			badRequest(w)
+			return
+		}
+		if _, valid := normalizeTags(values[0], false); !valid {
+			badRequest(w)
+			return
+		}
+	}
+	if values, present := r.PostForm["autoTMM"]; present {
+		if len(values) != 1 {
+			badRequest(w)
+			return
+		}
+		if _, valid := requiredBool(r.PostForm, "autoTMM"); !valid {
+			badRequest(w)
+			return
+		}
+	}
+	if values, present := r.PostForm["savepath"]; present {
+		if len(values) != 1 || !filepath.IsAbs(values[0]) || filepath.Clean(values[0]) != values[0] {
+			badRequest(w)
+			return
+		}
+	}
+	options := submission.Options{}
+	if values, present := r.PostForm["rename"]; present {
+		options.RenameSet = true
+		options.Rename = values[0]
+	}
+	if values, present := r.PostForm["tags"]; present {
+		options.TagsSet = true
+		options.Tags = values[0]
+	}
+	if _, present := r.PostForm["autoTMM"]; present {
+		enabled, _ := requiredBool(r.PostForm, "autoTMM")
+		if enabled {
+			conflict(w)
+			return
+		}
+		options.AutoTMMSet = true
+	}
+	if values, present := r.PostForm["savepath"]; present {
+		options.SavePathSet = true
+		options.SavePath = values[0]
+	}
 	switch {
 	case len(urls) > 0:
 		if len(urls) != 1 {
 			badRequest(w)
 			return
 		}
-		_, _, err = h.service.SubmitMagnet(r.Context(), urls[0], category, stopped)
+		_, _, err = h.service.SubmitMagnetWithOptions(r.Context(), urls[0], category, stopped, options)
 	case len(files["torrents"]) > 0:
 		if mediaType != "multipart/form-data" || len(files["torrents"]) != 1 {
 			badRequest(w)
@@ -78,13 +133,13 @@ func (h *handler) addTorrent(w http.ResponseWriter, r *http.Request) {
 			badRequest(w)
 			return
 		}
-		_, _, err = h.service.SubmitTorrent(r.Context(), data, category, stopped)
+		_, _, err = h.service.SubmitTorrentWithOptions(r.Context(), data, category, stopped, options)
 	default:
 		badRequest(w)
 		return
 	}
 	if err != nil {
-		if errors.Is(err, submission.ErrInvalidSource) || errors.Is(err, submission.ErrCategoryInvalid) {
+		if errors.Is(err, submission.ErrInvalidSource) || errors.Is(err, submission.ErrCategoryInvalid) || errors.Is(err, submission.ErrInvalidOptions) {
 			badRequest(w)
 			return
 		}
@@ -145,7 +200,12 @@ func optionalBool(values []string) (bool, bool) {
 
 func (h *handler) info(w http.ResponseWriter, r *http.Request) {
 	var category *string
-	if values, present := r.URL.Query()["category"]; present {
+	values, parseOK := readRequestValues(r, "category")
+	if !parseOK {
+		badRequest(w)
+		return
+	}
+	if len(values) > 0 {
 		if len(values) != 1 {
 			badRequest(w)
 			return
@@ -165,7 +225,7 @@ func (h *handler) info(w http.ResponseWriter, r *http.Request) {
 			internalError(w)
 			return
 		}
-		result = append(result, torrentInfo{Hash: projected.Hash, Name: projected.Name, Size: projected.Size, Progress: projected.Progress, ETA: projected.ETA, State: projected.State, Category: projected.Category, SavePath: projected.SavePath, ContentPath: projected.ContentPath, Ratio: projected.Ratio, RatioLimit: projected.RatioLimit, SeedingTime: projected.SeedingTime, SeedingTimeLimit: projected.SeedingTimeLimit, InactiveSeedingTimeLimit: projected.InactiveSeedingTimeLimit, LastActivity: projected.LastActivity})
+		result = append(result, torrentInfo{Hash: projected.Hash, Name: projected.Name, Size: projected.Size, Completed: projected.Completed, Progress: projected.Progress, ETA: projected.ETA, State: projected.State, Category: projected.Category, Tags: projected.Tags, SavePath: projected.SavePath, ContentPath: projected.ContentPath, Ratio: projected.Ratio, RatioLimit: projected.RatioLimit, SeedingTime: projected.SeedingTime, SeedingTimeLimit: projected.SeedingTimeLimit, InactiveSeedingTimeLimit: projected.InactiveSeedingTimeLimit, LastActivity: projected.LastActivity})
 	}
 	writeJSON(w, http.StatusOK, result)
 }
@@ -218,16 +278,39 @@ func (h *handler) files(w http.ResponseWriter, r *http.Request) {
 		internalError(w)
 		return
 	}
+	overrides, err := h.repo.ListDownloadFileOverrides(r.Context(), hash)
+	if err != nil {
+		internalError(w)
+		return
+	}
+	overrideByIndex := make(map[int64]domain.FileOverride, len(overrides))
+	for _, override := range overrides {
+		overrideByIndex[override.FileIndex] = override
+	}
 	result := make([]torrentFile, 0, len(storedFiles))
 	for _, file := range storedFiles {
-		result = append(result, torrentFile{Index: file.Index, Name: file.RelativePath, Size: file.Size, Progress: projected.Progress, Priority: 1, IsSeed: false})
+		name, priority := file.RelativePath, int64(1)
+		if override, exists := overrideByIndex[file.Index]; exists {
+			name, priority = override.RelativePath, override.Priority
+		}
+		result = append(result, torrentFile{Index: file.Index, Name: name, Size: file.Size, Progress: projected.Progress, Priority: priority, IsSeed: false})
 	}
 	writeJSON(w, http.StatusOK, result)
 }
 
+func readRequestValues(r *http.Request, name string) ([]string, bool) {
+	if r.Method == http.MethodPost {
+		if err := r.ParseForm(); err != nil {
+			return nil, false
+		}
+		return r.PostForm[name], true
+	}
+	return r.URL.Query()[name], true
+}
+
 func canonicalHashQuery(r *http.Request) (string, bool) {
-	values, present := r.URL.Query()["hash"]
-	if !present || len(values) != 1 {
+	values, ok := readRequestValues(r, "hash")
+	if !ok || len(values) != 1 {
 		return "", false
 	}
 	return canonicalHash(values[0])
@@ -391,4 +474,321 @@ func requiredBool(form map[string][]string, name string) (bool, bool) {
 	default:
 		return false, false
 	}
+}
+func normalizeTags(raw string, required bool) (string, bool) {
+	parts := strings.Split(raw, ",")
+	seen := make(map[string]struct{}, len(parts))
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if strings.ContainsAny(part, ",\x00") || strings.ContainsFunc(part, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+			return "", false
+		}
+		if _, exists := seen[part]; exists {
+			continue
+		}
+		seen[part] = struct{}{}
+		result = append(result, part)
+	}
+	if required && len(result) == 0 {
+		return "", false
+	}
+	return strings.Join(result, ","), true
+}
+
+func (h *handler) start(w http.ResponseWriter, r *http.Request) {
+	form, ok := parseURLEncodedForm(w, r, formLimit)
+	if !ok {
+		return
+	}
+	hashes, valid := hashesField(form, "hashes")
+	if !valid {
+		badRequest(w)
+		return
+	}
+	for _, hash := range hashes {
+		download, err := h.repo.GetDownload(r.Context(), hash)
+		if err != nil {
+			repositoryError(w, err)
+			return
+		}
+		if download.State != domain.StateStopped && download.State != domain.StateAccepted {
+			conflict(w)
+			return
+		}
+	}
+	if err := h.repo.StartMany(r.Context(), hashes, h.now()); err != nil {
+		repositoryError(w, err)
+		return
+	}
+	h.waker.Wake()
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *handler) addTags(w http.ResponseWriter, r *http.Request) {
+	form, ok := parseURLEncodedForm(w, r, formLimit)
+	if !ok {
+		return
+	}
+	hashes, valid := hashesField(form, "hashes")
+	if !valid {
+		badRequest(w)
+		return
+	}
+	raw, present := exactlyOne(form["tags"])
+	if !present {
+		badRequest(w)
+		return
+	}
+	tags, valid := normalizeTags(raw, true)
+	if !valid {
+		badRequest(w)
+		return
+	}
+	if err := h.repo.AddTags(r.Context(), hashes, tags, h.now()); err != nil {
+		repositoryError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+func (h *handler) setAutoManagement(w http.ResponseWriter, r *http.Request) {
+	form, ok := parseURLEncodedForm(w, r, formLimit)
+	if !ok {
+		return
+	}
+	hashes, valid := hashesField(form, "hashes")
+	if !valid {
+		badRequest(w)
+		return
+	}
+	enabled, valid := requiredBool(form, "enable")
+	if !valid {
+		badRequest(w)
+		return
+	}
+	if enabled {
+		conflict(w)
+		return
+	}
+	if err := h.repo.SetAutoTMM(r.Context(), hashes, false, h.now()); err != nil {
+		repositoryError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *handler) setSavePath(w http.ResponseWriter, r *http.Request) {
+	form, ok := parseURLEncodedForm(w, r, formLimit)
+	if !ok {
+		return
+	}
+	raw, present := exactlyOne(form["path"])
+	if !present || !filepath.IsAbs(raw) || filepath.Clean(raw) != raw {
+		badRequest(w)
+		return
+	}
+	hash, valid := canonicalHash(first(form["id"]))
+	if !valid {
+		badRequest(w)
+		return
+	}
+	download, err := h.repo.GetDownload(r.Context(), hash)
+	if err != nil {
+		repositoryError(w, err)
+		return
+	}
+	if download.State != domain.StateStopped && download.State != domain.StateAccepted {
+		conflict(w)
+		return
+	}
+	resolved, _, err := h.filesystem.ResolveSaveRoot(raw)
+	if err != nil {
+		badRequest(w)
+		return
+	}
+	if _, err := h.filesystem.PrepareSaveRoot(resolved); err != nil {
+		internalError(w)
+		return
+	}
+	if err := h.repo.SetSavePath(r.Context(), hash, resolved, download.RowVersion, h.now()); err != nil {
+		repositoryError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *handler) setLocation(w http.ResponseWriter, r *http.Request) {
+	form, ok := parseURLEncodedForm(w, r, formLimit)
+	if !ok {
+		return
+	}
+	hashes, valid := hashesField(form, "hashes")
+	if !valid {
+		badRequest(w)
+		return
+	}
+	for _, hash := range hashes {
+		download, getErr := h.repo.GetDownload(r.Context(), hash)
+		if getErr != nil {
+			repositoryError(w, getErr)
+			return
+		}
+		if download.State != domain.StateStopped && download.State != domain.StateAccepted {
+			conflict(w)
+			return
+		}
+	}
+	raw, present := exactlyOne(form["location"])
+	if !present || !filepath.IsAbs(raw) || filepath.Clean(raw) != raw {
+		badRequest(w)
+		return
+	}
+	resolved, _, err := h.filesystem.ResolveSaveRoot(raw)
+	if err != nil {
+		badRequest(w)
+		return
+	}
+	if _, err := h.filesystem.PrepareSaveRoot(resolved); err != nil {
+		internalError(w)
+		return
+	}
+	if err := h.repo.SetSavePaths(r.Context(), hashes, resolved, h.now()); err != nil {
+		repositoryError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *handler) filePriority(w http.ResponseWriter, r *http.Request) {
+	form, ok := parseURLEncodedForm(w, r, formLimit)
+	if !ok {
+		return
+	}
+	hash, valid := canonicalHash(first(form["hash"]))
+	if !valid {
+		badRequest(w)
+		return
+	}
+	ids, present := exactlyOne(form["id"])
+	if !present {
+		badRequest(w)
+		return
+	}
+	rawPriority, present := exactlyOne(form["priority"])
+	if !present {
+		badRequest(w)
+		return
+	}
+	priority, err := strconv.ParseInt(rawPriority, 10, 64)
+	if err != nil || (priority != 0 && priority != 1 && priority != 6 && priority != 7) {
+		badRequest(w)
+		return
+	}
+	indexes := make([]int64, 0)
+	seen := make(map[int64]struct{})
+	for _, rawID := range strings.Split(ids, "|") {
+		index, parseErr := strconv.ParseInt(rawID, 10, 64)
+		if parseErr != nil || index < 0 {
+			badRequest(w)
+			return
+		}
+		if _, exists := seen[index]; exists {
+			continue
+		}
+		seen[index] = struct{}{}
+		indexes = append(indexes, index)
+	}
+	if len(indexes) == 0 {
+		badRequest(w)
+		return
+	}
+	if err := h.repo.SetFilePriorities(r.Context(), hash, indexes, priority, h.now()); err != nil {
+		repositoryError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *handler) renameFile(w http.ResponseWriter, r *http.Request) {
+	form, ok := parseURLEncodedForm(w, r, formLimit)
+	if !ok {
+		return
+	}
+	hash, valid := canonicalHash(first(form["hash"]))
+	if !valid {
+		badRequest(w)
+		return
+	}
+	oldPath, oldPresent := exactlyOne(form["oldPath"])
+	newPath, newPresent := exactlyOne(form["newPath"])
+	if !oldPresent || !newPresent || !safeRelativePath(oldPath) || !safeRelativePath(newPath) {
+		badRequest(w)
+		return
+	}
+	files, err := h.repo.ListDownloadFiles(r.Context(), hash)
+	if err != nil {
+		repositoryError(w, err)
+		return
+	}
+	overrides, err := h.repo.ListDownloadFileOverrides(r.Context(), hash)
+	if err != nil {
+		repositoryError(w, err)
+		return
+	}
+	effective := make(map[int64]string)
+	priorities := make(map[int64]int64)
+	for _, file := range files {
+		effective[file.Index] = file.RelativePath
+		priorities[file.Index] = 1
+	}
+	for _, override := range overrides {
+		effective[override.FileIndex] = override.RelativePath
+		priorities[override.FileIndex] = override.Priority
+	}
+	target := int64(-1)
+	for index, current := range effective {
+		if current == oldPath {
+			if target != -1 {
+				conflict(w)
+				return
+			}
+			target = index
+		}
+	}
+	if target < 0 {
+		notFound(w)
+		return
+	}
+	for index, current := range effective {
+		if index != target && current == newPath {
+			conflict(w)
+			return
+		}
+	}
+	if err := h.repo.SetFileOverride(r.Context(), hash, target, newPath, priorities[target], h.now()); err != nil {
+		repositoryError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func first(values []string) string {
+	if len(values) == 1 {
+		return values[0]
+	}
+	return ""
+}
+func safeRelativePath(value string) bool {
+	if value == "" || value == "." || value == ".." || filepath.IsAbs(value) || filepath.Clean(value) != value || strings.HasPrefix(value, ".."+string(filepath.Separator)) || strings.ContainsAny(value, "\\\x00") {
+		return false
+	}
+	for _, part := range strings.Split(value, string(filepath.Separator)) {
+		if part == "." || part == ".." || strings.ContainsFunc(part, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+			return false
+		}
+	}
+	return true
 }

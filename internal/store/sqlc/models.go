@@ -75,6 +75,9 @@ type Download struct {
 	OfflineStartedAt     sql.NullTime   `json:"offline_started_at"`
 	CopyCompletedAt      sql.NullTime   `json:"copy_completed_at"`
 	CopySourcePath       sql.NullString `json:"copy_source_path"`
+	Tags                 string         `json:"tags"`
+	AutoTmm              int64          `json:"auto_tmm"`
+	NameOverridden       int64          `json:"name_overridden"`
 }
 
 type DownloadFile struct {
@@ -82,6 +85,13 @@ type DownloadFile struct {
 	FileIndex    int64  `json:"file_index"`
 	RelativePath string `json:"relative_path"`
 	Size         int64  `json:"size"`
+}
+
+type DownloadFileOverride struct {
+	DownloadHash string `json:"download_hash"`
+	FileIndex    int64  `json:"file_index"`
+	RelativePath string `json:"relative_path"`
+	Priority     int64  `json:"priority"`
 }
 
 type OperatorPassword struct {

@@ -18,6 +18,9 @@ RETURNING *;
 -- name: CommitClaim :execrows
 UPDATE downloads
 SET
+    tags = sqlc.arg(tags),
+    auto_tmm = sqlc.arg(auto_tmm),
+    name_overridden = sqlc.arg(name_overridden),
     name = sqlc.arg(name),
     destination_name = sqlc.narg(destination_name),
     cloud_task_name = sqlc.arg(cloud_task_name),

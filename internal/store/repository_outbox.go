@@ -697,6 +697,15 @@ func (s *Store) commitEventTx(tx *sql.Tx, emitted bool) error {
 	}
 	return nil
 }
+func (s *Store) commitMutationTx(tx *sql.Tx, changed bool) error {
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if changed {
+		s.eventSignal.Notify()
+	}
+	return nil
+}
 
 // emitDownloadEvent inserts one immutable download event and, for the
 // subscribable completed/failed types, fans out one delivery per enabled

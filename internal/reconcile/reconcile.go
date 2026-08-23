@@ -48,7 +48,6 @@ type CloudDrive interface {
 	CancelCopy(context.Context, string, string) error
 }
 
-// Filesystem verifies and deletes local torrent content under its configured root.
 type Filesystem interface {
 	Verify(string, fsafe.ExpectedContent) (fsafe.VerifiedContent, error)
 	VerifyUnknownType(string, string) (fsafe.UnknownContent, error)
@@ -667,11 +666,63 @@ func (s *Scheduler) verifyAndRecord(ctx context.Context, d *domain.Download) err
 	if err != nil {
 		return &manifestRepositoryError{err: fmt.Errorf("list download manifest: %w", err)}
 	}
-	if err := validateManifest(*d, files); err != nil {
+	effectiveFiles := make([]domain.DownloadFile, 0, len(files))
+	plans := make([]fsafe.FilePlan, 0, len(files))
+	hasOverride := false
+	if overridesRepo, ok := s.repo.(interface {
+		ListDownloadFileOverrides(context.Context, string) ([]domain.FileOverride, error)
+	}); ok {
+		overrides, overrideErr := overridesRepo.ListDownloadFileOverrides(ctx, d.Hash)
+		if overrideErr != nil {
+			return &manifestRepositoryError{err: overrideErr}
+		}
+		for _, file := range files {
+			plan := fsafe.FilePlan{Index: file.Index, OriginalPath: file.RelativePath, EffectivePath: file.RelativePath, Priority: 1, Size: file.Size}
+			for _, override := range overrides {
+				if override.FileIndex == file.Index {
+					hasOverride = true
+					plan.EffectivePath, plan.Priority = override.RelativePath, override.Priority
+					break
+				}
+			}
+			plans = append(plans, plan)
+			if plan.Priority != 0 {
+				file.Index = int64(len(effectiveFiles))
+				file.RelativePath = plan.EffectivePath
+				effectiveFiles = append(effectiveFiles, file)
+			}
+		}
+	} else {
+		effectiveFiles = append(effectiveFiles, files...)
+	}
+	if len(effectiveFiles) == 0 {
+		return errCloudContentLayout
+	}
+	if planner, ok := s.files.(interface {
+		ApplyFilePlan(string, string, []fsafe.FilePlan) error
+	}); ok && hasOverride {
+		planRoot := d.SavePath
+		if d.IsMultiFile != nil && *d.IsMultiFile {
+			planRoot = filepath.Join(d.SavePath, d.DestinationName)
+		}
+		if err := planner.ApplyFilePlan(planRoot, d.Hash, plans); err != nil {
+			return err
+		}
+	}
+	effectiveDownload := *d
+	var selectedSize int64
+	for _, file := range effectiveFiles {
+		if selectedSize > math.MaxInt64-file.Size {
+			return errCloudContentLayout
+		}
+		selectedSize += file.Size
+	}
+	effectiveDownload.TotalSize = selectedSize
+	if err := validateManifest(effectiveDownload, effectiveFiles); err != nil {
 		return err
 	}
-	expected := fsafe.ExpectedContent{CandidateName: d.DestinationName, MultiFile: *d.IsMultiFile, Files: make([]fsafe.ExpectedFile, 0, len(files))}
-	for _, file := range files {
+	expected := fsafe.ExpectedContent{CandidateName: d.DestinationName, MultiFile: *d.IsMultiFile, Files: make([]fsafe.ExpectedFile, 0, len(effectiveFiles))}
+	for _, file := range effectiveFiles {
 		expected.Files = append(expected.Files, fsafe.ExpectedFile{RelativePath: file.RelativePath, Size: file.Size})
 	}
 	content, err := s.files.Verify(d.SavePath, expected)
@@ -893,7 +944,7 @@ func (s *Scheduler) recordOffline(d *domain.Download, task clouddrive.OfflineTas
 	d.LastUpstreamStatus = "offline:" + string(task.State)
 	if task.State == clouddrive.OfflineFinished {
 		d.CloudTaskName, d.CloudResultPath = task.Name, task.SourcePath
-		if d.SourceKind == domain.SourceMagnet {
+		if d.SourceKind == domain.SourceMagnet && !d.NameOverridden {
 			d.Name = task.Name
 		}
 	}

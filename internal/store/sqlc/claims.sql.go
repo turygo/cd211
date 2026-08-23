@@ -26,7 +26,7 @@ WHERE hash = (
     ORDER BY candidate.next_run_at ASC, candidate.created_at ASC, candidate.hash ASC
     LIMIT 1
 )
-RETURNING hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_result_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version, pause_requested, last_error_code, offline_started_at, copy_completed_at, copy_source_path
+RETURNING hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_result_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version, pause_requested, last_error_code, offline_started_at, copy_completed_at, copy_source_path, tags, auto_tmm, name_overridden
 `
 
 type ClaimDueParams struct {
@@ -74,6 +74,9 @@ func (q *Queries) ClaimDue(ctx context.Context, arg ClaimDueParams) (Download, e
 		&i.OfflineStartedAt,
 		&i.CopyCompletedAt,
 		&i.CopySourcePath,
+		&i.Tags,
+		&i.AutoTmm,
+		&i.NameOverridden,
 	)
 	return i, err
 }
@@ -81,41 +84,47 @@ func (q *Queries) ClaimDue(ctx context.Context, arg ClaimDueParams) (Download, e
 const commitClaim = `-- name: CommitClaim :execrows
 UPDATE downloads
 SET
-    name = ?1,
-    destination_name = ?2,
-    cloud_task_name = ?3,
-    cloud_result_path = ?4,
-    copy_source_path = ?5,
-    content_path = ?6,
-    is_multi_file = ?7,
-    total_size = ?8,
-    state = ?9,
-    offline_progress = ?10,
-    copy_progress = ?11,
-    qbit_progress = ?12,
-    last_upstream_status = ?13,
-    last_error = ?14,
-    last_error_code = ?15,
-    phase_started_at = ?16,
-    offline_started_at = ?17,
-    copy_completed_at = ?18,
-    next_run_at = ?19,
-    attempt_count = ?20,
-    delete_files_requested = ?21,
-    pause_requested = ?22,
-    updated_at = ?23,
-    completed_at = ?24,
-    removed_at = ?25,
+    tags = ?1,
+    auto_tmm = ?2,
+    name_overridden = ?3,
+    name = ?4,
+    destination_name = ?5,
+    cloud_task_name = ?6,
+    cloud_result_path = ?7,
+    copy_source_path = ?8,
+    content_path = ?9,
+    is_multi_file = ?10,
+    total_size = ?11,
+    state = ?12,
+    offline_progress = ?13,
+    copy_progress = ?14,
+    qbit_progress = ?15,
+    last_upstream_status = ?16,
+    last_error = ?17,
+    last_error_code = ?18,
+    phase_started_at = ?19,
+    offline_started_at = ?20,
+    copy_completed_at = ?21,
+    next_run_at = ?22,
+    attempt_count = ?23,
+    delete_files_requested = ?24,
+    pause_requested = ?25,
+    updated_at = ?26,
+    completed_at = ?27,
+    removed_at = ?28,
     lease_until = NULL,
     lease_owner = NULL,
     row_version = row_version + 1
-WHERE hash = ?26
-  AND state = ?27
-  AND lease_owner = ?28
-  AND row_version = ?29
+WHERE hash = ?29
+  AND state = ?30
+  AND lease_owner = ?31
+  AND row_version = ?32
 `
 
 type CommitClaimParams struct {
+	Tags                 string         `json:"tags"`
+	AutoTmm              int64          `json:"auto_tmm"`
+	NameOverridden       int64          `json:"name_overridden"`
 	Name                 string         `json:"name"`
 	DestinationName      sql.NullString `json:"destination_name"`
 	CloudTaskName        sql.NullString `json:"cloud_task_name"`
@@ -149,6 +158,9 @@ type CommitClaimParams struct {
 
 func (q *Queries) CommitClaim(ctx context.Context, arg CommitClaimParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, commitClaim,
+		arg.Tags,
+		arg.AutoTmm,
+		arg.NameOverridden,
 		arg.Name,
 		arg.DestinationName,
 		arg.CloudTaskName,

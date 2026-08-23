@@ -5,6 +5,9 @@ CD211 的所有重要变更均记录在此文件中。
 每项仓库变更都必须在 `Unreleased` 下的适当类别中记录。创建版本标签前，将这些条目移入包含版本号和日期的版本化章节。
 
 ## [Unreleased]
+### Added
+
+- 完成面向 ANI-RSS 的 qBittorrent 兼容性修复：`app/webapiVersion`、`app/version`、`app/preferences`、`torrents/categories`、`torrents/info`、`torrents/properties`、`torrents/files` 七个官方读接口同时支持 GET/POST；新增 `start`、标签、文件优先级、文件重命名、禁用自动管理、保存位置等真实持久化操作。下载列表始终返回 `completed`，并返回持久化的 `tags`，文件列表返回实际生效路径与 priority；状态、CAS、租约、路径和目标冲突按真实语义返回 409，未添加非官方 `/torrents/resume`。
 
 ## [0.3.15] - 2026-08-23
 

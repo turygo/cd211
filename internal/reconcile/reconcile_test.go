@@ -65,6 +65,11 @@ type fakeRepository struct {
 	err        error
 	filesErr   error
 	files      []domain.DownloadFile
+	overrides  []domain.FileOverride
+}
+
+func (r *fakeRepository) ListDownloadFileOverrides(context.Context, string) ([]domain.FileOverride, error) {
+	return r.overrides, r.err
 }
 
 func (r *fakeRepository) ClaimDue(context.Context, string, time.Time, time.Duration) (*store.Claim, error) {
@@ -131,19 +136,31 @@ type fakeFilesystem struct {
 	verifyUnknownType func(string, string) (fsafe.UnknownContent, error)
 	size              int64
 	delete            func(string, string) error
+	plans             []fsafe.FilePlan
 }
 
-func (f fakeFilesystem) Verify(save string, expected fsafe.ExpectedContent) (fsafe.VerifiedContent, error) {
+func (f *fakeFilesystem) ApplyFilePlan(_ string, _ string, plans []fsafe.FilePlan) error {
+	f.plans = append([]fsafe.FilePlan(nil), plans...)
+	return nil
+}
+func (f *fakeFilesystem) Verify(save string, expected fsafe.ExpectedContent) (fsafe.VerifiedContent, error) {
 	path, err := f.verify(save, expected)
 	return fsafe.VerifiedContent{Path: path, Size: f.size}, err
 }
-func (f fakeFilesystem) VerifyUnknownType(save, name string) (fsafe.UnknownContent, error) {
+
+func (f *fakeFilesystem) VerifyUnknownType(save, name string) (fsafe.UnknownContent, error) {
 	if f.verifyUnknownType == nil {
 		return fsafe.UnknownContent{}, fs.ErrNotExist
 	}
 	return f.verifyUnknownType(save, name)
 }
-func (f fakeFilesystem) Delete(content, save string) error { return f.delete(content, save) }
+
+func (f *fakeFilesystem) Delete(content, save string) error {
+	if f.delete == nil {
+		return nil
+	}
+	return f.delete(content, save)
+}
 
 func baseDownload(state domain.State, now time.Time) domain.Download {
 	return domain.Download{Hash: "0123456789012345678901234567890123456789", Name: "payload", SourceKind: domain.SourceMagnet, SubmissionURI: "magnet:?xt=urn:btih:0123456789012345678901234567890123456789", CloudFolder: "/cloud", SavePath: "/downloads", CloudResultPath: "/cloud/payload", State: state, PhaseStartedAt: now}

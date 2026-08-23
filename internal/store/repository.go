@@ -245,6 +245,370 @@ func (s *Store) ListDownloadFiles(ctx context.Context, hash string) ([]domain.Do
 	return files, nil
 }
 
+// ListDownloadFileOverrides returns durable file projections in manifest order.
+func (s *Store) ListDownloadFileOverrides(ctx context.Context, hash string) ([]domain.FileOverride, error) {
+	rows, err := s.queries.ListDownloadFileOverrides(ctx, hash)
+	if err != nil {
+		return nil, fmt.Errorf("list file overrides: %w", err)
+	}
+	result := make([]domain.FileOverride, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, domain.FileOverride{DownloadHash: row.DownloadHash, FileIndex: row.FileIndex, RelativePath: row.RelativePath, Priority: row.Priority})
+	}
+	return result, nil
+}
+
+func (s *Store) UpdateTags(ctx context.Context, hashes []string, tags string, now time.Time) error {
+	return s.updateDownloadField(ctx, hashes, now, &tags, nil)
+}
+
+func (s *Store) SetAutoTMM(ctx context.Context, hashes []string, enabled bool, now time.Time) error {
+	return s.updateDownloadField(ctx, hashes, now, nil, &enabled)
+}
+
+func (s *Store) updateDownloadField(ctx context.Context, hashes []string, now time.Time, tags *string, autoTMM *bool) error {
+	if len(hashes) == 0 || now.IsZero() {
+		return ErrInvalidTransition
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin download update: %w", err)
+	}
+	queries := s.queries.WithTx(tx)
+	finish := func(cause error) error { _ = tx.Rollback(); return cause }
+	changed := false
+	for _, hash := range hashes {
+		before, getErr := queries.GetDownload(ctx, hash)
+		if errors.Is(getErr, sql.ErrNoRows) {
+			return finish(ErrNotFound)
+		}
+		if getErr != nil {
+			return finish(getErr)
+		}
+		if before.State == string(domain.StateDeleted) {
+			return finish(ErrInvalidTransition)
+		}
+		var updated int64
+		if tags != nil {
+			if before.Tags == *tags {
+				continue
+			}
+			updated, err = queries.UpdateDownloadTags(ctx, storedb.UpdateDownloadTagsParams{Tags: *tags, UpdatedAt: now, Hash: hash})
+		} else {
+			if before.AutoTmm == boolInteger(*autoTMM) {
+				continue
+			}
+			updated, err = queries.UpdateDownloadAutoTMM(ctx, storedb.UpdateDownloadAutoTMMParams{AutoTmm: boolInteger(*autoTMM), UpdatedAt: now, Hash: hash})
+		}
+		if err != nil || updated != 1 {
+			if err != nil {
+				return finish(err)
+			}
+			return finish(ErrInvalidTransition)
+		}
+		changed = true
+	}
+	if err := s.commitMutationTx(tx, changed); err != nil {
+		return err
+	}
+	return nil
+}
+func (s *Store) AddTags(ctx context.Context, hashes []string, tags string, now time.Time) error {
+	if len(hashes) == 0 || now.IsZero() {
+		return ErrInvalidTransition
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	queries := s.queries.WithTx(tx)
+	changed := false
+	for _, hash := range hashes {
+		row, getErr := queries.GetDownload(ctx, hash)
+		if errors.Is(getErr, sql.ErrNoRows) {
+			_ = tx.Rollback()
+			return ErrNotFound
+		}
+		if getErr != nil {
+			_ = tx.Rollback()
+			return getErr
+		}
+		if row.State == string(domain.StateDeleted) {
+			_ = tx.Rollback()
+			return ErrInvalidTransition
+		}
+		merged := strings.Trim(strings.Join([]string{row.Tags, tags}, ","), ",")
+		canonical := normalizeStoredTags(merged)
+		if len(canonical) > 64<<10 || strings.ContainsFunc(canonical, unicode.IsControl) {
+			_ = tx.Rollback()
+			return ErrInvalidTransition
+		}
+		if row.Tags == canonical {
+			continue
+		}
+		if _, updateErr := queries.UpdateDownloadTags(ctx, storedb.UpdateDownloadTagsParams{Tags: canonical, UpdatedAt: now, Hash: hash}); updateErr != nil {
+			_ = tx.Rollback()
+			return updateErr
+		}
+		changed = true
+	}
+	return s.commitMutationTx(tx, changed)
+}
+
+func (s *Store) StartMany(ctx context.Context, hashes []string, now time.Time) error {
+	if len(hashes) == 0 || now.IsZero() {
+		return ErrInvalidTransition
+	}
+	changed := false
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	queries := s.queries.WithTx(tx)
+	for _, hash := range hashes {
+		row, getErr := queries.GetDownload(ctx, hash)
+		if errors.Is(getErr, sql.ErrNoRows) {
+			_ = tx.Rollback()
+			return ErrNotFound
+		}
+		if getErr != nil {
+			_ = tx.Rollback()
+			return getErr
+		}
+		if row.State == string(domain.StateAccepted) {
+			continue
+		}
+		if row.State != string(domain.StateStopped) {
+			_ = tx.Rollback()
+			return ErrInvalidTransition
+		}
+		if updated, updateErr := queries.StartDownload(ctx, storedb.StartDownloadParams{Now: now, Hash: hash}); updateErr != nil || updated != 1 {
+			_ = tx.Rollback()
+			if updateErr != nil {
+				return updateErr
+			}
+			return ErrInvalidTransition
+		}
+		changed = true
+	}
+	return s.commitMutationTx(tx, changed)
+}
+
+func (s *Store) SetSavePaths(ctx context.Context, hashes []string, savePath string, now time.Time) error {
+	if len(hashes) == 0 || savePath == "" || now.IsZero() {
+		return ErrInvalidTransition
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	queries := s.queries.WithTx(tx)
+	for _, hash := range hashes {
+		row, getErr := queries.GetDownload(ctx, hash)
+		if errors.Is(getErr, sql.ErrNoRows) {
+			_ = tx.Rollback()
+			return ErrNotFound
+		}
+		if getErr != nil {
+			_ = tx.Rollback()
+			return getErr
+		}
+		updated, updateErr := queries.UpdateDownloadSavePath(ctx, storedb.UpdateDownloadSavePathParams{SavePath: savePath, UpdatedAt: now, Hash: hash, ExpectedRowVersion: row.RowVersion})
+		if updateErr != nil {
+			_ = tx.Rollback()
+			if destinationConstraint(updateErr) {
+				return ErrDestinationConflict
+			}
+			return updateErr
+		}
+		if updated != 1 {
+			_ = tx.Rollback()
+			return ErrInvalidTransition
+		}
+	}
+	return s.commitMutationTx(tx, true)
+}
+
+func (s *Store) SetSavePath(ctx context.Context, hash, savePath string, version int64, now time.Time) error {
+	if hash == "" || savePath == "" || now.IsZero() || version < 0 {
+		return ErrInvalidTransition
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	queries := s.queries.WithTx(tx)
+	updated, err := queries.UpdateDownloadSavePath(ctx, storedb.UpdateDownloadSavePathParams{SavePath: savePath, UpdatedAt: now, Hash: hash, ExpectedRowVersion: version})
+	if err != nil {
+		_ = tx.Rollback()
+		if destinationConstraint(err) {
+			return ErrDestinationConflict
+		}
+		return err
+	}
+	if updated != 1 {
+		_ = tx.Rollback()
+		return ErrInvalidTransition
+	}
+	return s.commitMutationTx(tx, true)
+}
+
+func (s *Store) SetFileOverride(ctx context.Context, hash string, index int64, relative string, priority int64, now time.Time) error {
+	if hash == "" || index < 0 || relative == "" || now.IsZero() || (priority != 0 && priority != 1 && priority != 6 && priority != 7) {
+		return ErrInvalidTransition
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	queries := s.queries.WithTx(tx)
+	row, err := queries.GetDownload(ctx, hash)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return ErrNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if (row.State != string(domain.StateStopped) && row.State != string(domain.StateAccepted)) || row.LeaseOwner.Valid || row.ContentPath.Valid || row.CopySourcePath.Valid || row.CloudResultPath.Valid {
+		_ = tx.Rollback()
+		return ErrInvalidTransition
+	}
+	manifest, manifestErr := queries.ListDownloadFiles(ctx, hash)
+	if manifestErr != nil {
+		_ = tx.Rollback()
+		return manifestErr
+	}
+	overrides, overrideErr := queries.ListDownloadFileOverrides(ctx, hash)
+	if overrideErr != nil {
+		_ = tx.Rollback()
+		return overrideErr
+	}
+	for _, file := range manifest {
+		if file.FileIndex == index {
+			continue
+		}
+		current := file.RelativePath
+		for _, override := range overrides {
+			if override.FileIndex == file.FileIndex {
+				current = override.RelativePath
+				break
+			}
+		}
+		if pathConflicts(current, relative) {
+			_ = tx.Rollback()
+			return ErrDestinationConflict
+		}
+	}
+	if err := queries.UpsertDownloadFileOverride(ctx, storedb.UpsertDownloadFileOverrideParams{DownloadHash: hash, FileIndex: index, RelativePath: relative, Priority: priority}); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if updated, err := queries.TouchDownload(ctx, storedb.TouchDownloadParams{UpdatedAt: now, Hash: hash}); err != nil || updated != 1 {
+		_ = tx.Rollback()
+		if err != nil {
+			return err
+		}
+		return ErrInvalidTransition
+	}
+	return s.commitMutationTx(tx, true)
+}
+func (s *Store) SetDownloadName(ctx context.Context, hash, name string, now time.Time) error {
+	if hash == "" || name == "" || now.IsZero() {
+		return ErrInvalidTransition
+	}
+	updated, err := s.queries.SetDownloadName(ctx, storedb.SetDownloadNameParams{Name: name, UpdatedAt: now, Hash: hash})
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return ErrInvalidTransition
+	}
+	return nil
+}
+func (s *Store) SetFilePriorities(ctx context.Context, hash string, indexes []int64, priority int64, now time.Time) error {
+	if hash == "" || len(indexes) == 0 || now.IsZero() || (priority != 0 && priority != 1 && priority != 6 && priority != 7) {
+		return ErrInvalidTransition
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	queries := s.queries.WithTx(tx)
+	row, err := queries.GetDownload(ctx, hash)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return ErrNotFound
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if row.State != string(domain.StateStopped) && row.State != string(domain.StateAccepted) {
+		_ = tx.Rollback()
+		return ErrInvalidTransition
+	}
+	if row.LeaseOwner.Valid || row.ContentPath.Valid || row.CopySourcePath.Valid || row.CloudResultPath.Valid {
+		_ = tx.Rollback()
+		return ErrInvalidTransition
+	}
+	manifest, err := queries.ListDownloadFiles(ctx, hash)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	overrides, err := queries.ListDownloadFileOverrides(ctx, hash)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	effective := make(map[int64]storedb.DownloadFileOverride, len(manifest))
+	for _, file := range manifest {
+		effective[file.FileIndex] = storedb.DownloadFileOverride{DownloadHash: hash, FileIndex: file.FileIndex, RelativePath: file.RelativePath, Priority: 1}
+	}
+	for _, override := range overrides {
+		effective[override.FileIndex] = override
+	}
+	seen := make(map[int64]struct{}, len(indexes))
+	for _, index := range indexes {
+		if _, exists := seen[index]; exists {
+			continue
+		}
+		seen[index] = struct{}{}
+		file, exists := effective[index]
+		if !exists {
+			_ = tx.Rollback()
+			return ErrInvalidTransition
+		}
+		file.Priority = priority
+		if err := queries.UpsertDownloadFileOverride(ctx, storedb.UpsertDownloadFileOverrideParams{DownloadHash: hash, FileIndex: index, RelativePath: file.RelativePath, Priority: priority}); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		effective[index] = file
+	}
+	selected := false
+	for _, file := range effective {
+		if file.Priority != 0 {
+			selected = true
+			break
+		}
+	}
+	if !selected {
+		_ = tx.Rollback()
+		return ErrInvalidTransition
+	}
+	if updated, err := queries.TouchDownload(ctx, storedb.TouchDownloadParams{UpdatedAt: now, Hash: hash}); err != nil || updated != 1 {
+		_ = tx.Rollback()
+		if err != nil {
+			return err
+		}
+		return ErrInvalidTransition
+	}
+	return s.commitMutationTx(tx, true)
+}
+
 // SetCategory changes only a download's visible category label. A same-value
 // call succeeds without changing the row or emitting an event; a real change
 // emits download.category_changed in the same transaction.
@@ -745,7 +1109,8 @@ func categoryFromDB(row storedb.Category) (domain.Category, error) {
 func downloadRow(row storedb.Download) (domain.Download, error) {
 	if row.IsMultiFile.Valid && row.IsMultiFile.Int64 != 0 && row.IsMultiFile.Int64 != 1 ||
 		row.DeleteFilesRequested != 0 && row.DeleteFilesRequested != 1 ||
-		row.PauseRequested != 0 && row.PauseRequested != 1 {
+		row.PauseRequested != 0 && row.PauseRequested != 1 ||
+		row.NameOverridden != 0 && row.NameOverridden != 1 {
 		return domain.Download{}, errors.New("stored download boolean is invalid")
 	}
 	sourceKind := domain.SourceKind(row.SourceKind)
@@ -754,8 +1119,8 @@ func downloadRow(row storedb.Download) (domain.Download, error) {
 		return domain.Download{}, errors.New("stored download is invalid")
 	}
 	download := domain.Download{
-		Hash: row.Hash, Name: row.Name, SourceKind: sourceKind, SubmissionURI: row.SubmissionUri,
-		Category: row.Category, CloudFolder: row.CloudFolder, SavePath: row.SavePath, DestinationName: nullString(row.DestinationName),
+		Hash: row.Hash, Name: row.Name, NameOverridden: row.NameOverridden != 0, SourceKind: sourceKind, SubmissionURI: row.SubmissionUri,
+		Category: row.Category, Tags: row.Tags, AutoTMM: row.AutoTmm != 0, CloudFolder: row.CloudFolder, SavePath: row.SavePath, DestinationName: nullString(row.DestinationName),
 		CloudTaskName: nullString(row.CloudTaskName), CloudResultPath: nullString(row.CloudResultPath), CopySourcePath: nullString(row.CopySourcePath), ContentPath: nullString(row.ContentPath),
 		TotalSize: row.TotalSize, State: state, OfflineProgress: row.OfflineProgress, CopyProgress: row.CopyProgress, QbitProgress: row.QbitProgress,
 		LastUpstreamStatus: nullString(row.LastUpstreamStatus), LastError: nullString(row.LastError), LastErrorCode: nullString(row.LastErrorCode),
@@ -785,7 +1150,7 @@ func downloadFromDB(row storedb.Download) (domain.Download, error) {
 func insertDownloadParams(download domain.Download) storedb.InsertDownloadParams {
 	return storedb.InsertDownloadParams{
 		Hash: download.Hash, Name: download.Name, SourceKind: string(download.SourceKind), SubmissionUri: download.SubmissionURI,
-		Category: download.Category, CloudFolder: download.CloudFolder, SavePath: download.SavePath, DestinationName: nullableString(download.DestinationName),
+		Category: download.Category, Tags: download.Tags, AutoTmm: boolInteger(download.AutoTMM), NameOverridden: boolInteger(download.NameOverridden), CloudFolder: download.CloudFolder, SavePath: download.SavePath, DestinationName: nullableString(download.DestinationName),
 		CloudTaskName: nullableString(download.CloudTaskName), CloudResultPath: nullableString(download.CloudResultPath), CopySourcePath: nullableString(download.CopySourcePath), ContentPath: nullableString(download.ContentPath),
 		IsMultiFile: nullableBool(download.IsMultiFile), TotalSize: download.TotalSize, State: string(download.State),
 		OfflineProgress: download.OfflineProgress, CopyProgress: download.CopyProgress, QbitProgress: download.QbitProgress,
@@ -799,19 +1164,21 @@ func insertDownloadParams(download domain.Download) storedb.InsertDownloadParams
 
 func reviveDownloadParams(download domain.Download) storedb.ReviveDownloadParams {
 	return storedb.ReviveDownloadParams{
-		Name: download.Name, SourceKind: string(download.SourceKind), SubmissionUri: download.SubmissionURI,
-		Category: download.Category, CloudFolder: download.CloudFolder, SavePath: download.SavePath, DestinationName: nullableString(download.DestinationName),
-		CloudTaskName: nullableString(download.CloudTaskName), CloudResultPath: nullableString(download.CloudResultPath), CopySourcePath: nullableString(download.CopySourcePath), ContentPath: nullableString(download.ContentPath),
-		IsMultiFile: nullableBool(download.IsMultiFile), TotalSize: download.TotalSize, State: string(download.State),
-		OfflineProgress: download.OfflineProgress, CopyProgress: download.CopyProgress, QbitProgress: download.QbitProgress, LastUpstreamStatus: nullableString(download.LastUpstreamStatus),
-		PhaseStartedAt: download.PhaseStartedAt, OfflineStartedAt: nullableTime(download.OfflineStartedAt), CopyCompletedAt: nullableTime(download.CopyCompletedAt),
-		NextRunAt: nullableTime(download.NextRunAt), CreatedAt: download.CreatedAt, UpdatedAt: download.UpdatedAt, Hash: download.Hash,
+		Name: download.Name, SourceKind: string(download.SourceKind), SubmissionUri: download.SubmissionURI, Category: download.Category, Tags: download.Tags,
+		AutoTmm: boolInteger(download.AutoTMM), NameOverridden: boolInteger(download.NameOverridden), CloudFolder: download.CloudFolder, SavePath: download.SavePath,
+		DestinationName: nullableString(download.DestinationName), CloudTaskName: nullableString(download.CloudTaskName), CloudResultPath: nullableString(download.CloudResultPath),
+		CopySourcePath: nullableString(download.CopySourcePath), ContentPath: nullableString(download.ContentPath), IsMultiFile: nullableBool(download.IsMultiFile),
+		TotalSize: download.TotalSize, State: string(download.State), OfflineProgress: download.OfflineProgress, CopyProgress: download.CopyProgress, QbitProgress: download.QbitProgress,
+		LastUpstreamStatus: nullableString(download.LastUpstreamStatus), PhaseStartedAt: download.PhaseStartedAt, OfflineStartedAt: nullableTime(download.OfflineStartedAt),
+		CopyCompletedAt: nullableTime(download.CopyCompletedAt), NextRunAt: nullableTime(download.NextRunAt), CreatedAt: download.CreatedAt, UpdatedAt: download.UpdatedAt, Hash: download.Hash,
 	}
 }
 
 func commitClaimParams(claim Claim, download domain.Download) storedb.CommitClaimParams {
 	return storedb.CommitClaimParams{
-		Name:            download.Name,
+		Name:           download.Name,
+		NameOverridden: boolInteger(download.NameOverridden),
+		Tags:           download.Tags, AutoTmm: boolInteger(download.AutoTMM),
 		DestinationName: nullableString(download.DestinationName),
 		CloudTaskName:   nullableString(download.CloudTaskName), CloudResultPath: nullableString(download.CloudResultPath), CopySourcePath: nullableString(download.CopySourcePath), ContentPath: nullableString(download.ContentPath),
 		IsMultiFile: nullableBool(download.IsMultiFile), TotalSize: download.TotalSize, State: string(download.State),
@@ -896,4 +1263,25 @@ func boolInteger(value bool) int64 {
 		return 1
 	}
 	return 0
+}
+func normalizeStoredTags(raw string) string {
+	parts := strings.Split(raw, ",")
+	seen := make(map[string]struct{}, len(parts))
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if _, exists := seen[part]; exists {
+			continue
+		}
+		seen[part] = struct{}{}
+		result = append(result, part)
+	}
+	return strings.Join(result, ",")
+}
+func pathConflicts(a, b string) bool {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	return a == b || strings.HasPrefix(a, b+string(filepath.Separator)) || strings.HasPrefix(b, a+string(filepath.Separator))
 }

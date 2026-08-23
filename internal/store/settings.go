@@ -82,6 +82,33 @@ func (s *Store) ReplaceSettingsAndCategories(ctx context.Context, values map[str
 	}
 	return nil
 }
+func (s *Store) UpdateQBTPreferences(ctx context.Context, trackers *string, enabled *bool, now time.Time) error {
+	if now.IsZero() || (trackers == nil && enabled == nil) {
+		return errors.New("qbt preference update is invalid")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	queries := s.queries.WithTx(tx)
+	if trackers != nil {
+		if err := queries.UpsertSetting(ctx, storedb.UpsertSettingParams{Key: "qbt.add_trackers", Value: *trackers, UpdatedAt: now}); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	if enabled != nil {
+		value := "false"
+		if *enabled {
+			value = "true"
+		}
+		if err := queries.UpsertSetting(ctx, storedb.UpsertSettingParams{Key: "qbt.add_trackers_enabled", Value: value, UpdatedAt: now}); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
 
 // CompleteSetup atomically records the operator password hash, the given
 // settings, and setup completion in one transaction. It fails with

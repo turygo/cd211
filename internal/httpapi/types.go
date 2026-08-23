@@ -11,21 +11,24 @@ type preferences struct {
 	MaxInactiveSeedingTimeEnabled bool    `json:"max_inactive_seeding_time_enabled"`
 	MaxInactiveSeedingTime        int64   `json:"max_inactive_seeding_time"`
 	MaxRatioAct                   int64   `json:"max_ratio_act"`
+	AddTrackers                   string  `json:"add_trackers"`
+	AddTrackersEnabled            bool    `json:"add_trackers_enabled"`
 }
 
 type categoryView struct {
 	Name     string `json:"name"`
 	SavePath string `json:"savePath"`
 }
-
 type torrentInfo struct {
 	Hash                     string  `json:"hash"`
 	Name                     string  `json:"name"`
 	Size                     int64   `json:"size"`
+	Completed                int64   `json:"completed"`
 	Progress                 float64 `json:"progress"`
 	ETA                      int64   `json:"eta"`
 	State                    string  `json:"state"`
 	Category                 string  `json:"category"`
+	Tags                     string  `json:"tags"`
 	SavePath                 string  `json:"save_path"`
 	ContentPath              string  `json:"content_path"`
 	Ratio                    float64 `json:"ratio"`

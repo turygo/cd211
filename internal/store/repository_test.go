@@ -15,14 +15,20 @@ func TestCreateSubmissionDuplicateAndRevive(t *testing.T) {
 	store := testStore(t)
 	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
 	submission := testSubmission("a", now)
+	submission.Download.NameOverridden = true
+	submission.Download.SubmissionURI = "magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	submission.Download.CloudTaskName = "cloud-original"
 
 	created, inserted, err := store.CreateSubmission(ctx, submission)
 	if err != nil || !inserted {
 		t.Fatalf("CreateSubmission() = (%+v, %t, %v), want inserted download", created, inserted, err)
 	}
+	if created.SubmissionURI != submission.Download.SubmissionURI || created.CloudTaskName != submission.Download.CloudTaskName || !created.NameOverridden {
+		t.Fatalf("CreateSubmission() lost durable identity fields: %+v", created)
+	}
 	duplicate, inserted, err := store.CreateSubmission(ctx, submission)
-	if err != nil || inserted || duplicate.Hash != created.Hash {
-		t.Fatalf("duplicate CreateSubmission() = (%+v, %t, %v), want existing download", duplicate, inserted, err)
+	if err != nil || inserted || duplicate.Hash != created.Hash || !duplicate.NameOverridden {
+		t.Fatalf("duplicate CreateSubmission() = (%+v, %t, %v), want existing download with name override", duplicate, inserted, err)
 	}
 
 	if err := store.RequestDelete(ctx, []string{created.Hash}, false, now.Add(time.Minute)); err != nil {
@@ -38,11 +44,16 @@ func TestCreateSubmissionDuplicateAndRevive(t *testing.T) {
 	if err := store.CommitClaim(ctx, *claim, next); err != nil {
 		t.Fatalf("CommitClaim(delete): %v", err)
 	}
-
+	stored, err := store.GetDownload(ctx, created.Hash)
+	if err != nil || !stored.NameOverridden || stored.SubmissionURI != submission.Download.SubmissionURI || stored.CloudTaskName != submission.Download.CloudTaskName {
+		t.Fatalf("CommitClaim() lost durable identity fields: (%+v, %v)", stored, err)
+	}
 	revivedSubmission := testSubmission("a", now.Add(3*time.Minute))
+	revivedSubmission.Download.SubmissionURI = "magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	revivedSubmission.Download.CloudTaskName = "cloud-revived"
 	revivedSubmission.Files = []domain.DownloadFile{{DownloadHash: revivedSubmission.Download.Hash, Index: 0, RelativePath: "replacement.mkv", Size: 42}}
 	revived, inserted, err := store.CreateSubmission(ctx, revivedSubmission)
-	if err != nil || !inserted || revived.State != domain.StateAccepted || revived.RowVersion <= created.RowVersion {
+	if err != nil || !inserted || revived.State != domain.StateAccepted || revived.RowVersion <= created.RowVersion || revived.SubmissionURI != revivedSubmission.Download.SubmissionURI || revived.CloudTaskName != revivedSubmission.Download.CloudTaskName {
 		t.Fatalf("revive CreateSubmission() = (%+v, %t, %v), want revived accepted download", revived, inserted, err)
 	}
 	files, err := store.ListDownloadFiles(ctx, revived.Hash)

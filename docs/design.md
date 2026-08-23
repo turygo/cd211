@@ -121,6 +121,7 @@ CD211 is one process with six internal components:
 - Implements the supported qBittorrent compatibility profile.
 - Authenticates callers with credentials scoped to either `/api/v2` or `/api/v1`, then validates inputs.
 - Persists submissions, category changes, retries, cancellations, and removals.
+- The qBittorrent compatibility profile accepts GET and POST for `app/webapiVersion`, `app/version`, `app/preferences`, `torrents/categories`, `torrents/info`, `torrents/properties`, and `torrents/files`. The supported ANI-RSS mutations persist tags, task names, file priorities and renames, start stopped tasks, disable automatic management, and update pristine save locations. Unsupported transfer controls and `/torrents/resume` remain unavailable.
 - Never waits for a complete 115 or copy operation.
 
 ### 7.2 Reconciler
@@ -470,6 +471,7 @@ Sonarr and Radarr treat qBittorrent `error` as a warning rather than guaranteed 
 CD211 reports qBittorrent WebAPI version `2.11.0`. This implies support for the modern `stopped` add parameter and `stoppedUP`/`stoppedDL` state names.
 
 Every `/api/v2` route requires authentication except `POST /api/v2/auth/login`. Health checks are service-native routes outside this namespace.
+The read-compatible endpoints are exactly `app/webapiVersion`, `app/version`, `app/preferences`, `torrents/categories`, `torrents/info`, `torrents/properties`, and `torrents/files`; each accepts both GET and POST and has identical response semantics. POST is not accepted for mutation endpoints unless explicitly listed below.
 
 ### 11.1 Authentication
 
@@ -501,7 +503,7 @@ On a SID-authenticated request, success durably revokes the current session, exp
 
 ### 11.2 Application API
 
-#### `GET /api/v2/app/webapiVersion`
+#### `GET|POST /api/v2/app/webapiVersion`
 
 Returns plain text:
 
@@ -509,7 +511,7 @@ Returns plain text:
 2.11.0
 ```
 
-#### `GET /api/v2/app/version`
+#### `GET|POST /api/v2/app/version`
 
 Returns a synthetic, documented compatibility version such as:
 
@@ -517,7 +519,7 @@ Returns a synthetic, documented compatibility version such as:
 v5.0.0-cd211
 ```
 
-#### `GET /api/v2/app/preferences`
+#### `GET|POST /api/v2/app/preferences`
 
 Returns at least:
 
@@ -532,9 +534,13 @@ Returns at least:
   "max_seeding_time": -1,
   "max_inactive_seeding_time_enabled": false,
   "max_inactive_seeding_time": -1,
-  "max_ratio_act": 0
+  "max_ratio_act": 0,
+  "add_trackers": "udp://tracker.example/announce",
+  "add_trackers_enabled": true
 }
 ```
+
+`add_trackers` is the canonical newline-separated tracker list persisted by CD211; `add_trackers_enabled` is the persisted preference flag. Both fields are read-compatible and are updated together only when supplied by `POST /api/v2/app/setPreferences`. Omitted fields remain unchanged.
 
 `dht=true` prevents Sonarr and Radarr from rejecting trackerless magnets before submission. It is a compatibility capability flag, not a claim that CD211 runs a DHT node.
 
@@ -542,7 +548,7 @@ Queue priority is reported as unsupported because CD211 does not provide qBittor
 
 ### 11.3 Category API
 
-#### `GET /api/v2/torrents/categories`
+#### `GET|POST /api/v2/torrents/categories`
 
 Returns a qBittorrent-compatible object:
 
@@ -599,6 +605,10 @@ Supported optional fields include:
 category
 stopped
 paused
+rename
+savepath
+tags
+autoTMM=false
 contentLayout
 ratioLimit
 seedingTimeLimit
@@ -606,7 +616,7 @@ sequentialDownload
 firstLastPiecePrio
 ```
 
-Unsupported BitTorrent fields are accepted for compatibility but do not create seeding, piece-priority, or bandwidth behavior. `category`, `stopped`, and `paused` affect the durable workflow; seeding and piece-order fields are ignored and returned with their documented unsupported values.
+Unsupported BitTorrent fields are accepted for compatibility but do not create seeding, piece-priority, or bandwidth behavior. `category`, `stopped`, `paused`, `rename`, `savepath`, `tags`, and `autoTMM=false` affect the durable submission; seeding and piece-order fields are ignored and returned with their documented unsupported values.
 
 The first release accepts one torrent per request. A request containing multiple items is rejected explicitly rather than partially applied.
 
@@ -656,12 +666,11 @@ For magnet input, CD211 must accept:
 Both normalize to lowercase 40-character hexadecimal storage.
 
 Hybrid v1/v2 torrents use their v1 hash. V2-only torrents are rejected with a clear error until the downstream 115 capability is verified.
-
 Raw magnets and torrent-derived tracker URLs may contain private passkeys. They may be stored in the protected database for crash recovery but must be redacted from logs, API errors, and the Web UI.
 
 ### 11.5 List Torrents
 
-#### `GET /api/v2/torrents/info`
+#### `GET|POST /api/v2/torrents/info`
 
 Supports at least the `category` query parameter used by Sonarr and Radarr.
 
@@ -676,9 +685,10 @@ Each item returns at least:
   "eta": 300,
   "state": "moving",
   "category": "sonarr",
+  "tags": "anime,featured",
   "save_path": "/downloads/sonarr/",
   "content_path": "",
-  "ratio": 0,
+  "completed": 117283950,
   "ratio_limit": -1,
   "seeding_time": 0,
   "seeding_time_limit": -1,
@@ -692,10 +702,11 @@ Before `COMPLETED`, `content_path` is empty. At `COMPLETED`, it is the verified 
 `save_path` is normalized as a directory path and must not equal the completed `content_path`.
 
 When total size or transfer rate is unknown, `size` is `0` until metadata becomes available and `eta` is qBittorrent's unknown sentinel `8640000`. CD211 does not invent a transfer rate. Uploaded `.torrent` files provide size and file-vs-folder shape immediately; magnet submissions carry neither. CloudDrive2 reports a directory as zero bytes and a magnet has no file metadata at all, so CD211 never asks CloudDrive2 for directory metadata to decide the shape of a magnet. Instead the verified local copy is the authority: before completion, the staged candidate is checked with the same root confinement, symlink rejection, and safe-name validation as strict verification, accepting only a regular file or a directory, and the observed kind, measured size, and content path are persisted. A completed download always reports its real size, which matters because Sonarr and Radarr use `size` when deciding a download is finished and can be cleaned up.
+`completed` is the completed byte count projected from the verified local manifest; it is `floor(size * progress)` and clamped to the inclusive range `[0, size]`.
 
 ### 11.6 Torrent Properties and Files
 
-#### `GET /api/v2/torrents/properties?hash=<hash>`
+#### `GET|POST /api/v2/torrents/properties?hash=<hash>`
 
 Returns at least:
 
@@ -709,9 +720,10 @@ Returns at least:
 
 The endpoint must find a newly accepted torrent immediately because Sonarr or Radarr may query it shortly after add.
 
-#### `GET /api/v2/torrents/files?hash=<hash>`
+#### `GET|POST /api/v2/torrents/files?hash=<hash>`
 
 Returns parsed `.torrent` file names when available. Magnet submissions may return an empty array until downstream metadata is known. Modern Sonarr and Radarr import from `content_path`, so this endpoint is not the completion authority.
+Each returned file includes its effective `name`, byte `size`, and persisted qBittorrent `priority` (`0`, `1`, `6`, or `7`). File renames and priority changes are reflected here after their mutation commits; priority `0` means the file is deselected from the effective manifest.
 
 ### 11.7 Delete Torrent
 
@@ -742,21 +754,38 @@ Local deletion must not follow a path outside the configured staging root. A fai
 
 ### 11.8 Compatibility Mutation Endpoints
 
-The following endpoints return success so supported Sonarr and Radarr settings do not fail:
+All mutation endpoints are `POST` only and persist their observable state before returning success. They operate on existing hashes; missing hashes return `404`.
 
 ```text
+POST /api/v2/torrents/add
+POST /api/v2/torrents/start
+POST /api/v2/torrents/delete
+POST /api/v2/torrents/addTags
+POST /api/v2/torrents/filePrio
+POST /api/v2/torrents/renameFile
+POST /api/v2/torrents/setAutoManagement
+POST /api/v2/torrents/setSavePath
+POST /api/v2/torrents/setLocation
+POST /api/v2/torrents/setCategory
+POST /api/v2/app/setPreferences
 POST /api/v2/torrents/setShareLimits
 POST /api/v2/torrents/topPrio
 POST /api/v2/torrents/setForceStart
 ```
 
-Semantics:
+ANI-RSS mutations have real durable semantics:
 
-- `setShareLimits`: accepted and ignored; qBittorrent responses continue to report unlimited seeding because CD211 never seeds.
-- `topPrio`: accepted but does not promise qBittorrent queue ordering.
-- `setForceStart`: `value=true` advances `STOPPED` to `ACCEPTED`; other values do not pause active work or bypass configured concurrency and safety rules.
+`start` starts `STOPPED` rows; an `ACCEPTED` row is idempotent, while other active or terminal states return `409`.
+- `addTags` merges canonical comma-separated tags and persists them.
+- `filePrio` persists per-file priorities; `renameFile` persists a safe relative effective path. Both reject unsafe paths, invalid indexes, invalid priorities, active leases, and manifest collisions with `409`.
+- `setAutoManagement` only accepts disabling automatic management; enabling it returns `409`.
+- `setSavePath` updates a pristine stopped/accepted row using row-version CAS and path safety. `setLocation` updates all requested stopped/accepted rows atomically; mixed states or destination conflicts return `409`.
+- `setPreferences` partially updates only supplied tracker fields and preserves omitted fields. Tracker values are normalized and deduplicated.
+- `delete` persists removal intent; it does not delete the 115 cloud copy, and local deletion remains subject to the path boundary.
 
-Unsupported qBittorrent endpoints return HTTP 404. They are not silently routed to unrelated behavior.
+`setShareLimits`, `topPrio`, and `setForceStart` are compatibility operations: they do not claim unsupported seeding or queue semantics. `setForceStart` may start a stopped task when requested.
+
+Malformed parameters return `400`; state, CAS, path, lease, and destination conflicts return `409`; unsupported qBittorrent endpoints return `404`. No `/torrents/resume` alias or non-official resume behavior is provided.
 
 ## 12. Durable Data Model
 

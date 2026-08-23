@@ -599,24 +599,51 @@ func TestAuthenticationAppCategoriesAndRoutingContract(t *testing.T) {
 			t.Fatalf("invalid category path = %d %q", response.Code, response.Body.String())
 		}
 	}
+	hash := "0123456789abcdef0123456789abcdef01234567"
+	added := doForm(t, harness.api, http.MethodPost, "/api/v2/torrents/add", url.Values{"urls": {"magnet:?xt=urn:btih:" + hash + "&dn=demo"}}, cookie)
+	if added.Code != http.StatusOK {
+		t.Fatalf("add for read matrix = %d %q", added.Code, added.Body.String())
+	}
+	for _, target := range []string{
+		"/api/v2/app/webapiVersion",
+		"/api/v2/app/version",
+		"/api/v2/app/preferences",
+		"/api/v2/torrents/categories",
+		"/api/v2/torrents/info",
+	} {
+		for _, method := range []string{http.MethodGet, http.MethodPost} {
+			var response *httptest.ResponseRecorder
+			if method == http.MethodPost {
+				response = doForm(t, harness.api, method, target, url.Values{"category": {""}}, cookie)
+			} else {
+				response = doRequest(t, harness.api, method, target, nil, cookie)
+			}
+			if response.Code != http.StatusOK {
+				t.Fatalf("read method %s %s = %d %q", method, target, response.Code, response.Body.String())
+			}
+		}
+	}
+	for _, target := range []string{"/api/v2/torrents/properties", "/api/v2/torrents/files"} {
+		get := doRequest(t, harness.api, http.MethodGet, target+"?hash="+hash, nil, cookie)
+		if get.Code != http.StatusOK {
+			t.Fatalf("read GET %s = %d %q", target, get.Code, get.Body.String())
+		}
+		post := doForm(t, harness.api, http.MethodPost, target, url.Values{"hash": {hash}}, cookie)
+		if post.Code != http.StatusOK {
+			t.Fatalf("read POST %s = %d %q", target, post.Code, post.Body.String())
+		}
+	}
 	for target, method := range map[string]string{
 		"/api/v2/auth/logout":             http.MethodGet,
-		"/api/v2/app/webapiVersion":       http.MethodPost,
-		"/api/v2/app/version":             http.MethodPost,
-		"/api/v2/app/preferences":         http.MethodPost,
-		"/api/v2/torrents/categories":     http.MethodPost,
-		"/api/v2/torrents/createCategory": http.MethodGet,
-		"/api/v2/torrents/setCategory":    http.MethodGet,
-		"/api/v2/torrents/add":            http.MethodGet,
-		"/api/v2/torrents/info":           http.MethodPost,
-		"/api/v2/torrents/properties":     http.MethodPost,
-		"/api/v2/torrents/files":          http.MethodPost,
-		"/api/v2/torrents/delete":         http.MethodGet,
-		"/api/v2/torrents/setForceStart":  http.MethodGet,
-		"/api/v2/torrents/setShareLimits": http.MethodGet,
-		"/api/v2/torrents/topPrio":        http.MethodGet,
+		"/api/v2/torrents/createCategory": http.MethodPut,
+		"/api/v2/torrents/setCategory":    http.MethodPut,
+		"/api/v2/torrents/add":            http.MethodPut,
+		"/api/v2/torrents/delete":         http.MethodPut,
+		"/api/v2/torrents/setForceStart":  http.MethodPut,
+		"/api/v2/torrents/setShareLimits": http.MethodPut,
+		"/api/v2/torrents/topPrio":        http.MethodPut,
 	} {
-		if response := doRequest(t, harness.api, method, target, nil, nil); response.Code != http.StatusMethodNotAllowed || response.Body.String() != "Method Not Allowed\n" {
+		if response := doRequest(t, harness.api, method, target, nil, cookie); response.Code != http.StatusMethodNotAllowed || response.Body.String() != "Method Not Allowed\n" {
 			t.Fatalf("wrong method %s %s = %d %q", method, target, response.Code, response.Body.String())
 		}
 	}

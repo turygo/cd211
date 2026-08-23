@@ -134,9 +134,11 @@ PGID=100
 
 ### qBittorrent Web API
 
-`/api/v2` 支持两种独立的认证方式：通过 `/api/v2/auth/login` 获得的 `SID` Cookie，以及 `Authorization: Bearer qbt_<key>`。Sonarr / Radarr 可继续使用用户名和密码登录；支持 qBittorrent API 密钥的客户端可使用独立的 `qbt_` 密钥。
+`/api/v2` 接受持久化的 `SID` 会话 Cookie 或 `Authorization: Bearer qbt_<key>`。如果请求包含 `Authorization`，Bearer 认证优先；格式错误、未知或已撤销的 key 返回 `403`，不会回退到有效的 SID Cookie。没有该请求头时，服务检查 SID Cookie。
 
-可在 Web 界面的**设置**页面生成或撤销 qBittorrent API 密钥。生成后明文会持久保存，并在每次进入设置页时显示；撤销后当前密钥立即失效。SQLite 同时保存密钥明文、SHA-256 摘要和不含敏感信息的密钥提示。如果请求带有 `Authorization` 请求头，则 Bearer 认证优先；Bearer 凭据无效时，即使请求同时携带有效的 `SID`，也不会改用 SID 认证。
+独立的 `qbt_` 密钥可在设置页面生成和撤销。SQLite 同时保存其明文、SHA-256 摘要和末尾提示，认证设置页需要显示明文；每次请求都会读取摘要，因此撤销会立即生效。该密钥只授权 `/api/v2`；`cd211_api_` 令牌只授权 `/api/v1`。
+
+`/api/v2` 提供当前 ANI-RSS 所需的兼容子集：七个读接口同时接受 GET 和 POST；支持 `torrents/add`、`start`、标签、文件优先级、文件重命名、禁用自动管理及保存位置更新。该服务不是完整 qBittorrent，也不实现 BT 传输、做种、限速或 `/torrents/resume` 别名。
 
 ### 原生 API
 

@@ -134,9 +134,11 @@ Use a placeholder such as `qbt_<key>` in documentation, logs, and screenshots; n
 
 ### qBittorrent Web API
 
-`/api/v2` supports two independent authentication methods: the `SID` cookie issued by `/api/v2/auth/login`, and `Authorization: Bearer qbt_<key>`. Sonarr and Radarr can continue to sign in with a username and password; clients that support qBittorrent API keys can use the independent `qbt_` key.
+`/api/v2` accepts the durable `SID` session cookie or `Authorization: Bearer qbt_<key>`. When an `Authorization` header is present, Bearer authentication takes precedence; malformed, unknown, or revoked keys return `403` and never fall back to a valid SID cookie. Without that header, the SID cookie is checked.
 
-Generate, rotate, or revoke the qBittorrent API key on the Web UI **Settings** page. The plaintext key is shown only once after generation or rotation, while SQLite stores only its SHA-256 digest and a non-sensitive hint. Rotation immediately invalidates the previous key, and revocation immediately invalidates the current key. When a request contains an `Authorization` header, Bearer authentication takes precedence; an invalid Bearer credential does not fall back to a valid `SID` sent with the same request.
+The independent `qbt_` key can be generated and revoked from Settings. SQLite stores its plaintext for the authenticated Settings page together with its SHA-256 digest and trailing hint; every request verifies the digest, so revocation takes effect immediately. The key authorizes only `/api/v2`; the `cd211_api_` token authorizes only `/api/v1`.
+
+`/api/v2` implements the ANI-RSS compatibility subset: seven read endpoints accept both GET and POST, with durable add/start, tags, file priorities, file renames, disabled-only automatic management, and save-location updates. It is not the full qBittorrent API and does not implement BitTorrent transfer, seeding, bandwidth controls, or a `/torrents/resume` alias.
 
 ### Native API
 

@@ -34,15 +34,27 @@ type DownloadFile struct {
 	Index        int64
 	RelativePath string
 	Size         int64
+	Priority     int64
+}
+
+// FileOverride stores the durable qBittorrent-visible path and priority.
+type FileOverride struct {
+	DownloadHash string
+	FileIndex    int64
+	RelativePath string
+	Priority     int64
 }
 
 // Download is the durable state of a submitted download.
 type Download struct {
 	Hash                 string
 	Name                 string
+	NameOverridden       bool
 	SourceKind           SourceKind
 	SubmissionURI        string
 	Category             string
+	Tags                 string
+	AutoTMM              bool
 	CloudFolder          string
 	SavePath             string
 	DestinationName      string
