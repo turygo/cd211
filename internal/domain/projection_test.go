@@ -120,10 +120,10 @@ func TestValidateDownloadCompletionAndPathInvariants(t *testing.T) {
 			},
 		},
 		{
-			name: "copy states require cloud source path",
+			name: "copy states require copy source path",
 			mutate: func(download *Download) {
 				download.State = StateWaitingCopy
-				download.CloudSourcePath = ""
+				download.CopySourcePath = ""
 			},
 		},
 	}
@@ -165,7 +165,7 @@ func TestValidateDownloadRejectsInvalidDurableFieldsAndRedactsSubmissionURI(t *t
 		{"category", func(download *Download) { download.Category = ".." }},
 		{"cloud folder", func(download *Download) { download.CloudFolder = "relative" }},
 		{"save path", func(download *Download) { download.SavePath = "relative" }},
-		{"cloud source path", func(download *Download) { download.CloudSourcePath = "relative" }},
+		{"cloud result path", func(download *Download) { download.CloudResultPath = "relative" }},
 		{"content path", func(download *Download) { download.ContentPath = "relative" }},
 		{"cloud task name", func(download *Download) { download.CloudTaskName = "bad\nname" }},
 		{"total size", func(download *Download) { download.TotalSize = -1 }},
@@ -211,7 +211,8 @@ func validDownload(state State) Download {
 		CloudFolder:     "/cloud/releases",
 		SavePath:        "/downloads",
 		CloudTaskName:   "copy-release",
-		CloudSourcePath: "/cloud/releases/release",
+		CloudResultPath: "/cloud/releases/release",
+		CopySourcePath:  "/cloud/releases/release",
 		TotalSize:       42,
 		State:           state,
 		OfflineProgress: 0.40,

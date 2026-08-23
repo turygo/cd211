@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,10 +13,17 @@ import (
 	"unicode/utf8"
 )
 
-// ExpectedContent describes the content created for a torrent.
+// ExpectedFile is one authoritative torrent manifest entry.
+type ExpectedFile struct {
+	RelativePath string
+	Size         int64
+}
+
+// ExpectedContent describes the staged candidate and its logical torrent manifest.
 type ExpectedContent struct {
-	Name      string
-	MultiFile bool
+	CandidateName string
+	MultiFile     bool
+	Files         []ExpectedFile
 }
 
 // VerifiedContent is the checked content path together with the number of bytes
@@ -162,7 +170,7 @@ func (v *Verifier) PrepareSaveRoot(savePath string) (string, error) {
 // Verify checks that the expected torrent content is a safe child of savePath
 // and returns its cleaned, evaluated absolute path with the bytes on disk.
 func (v *Verifier) Verify(savePath string, expected ExpectedContent) (VerifiedContent, error) {
-	if err := validateName(expected.Name); err != nil {
+	if err := validateName(expected.CandidateName); err != nil {
 		return VerifiedContent{}, err
 	}
 
@@ -171,7 +179,7 @@ func (v *Verifier) Verify(savePath string, expected ExpectedContent) (VerifiedCo
 		return VerifiedContent{}, err
 	}
 
-	candidatePath := filepath.Join(filepath.Clean(savePath), expected.Name)
+	candidatePath := filepath.Join(filepath.Clean(savePath), expected.CandidateName)
 	info, err := os.Lstat(candidatePath)
 	if err != nil {
 		return VerifiedContent{}, fmt.Errorf("fsafe: inspect candidate: %w", err)
@@ -197,12 +205,25 @@ func (v *Verifier) Verify(savePath string, expected ExpectedContent) (VerifiedCo
 		if !info.Mode().IsRegular() {
 			return VerifiedContent{}, fmt.Errorf("fsafe: single-file candidate is not a regular file")
 		}
+		if len(expected.Files) > 0 {
+			if len(expected.Files) != 1 || !validManifestPath(expected.Files[0].RelativePath) ||
+				expected.Files[0].Size < 0 || info.Size() != expected.Files[0].Size {
+				return VerifiedContent{}, fmt.Errorf("fsafe: single-file manifest does not match candidate")
+			}
+		}
 		return VerifiedContent{Path: candidate, Size: info.Size()}, nil
 	}
 	if !info.IsDir() {
 		return VerifiedContent{}, fmt.Errorf("fsafe: multi-file candidate is not a directory")
 	}
-	size, err := treeSize(candidate)
+	if len(expected.Files) == 0 {
+		size, err := treeSize(candidate)
+		if err != nil {
+			return VerifiedContent{}, err
+		}
+		return VerifiedContent{Path: candidate, Size: size}, nil
+	}
+	size, err := verifyManifest(candidate, expected.Files)
 	if err != nil {
 		return VerifiedContent{}, err
 	}
@@ -277,6 +298,7 @@ func treeSize(root string) (int64, error) {
 			return err
 		}
 		if !entry.Type().IsRegular() {
+
 			return nil
 		}
 		info, err := entry.Info()
@@ -288,6 +310,52 @@ func treeSize(root string) (int64, error) {
 	})
 	if err != nil {
 		return 0, fmt.Errorf("fsafe: measure content: %w", err)
+	}
+	return total, nil
+}
+
+func validManifestPath(relative string) bool {
+	return relative != "" && !filepath.IsAbs(relative) && filepath.Clean(relative) == relative &&
+		relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) &&
+		!strings.ContainsAny(relative, "\\\x00") && utf8.ValidString(relative) &&
+		!strings.ContainsFunc(relative, unicode.IsControl)
+}
+func verifyManifest(root string, files []ExpectedFile) (int64, error) {
+	var total int64
+	seen := make(map[string]struct{}, len(files))
+	for _, expected := range files {
+		relative := expected.RelativePath
+		if !validManifestPath(relative) || expected.Size < 0 {
+			return 0, fmt.Errorf("fsafe: manifest path or size is invalid")
+		}
+		if _, ok := seen[relative]; ok {
+			return 0, fmt.Errorf("fsafe: manifest contains duplicate path")
+		}
+		seen[relative] = struct{}{}
+		current := root
+		parts := strings.Split(relative, string(filepath.Separator))
+		for index, part := range parts {
+			current = filepath.Join(current, part)
+			info, err := os.Lstat(current)
+			if err != nil {
+				return 0, fmt.Errorf("fsafe: inspect manifest path: %w", err)
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				return 0, fmt.Errorf("fsafe: manifest path contains symbolic link")
+			}
+			if index < len(parts)-1 && !info.IsDir() {
+				return 0, fmt.Errorf("fsafe: manifest parent is not a directory")
+			}
+			if index == len(parts)-1 {
+				if !info.Mode().IsRegular() || info.Size() != expected.Size {
+					return 0, fmt.Errorf("fsafe: manifest file is not an exact regular file")
+				}
+			}
+		}
+		if total > math.MaxInt64-expected.Size {
+			return 0, fmt.Errorf("fsafe: manifest size overflows")
+		}
+		total += expected.Size
 	}
 	return total, nil
 }

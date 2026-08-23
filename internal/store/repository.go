@@ -393,7 +393,7 @@ func (s *Store) Retry(ctx context.Context, hash string, target domain.State, now
 	}
 	// The retry transition is pre-authorized by CanTransition and the row was
 	// valid in its pre-update state; phase prerequisites such as
-	// cloud_source_path are materialized when the workflow runs the target
+	// cloud_result_path are materialized when the workflow runs the target
 	// phase, so the event payload is built from a structurally converted row
 	// rather than one gated by full domain validation.
 	download, err := downloadRow(row)
@@ -738,7 +738,7 @@ func categoryFromDB(row storedb.Category) (domain.Category, error) {
 
 // downloadRow maps a stored download row to a domain.Download after checking
 // structural integrity only. It deliberately skips domain.ValidateDownload:
-// phase-prerequisite fields (for example cloud_source_path for copy states)
+// phase-prerequisite fields (for example copy_source_path for copy states)
 // are materialized by the workflow that runs the phase, so authorized
 // transitions such as Retry can observe rows that are momentarily mid-phase.
 // Callers that need the full domain invariants must use downloadFromDB.
@@ -756,7 +756,7 @@ func downloadRow(row storedb.Download) (domain.Download, error) {
 	download := domain.Download{
 		Hash: row.Hash, Name: row.Name, SourceKind: sourceKind, SubmissionURI: row.SubmissionUri,
 		Category: row.Category, CloudFolder: row.CloudFolder, SavePath: row.SavePath, DestinationName: nullString(row.DestinationName),
-		CloudTaskName: nullString(row.CloudTaskName), CloudSourcePath: nullString(row.CloudSourcePath), ContentPath: nullString(row.ContentPath),
+		CloudTaskName: nullString(row.CloudTaskName), CloudResultPath: nullString(row.CloudResultPath), CopySourcePath: nullString(row.CopySourcePath), ContentPath: nullString(row.ContentPath),
 		TotalSize: row.TotalSize, State: state, OfflineProgress: row.OfflineProgress, CopyProgress: row.CopyProgress, QbitProgress: row.QbitProgress,
 		LastUpstreamStatus: nullString(row.LastUpstreamStatus), LastError: nullString(row.LastError), LastErrorCode: nullString(row.LastErrorCode),
 		PhaseStartedAt: row.PhaseStartedAt, OfflineStartedAt: nullTime(row.OfflineStartedAt), CopyCompletedAt: nullTime(row.CopyCompletedAt),
@@ -786,7 +786,7 @@ func insertDownloadParams(download domain.Download) storedb.InsertDownloadParams
 	return storedb.InsertDownloadParams{
 		Hash: download.Hash, Name: download.Name, SourceKind: string(download.SourceKind), SubmissionUri: download.SubmissionURI,
 		Category: download.Category, CloudFolder: download.CloudFolder, SavePath: download.SavePath, DestinationName: nullableString(download.DestinationName),
-		CloudTaskName: nullableString(download.CloudTaskName), CloudSourcePath: nullableString(download.CloudSourcePath), ContentPath: nullableString(download.ContentPath),
+		CloudTaskName: nullableString(download.CloudTaskName), CloudResultPath: nullableString(download.CloudResultPath), CopySourcePath: nullableString(download.CopySourcePath), ContentPath: nullableString(download.ContentPath),
 		IsMultiFile: nullableBool(download.IsMultiFile), TotalSize: download.TotalSize, State: string(download.State),
 		OfflineProgress: download.OfflineProgress, CopyProgress: download.CopyProgress, QbitProgress: download.QbitProgress,
 		LastUpstreamStatus: nullableString(download.LastUpstreamStatus), LastError: nullableString(download.LastError), LastErrorCode: nullableString(download.LastErrorCode),
@@ -801,7 +801,7 @@ func reviveDownloadParams(download domain.Download) storedb.ReviveDownloadParams
 	return storedb.ReviveDownloadParams{
 		Name: download.Name, SourceKind: string(download.SourceKind), SubmissionUri: download.SubmissionURI,
 		Category: download.Category, CloudFolder: download.CloudFolder, SavePath: download.SavePath, DestinationName: nullableString(download.DestinationName),
-		CloudTaskName: nullableString(download.CloudTaskName), CloudSourcePath: nullableString(download.CloudSourcePath), ContentPath: nullableString(download.ContentPath),
+		CloudTaskName: nullableString(download.CloudTaskName), CloudResultPath: nullableString(download.CloudResultPath), CopySourcePath: nullableString(download.CopySourcePath), ContentPath: nullableString(download.ContentPath),
 		IsMultiFile: nullableBool(download.IsMultiFile), TotalSize: download.TotalSize, State: string(download.State),
 		OfflineProgress: download.OfflineProgress, CopyProgress: download.CopyProgress, QbitProgress: download.QbitProgress, LastUpstreamStatus: nullableString(download.LastUpstreamStatus),
 		PhaseStartedAt: download.PhaseStartedAt, OfflineStartedAt: nullableTime(download.OfflineStartedAt), CopyCompletedAt: nullableTime(download.CopyCompletedAt),
@@ -813,7 +813,7 @@ func commitClaimParams(claim Claim, download domain.Download) storedb.CommitClai
 	return storedb.CommitClaimParams{
 		Name:            download.Name,
 		DestinationName: nullableString(download.DestinationName),
-		CloudTaskName:   nullableString(download.CloudTaskName), CloudSourcePath: nullableString(download.CloudSourcePath), ContentPath: nullableString(download.ContentPath),
+		CloudTaskName:   nullableString(download.CloudTaskName), CloudResultPath: nullableString(download.CloudResultPath), CopySourcePath: nullableString(download.CopySourcePath), ContentPath: nullableString(download.ContentPath),
 		IsMultiFile: nullableBool(download.IsMultiFile), TotalSize: download.TotalSize, State: string(download.State),
 		OfflineProgress: download.OfflineProgress, CopyProgress: download.CopyProgress, QbitProgress: download.QbitProgress,
 		LastUpstreamStatus: nullableString(download.LastUpstreamStatus), LastError: nullableString(download.LastError), LastErrorCode: nullableString(download.LastErrorCode),

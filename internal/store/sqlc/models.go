@@ -49,7 +49,7 @@ type Download struct {
 	SavePath             string         `json:"save_path"`
 	DestinationName      sql.NullString `json:"destination_name"`
 	CloudTaskName        sql.NullString `json:"cloud_task_name"`
-	CloudSourcePath      sql.NullString `json:"cloud_source_path"`
+	CloudResultPath      sql.NullString `json:"cloud_result_path"`
 	ContentPath          sql.NullString `json:"content_path"`
 	IsMultiFile          sql.NullInt64  `json:"is_multi_file"`
 	TotalSize            int64          `json:"total_size"`
@@ -74,6 +74,7 @@ type Download struct {
 	LastErrorCode        sql.NullString `json:"last_error_code"`
 	OfflineStartedAt     sql.NullTime   `json:"offline_started_at"`
 	CopyCompletedAt      sql.NullTime   `json:"copy_completed_at"`
+	CopySourcePath       sql.NullString `json:"copy_source_path"`
 }
 
 type DownloadFile struct {

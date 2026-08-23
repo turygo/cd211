@@ -136,7 +136,8 @@ func TestStartResumesFromLastCompletedStage(t *testing.T) {
 			multi := false
 			submission.Download.State = domain.StateStopped
 			submission.Download.NextRunAt = nil
-			submission.Download.CloudSourcePath = "/cloud/downloads/download-" + test.seed
+			submission.Download.CloudResultPath = "/cloud/downloads/download-" + test.seed
+			submission.Download.CopySourcePath = submission.Download.CloudResultPath
 			submission.Download.IsMultiFile = &multi
 			submission.Download.LastUpstreamStatus = test.status
 			submission.Download.ContentPath = test.content

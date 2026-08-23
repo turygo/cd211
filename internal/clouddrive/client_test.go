@@ -627,6 +627,47 @@ func TestSafeErrorsNilResponsesStatusClassificationAndClose(t *testing.T) {
 	assertErrorKind(t, err, "authenticate", ErrorUnauthorized)
 }
 
+func TestInspectContentValidatesKindsPathsAndSizes(t *testing.T) {
+	base := time.Date(2026, 8, 6, 0, 0, 0, 0, time.UTC)
+	rpc := &fakeRPC{}
+	rpc.getToken = func(_ context.Context, _ *pb.GetTokenRequest) (*pb.JWTToken, error) {
+		return token(base), nil
+	}
+	rpc.findFile = func(_ context.Context, req *pb.FindFileByPathRequest) (*pb.CloudDriveFile, error) {
+		if req.ParentPath != "/cloud" {
+			t.Fatalf("FindFile parent = %q, want /cloud", req.ParentPath)
+		}
+		switch req.Path {
+		case "directory":
+			return &pb.CloudDriveFile{FullPathName: "/cloud/directory", IsDirectory: true, FileType: pb.CloudDriveFile_Directory, Size: 0}, nil
+		case "file":
+			return &pb.CloudDriveFile{FullPathName: "/cloud/file", FileType: pb.CloudDriveFile_File, Size: 42}, nil
+		case "other":
+			return &pb.CloudDriveFile{FullPathName: "/cloud/other", FileType: pb.CloudDriveFile_Other, Size: 0}, nil
+		default:
+			return &pb.CloudDriveFile{FullPathName: "/cloud/other", FileType: pb.CloudDriveFile_Other, Size: 0}, nil
+		}
+	}
+	client := newTestClient(t, rpc, func() time.Time { return base })
+	for _, test := range []struct {
+		path string
+		kind ContentKind
+		size int64
+	}{
+		{path: "/cloud/directory", kind: ContentDirectory},
+		{path: "/cloud/file", kind: ContentFile, size: 42},
+		{path: "/cloud/other", kind: ContentOther},
+	} {
+		got, err := client.InspectContent(context.Background(), test.path)
+		if err != nil || got.Path != test.path || got.Kind != test.kind || got.Size != test.size {
+			t.Fatalf("InspectContent(%q) = %+v, %v", test.path, got, err)
+		}
+	}
+	if _, err := client.InspectContent(context.Background(), "/cloud/\\file"); err == nil {
+		t.Fatal("InspectContent accepted a path containing a backslash")
+	}
+}
+
 func assertErrorKind(t *testing.T, err error, operation string, kind ErrorKind) {
 	t.Helper()
 	var cloudErr *Error

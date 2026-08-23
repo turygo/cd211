@@ -15,7 +15,7 @@ func TestVerifySingleFile(t *testing.T) {
 	save := mkdir(t, filepath.Join(root, "save"))
 	content := writeFile(t, filepath.Join(save, "movie.mkv"), "content")
 
-	got, err := verifier.Verify(save, ExpectedContent{Name: "movie.mkv"})
+	got, err := verifier.Verify(save, ExpectedContent{CandidateName: "movie.mkv"})
 	if err != nil {
 		t.Fatalf("Verify() error = %v", err)
 	}
@@ -41,7 +41,7 @@ func TestVerifyMultiFileDirectorySumsRegularFiles(t *testing.T) {
 	nested := mkdir(t, filepath.Join(content, "extras"))
 	writeFile(t, filepath.Join(nested, "notes.txt"), "abc")
 
-	got, err := verifier.Verify(save, ExpectedContent{Name: "album", MultiFile: true})
+	got, err := verifier.Verify(save, ExpectedContent{CandidateName: "album", MultiFile: true})
 	if err != nil {
 		t.Fatalf("Verify() error = %v", err)
 	}
@@ -62,13 +62,13 @@ func TestVerifyRejectsNameMismatchAndUnsafeName(t *testing.T) {
 	save := mkdir(t, filepath.Join(root, "save"))
 	writeFile(t, filepath.Join(save, "actual"), "content")
 
-	if _, err := verifier.Verify(save, ExpectedContent{Name: "expected"}); err == nil {
+	if _, err := verifier.Verify(save, ExpectedContent{CandidateName: "expected"}); err == nil {
 		t.Fatal("Verify() succeeded for a missing expected name")
 	}
 
 	for _, name := range []string{"", ".", "..", "nested/file", `nested\\file`, "line\nbreak", string([]byte{0xff})} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := verifier.Verify(save, ExpectedContent{Name: name}); err == nil {
+			if _, err := verifier.Verify(save, ExpectedContent{CandidateName: name}); err == nil {
 				t.Fatalf("Verify() succeeded for unsafe name %q", name)
 			}
 		})
@@ -79,7 +79,7 @@ func TestVerifyRejectsMissingCandidate(t *testing.T) {
 	verifier, root := newTestVerifier(t)
 	save := mkdir(t, filepath.Join(root, "save"))
 
-	if _, err := verifier.Verify(save, ExpectedContent{Name: "missing"}); err == nil {
+	if _, err := verifier.Verify(save, ExpectedContent{CandidateName: "missing"}); err == nil {
 		t.Fatal("Verify() succeeded for missing candidate")
 	}
 }
@@ -90,7 +90,7 @@ func TestVerifyRejectsCandidateSymlinkEscapingRoot(t *testing.T) {
 	outside := writeFile(t, filepath.Join(t.TempDir(), "outside"), "outside")
 	mustSymlink(t, outside, filepath.Join(save, "content"))
 
-	if _, err := verifier.Verify(save, ExpectedContent{Name: "content"}); err == nil {
+	if _, err := verifier.Verify(save, ExpectedContent{CandidateName: "content"}); err == nil {
 		t.Fatal("Verify() succeeded for candidate symlink escaping root")
 	}
 }
@@ -101,7 +101,7 @@ func TestVerifyRejectsCandidateSymlinkInsideRoot(t *testing.T) {
 	target := writeFile(t, filepath.Join(save, "target"), "content")
 	mustSymlink(t, target, filepath.Join(save, "content"))
 
-	if _, err := verifier.Verify(save, ExpectedContent{Name: "content"}); err == nil {
+	if _, err := verifier.Verify(save, ExpectedContent{CandidateName: "content"}); err == nil {
 		t.Fatal("Verify() succeeded for a candidate symbolic link inside root")
 	}
 }
@@ -113,7 +113,7 @@ func TestVerifyRejectsSaveRootSymlinkEscapingLocalRoot(t *testing.T) {
 	saveLink := filepath.Join(root, "save-link")
 	mustSymlink(t, outsideSave, saveLink)
 
-	if _, err := verifier.Verify(saveLink, ExpectedContent{Name: "content"}); err == nil {
+	if _, err := verifier.Verify(saveLink, ExpectedContent{CandidateName: "content"}); err == nil {
 		t.Fatal("Verify() succeeded for save root symlink escaping local root")
 	}
 }
@@ -128,7 +128,7 @@ func TestVerifyRejectsSiblingPrefixPath(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	if _, err := verifier.Verify(siblingSave, ExpectedContent{Name: "content"}); err == nil {
+	if _, err := verifier.Verify(siblingSave, ExpectedContent{CandidateName: "content"}); err == nil {
 		t.Fatal("Verify() accepted sibling-prefix path outside local root")
 	}
 }
@@ -234,10 +234,10 @@ func TestVerifyRejectsStrictKindMismatch(t *testing.T) {
 	// Uploaded torrents must keep strict expected verification: a directory
 	// cannot satisfy a single-file expectation and vice versa, even though a
 	// magnet with the same candidate would be accepted by type.
-	if _, err := verifier.Verify(save, ExpectedContent{Name: filepath.Base(directory), MultiFile: false}); err == nil {
+	if _, err := verifier.Verify(save, ExpectedContent{CandidateName: filepath.Base(directory), MultiFile: false}); err == nil {
 		t.Fatal("Verify() accepted a directory for a single-file torrent")
 	}
-	if _, err := verifier.Verify(save, ExpectedContent{Name: "payload", MultiFile: true}); err == nil {
+	if _, err := verifier.Verify(save, ExpectedContent{CandidateName: "payload", MultiFile: true}); err == nil {
 		t.Fatal("Verify() accepted a regular file for a multi-file torrent")
 	}
 	if _, err := verifier.VerifyUnknownType(save, "payload"); err != nil {
@@ -245,6 +245,79 @@ func TestVerifyRejectsStrictKindMismatch(t *testing.T) {
 	}
 	if _, err := verifier.VerifyUnknownType(save, "album"); err != nil {
 		t.Fatalf("VerifyUnknownType(directory) error = %v, want type-unknown acceptance", err)
+	}
+}
+func TestVerifyManifestChecksDeclaredFilesAndSymlinks(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	save := mkdir(t, filepath.Join(root, "save"))
+	album := mkdir(t, filepath.Join(save, "album"))
+	writeFile(t, filepath.Join(album, "episode.mkv"), "episode")
+	writeFile(t, filepath.Join(album, "unlisted.txt"), "extra")
+
+	got, err := verifier.Verify(save, ExpectedContent{CandidateName: "album", MultiFile: true,
+		Files: []ExpectedFile{{RelativePath: "episode.mkv", Size: int64(len("episode"))}}})
+	if err != nil {
+		t.Fatalf("Verify(manifest) error = %v", err)
+	}
+	if got.Size != int64(len("episode")) {
+		t.Fatalf("Verify(manifest) size = %d, want declared size %d", got.Size, len("episode"))
+	}
+
+	for _, test := range []struct {
+		name string
+		file ExpectedFile
+	}{
+		{name: "size mismatch", file: ExpectedFile{RelativePath: "episode.mkv", Size: 99}},
+		{name: "path escape", file: ExpectedFile{RelativePath: "../episode.mkv", Size: 7}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := verifier.Verify(save, ExpectedContent{CandidateName: "album", MultiFile: true, Files: []ExpectedFile{test.file}}); err == nil {
+				t.Fatalf("Verify() accepted invalid manifest %q", test.name)
+			}
+		})
+	}
+	t.Run("invalid utf8 path", func(t *testing.T) {
+		if _, err := verifier.Verify(save, ExpectedContent{
+			CandidateName: "album", MultiFile: true,
+			Files: []ExpectedFile{{RelativePath: string([]byte{0xff}), Size: 7}},
+		}); err == nil {
+			t.Fatal("Verify() accepted invalid UTF-8 manifest path")
+		}
+	})
+
+	symlinkTarget := writeFile(t, filepath.Join(t.TempDir(), "outside"), "episode")
+	if err := os.Symlink(symlinkTarget, filepath.Join(album, "linked.mkv")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifier.Verify(save, ExpectedContent{CandidateName: "album", MultiFile: true,
+		Files: []ExpectedFile{{RelativePath: "linked.mkv", Size: 7}}}); err == nil {
+		t.Fatal("Verify() accepted a declared symlink")
+	}
+}
+
+func TestVerifySingleFileAllowsLogicalManifestNameDifferentFromCandidate(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	save := mkdir(t, filepath.Join(root, "save"))
+	writeFile(t, filepath.Join(save, "staged.mkv"), "episode")
+	content, err := verifier.Verify(save, ExpectedContent{
+		CandidateName: "staged.mkv",
+		Files:         []ExpectedFile{{RelativePath: "episode.mkv", Size: 7}},
+	})
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	want, err := filepath.EvalSymlinks(filepath.Join(save, "staged.mkv"))
+	if err != nil {
+		t.Fatalf("EvalSymlinks(candidate): %v", err)
+	}
+	if content.Path != want {
+		t.Fatalf("verified path = %q, want %q", content.Path, want)
+	}
+	if _, err := verifier.Verify(save, ExpectedContent{
+		CandidateName: "staged.mkv",
+		Files:         []ExpectedFile{{RelativePath: "../episode.mkv", Size: 7}},
+	}); err == nil {
+		t.Fatal("Verify() accepted unsafe single-file manifest path")
 	}
 }
 
@@ -393,7 +466,7 @@ func TestVerifyThenDeleteThroughSaveRootSymlink(t *testing.T) {
 	mustSymlink(t, physicalSave, saveLink)
 	target := writeFile(t, filepath.Join(physicalSave, "payload"), "content")
 
-	contentPath, err := verifier.Verify(saveLink, ExpectedContent{Name: "payload"})
+	contentPath, err := verifier.Verify(saveLink, ExpectedContent{CandidateName: "payload"})
 	if err != nil {
 		t.Fatalf("Verify() through save-root symlink: %v", err)
 	}

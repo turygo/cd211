@@ -169,7 +169,7 @@ func (s *Service) submit(ctx context.Context, result torrentmeta.Result, source 
 			filesToCreate = append(filesToCreate, domain.DownloadFile{DownloadHash: result.Hash, Index: file.Index, RelativePath: file.RelativePath, Size: file.Size})
 		}
 	}
-	s.prepareRetainedContent(ctx, &download)
+	s.prepareRetainedContent(ctx, &download, filesToCreate)
 	if stopped {
 		download.State = domain.StateStopped
 		download.NextRunAt = nil
@@ -185,28 +185,55 @@ func (s *Service) submit(ctx context.Context, result torrentmeta.Result, source 
 }
 
 // prepareRetainedContent revives a DELETED row's verified local content when a
-// fresh submission matches its frozen save path. It is best-effort: any
-// lookup, verification, or path mismatch leaves the submission untouched.
-func (s *Service) prepareRetainedContent(ctx context.Context, download *domain.Download) {
+// fresh submission matches its frozen save path. Torrent submissions verify
+// their parsed manifest while preserving the new logical metadata; magnets
+// retain the previous completed name and observed shape because they carry no
+// manifest. Any lookup, verification, or path mismatch leaves the submission
+// untouched.
+func (s *Service) prepareRetainedContent(ctx context.Context, download *domain.Download, files []domain.DownloadFile) {
 	existing, err := s.repo.GetDownload(ctx, download.Hash)
 	if err != nil || existing.State != domain.StateDeleted || existing.DeleteFilesRequested ||
-		existing.ContentPath == "" || existing.CloudSourcePath == "" || existing.IsMultiFile == nil ||
-		filepath.Clean(existing.SavePath) != filepath.Clean(download.SavePath) {
+		existing.ContentPath == "" || existing.CloudResultPath == "" || existing.CopySourcePath == "" ||
+		existing.IsMultiFile == nil || filepath.Clean(existing.SavePath) != filepath.Clean(download.SavePath) {
 		return
 	}
-	content, err := s.files.Verify(existing.SavePath, fsafe.ExpectedContent{Name: existing.Name, MultiFile: *existing.IsMultiFile})
+	expected := fsafe.ExpectedContent{}
+	if existing.DestinationName != "" {
+		if !safeRetainedName(existing.DestinationName) {
+			return
+		}
+		expected.CandidateName = existing.DestinationName
+	} else {
+		candidate := filepath.Clean(existing.ContentPath)
+		if filepath.Dir(candidate) != filepath.Clean(existing.SavePath) || !safeRetainedName(filepath.Base(candidate)) {
+			return
+		}
+		expected.CandidateName = filepath.Base(candidate)
+	}
+	if download.SourceKind == domain.SourceTorrent {
+		expected.MultiFile = *download.IsMultiFile
+		expected.Files = make([]fsafe.ExpectedFile, 0, len(files))
+		for _, file := range files {
+			expected.Files = append(expected.Files, fsafe.ExpectedFile{RelativePath: file.RelativePath, Size: file.Size})
+		}
+	} else {
+		expected.MultiFile = *existing.IsMultiFile
+	}
+	content, err := s.files.Verify(existing.SavePath, expected)
 	if err != nil || filepath.Clean(content.Path) != filepath.Clean(existing.ContentPath) {
 		return
 	}
-	multiFile := *existing.IsMultiFile
-	download.Name = existing.Name
+	download.DestinationName = expected.CandidateName
+	if download.SourceKind == domain.SourceMagnet {
+		multiFile := *existing.IsMultiFile
+		download.Name = existing.Name
+		download.IsMultiFile = &multiFile
+		download.TotalSize = content.Size
+	}
 	download.CloudTaskName = existing.CloudTaskName
-	download.CloudSourcePath = existing.CloudSourcePath
+	download.CloudResultPath = existing.CloudResultPath
+	download.CopySourcePath = existing.CopySourcePath
 	download.ContentPath = content.Path
-	download.IsMultiFile = &multiFile
-	// The retained tree is already on disk, so its measured size supersedes
-	// whatever the previous submission recorded.
-	download.TotalSize = content.Size
 	download.State = domain.StateVerifyingLocal
 	download.OfflineProgress = 1
 	download.CopyProgress = 1
@@ -235,6 +262,18 @@ func CanonicalCategory(raw string, allowEmpty bool) (string, bool) {
 		}
 	}
 	return name, true
+}
+func safeRetainedName(name string) bool {
+	if name == "" || name == "." || name == ".." || !utf8.ValidString(name) ||
+		strings.ContainsAny(name, "/\\\x00") {
+		return false
+	}
+	for _, character := range name {
+		if character < 0x20 || character == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func oneMagnetLine(value string) (string, bool) {

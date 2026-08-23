@@ -146,6 +146,40 @@ func TestLastErrorCodeMigrationBackfillsLegacy(t *testing.T) {
 		t.Fatalf("clean row = (%+v, %v), want no problem code", cleanRow, err)
 	}
 }
+func TestCloudContentResolutionMigrationPreservesHistoricalCopyIdentity(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "legacy-cloud-content.sqlite")
+	db := openDatabaseAtMigration(t, databasePath, 12)
+	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	hash := strings.Repeat("c", 40)
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO downloads (
+			hash, name, source_kind, submission_uri, category, cloud_folder, save_path,
+			cloud_source_path, total_size, state, offline_progress, copy_progress,
+			qbit_progress, phase_started_at, next_run_at, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?, ?)
+	`, hash, "historical", string(domain.SourceMagnet), "magnet:?xt=urn:btih:"+hash,
+		"", "/cloud", "/downloads", "/cloud/historical", 1, string(domain.StateAccepted),
+		now, now, now, now); err != nil {
+		t.Fatalf("insert historical cloud path fixture: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close historical fixture database: %v", err)
+	}
+
+	store, err := Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("Open(historical cloud database) error = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	download, err := store.GetDownload(ctx, hash)
+	if err != nil {
+		t.Fatalf("GetDownload(migrated historical row) error = %v", err)
+	}
+	if download.CloudResultPath != "/cloud/historical" || download.CopySourcePath != "/cloud/historical" {
+		t.Fatalf("migrated historical paths = (%q, %q), want preserved copy identity", download.CloudResultPath, download.CopySourcePath)
+	}
+}
 
 func TestDomainEventsSequenceMigrationPreservesCanonicalCursor(t *testing.T) {
 	ctx := context.Background()

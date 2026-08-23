@@ -298,7 +298,8 @@ func TestReAddRetainsVerifiedLocalContent(t *testing.T) {
 			next.LastUpstreamStatus = "offline:DOWNLOADING"
 		case domain.StateSubmittingCopy:
 			next.CloudTaskName = "Example.Release"
-			next.CloudSourcePath = "/cloud/movies/Example.Release"
+			next.CloudResultPath = "/cloud/movies/Example.Release"
+			next.CopySourcePath = next.CloudResultPath
 			next.OfflineProgress = 1
 			next.LastUpstreamStatus = "offline:FINISHED"
 		case domain.StateWaitingCopy:
@@ -350,7 +351,7 @@ func TestReAddRetainsVerifiedLocalContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if revived.State != domain.StateVerifyingLocal || revived.ContentPath != contentPath ||
-		revived.CloudSourcePath != "/cloud/movies/Example.Release" || revived.LastUpstreamStatus != domain.UpstreamRetainedContent {
+		revived.CloudResultPath != "/cloud/movies/Example.Release" || revived.CopySourcePath != "/cloud/movies/Example.Release" || revived.LastUpstreamStatus != domain.UpstreamRetainedContent {
 		t.Fatalf("revived download lost retained evidence: %+v", revived)
 	}
 
@@ -784,7 +785,8 @@ func advanceToCompleted(t *testing.T, repository *store.Store, now time.Time, ha
 		next.PhaseStartedAt = now
 		next.NextRunAt = &now
 		if state == domain.StateSubmittingCopy || state == domain.StateWaitingCopy || state == domain.StateVerifyingLocal || state == domain.StateCompleted {
-			next.CloudSourcePath = "/cloud/Complete"
+			next.CloudResultPath = "/cloud/Complete"
+			next.CopySourcePath = "/cloud/Complete"
 		}
 		if state == domain.StateCompleted {
 			next.NextRunAt = nil

@@ -100,9 +100,9 @@ func TestSanitizeDownloadError(t *testing.T) {
 			d.SavePath = "/local/save"
 			d.LastError = "copy failed for " + d.SavePath
 		}, RedactedErrorText},
-		{"cloud source path", func(d *Download) {
-			d.CloudSourcePath = "/cloud/source"
-			d.LastError = "copy failed for " + d.CloudSourcePath
+		{"cloud result path", func(d *Download) {
+			d.CloudResultPath = "/cloud/source"
+			d.LastError = "copy failed for " + d.CloudResultPath
 		}, RedactedErrorText},
 		{"content path", func(d *Download) {
 			d.ContentPath = "/local/content"

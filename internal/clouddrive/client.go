@@ -108,6 +108,21 @@ type Directory struct {
 	Path string `json:"path"`
 }
 
+// ContentKind identifies the validated CloudDrive2 object kind.
+type ContentKind string
+
+const (
+	ContentDirectory ContentKind = "directory"
+	ContentFile      ContentKind = "file"
+	ContentOther     ContentKind = "other"
+)
+
+type Content struct {
+	Path string
+	Kind ContentKind
+	Size int64
+}
+
 type CopySpec struct {
 	SourcePath, DestinationPath string
 }
@@ -233,6 +248,36 @@ func (c *Client) FindFile(ctx context.Context, fullPath string) (*pb.CloudDriveF
 		}
 	}
 	return file, nil
+}
+
+// InspectContent returns validated path, kind, and size metadata without
+// exposing CloudDrive2 protobuf types to workflow code.
+func (c *Client) InspectContent(ctx context.Context, fullPath string) (Content, error) {
+	fullPath, ok := cleanAbsolutePath(fullPath)
+	if !ok || fullPath == "/" {
+		return Content{}, newError("find_file", ErrorInvalidInput, nil)
+	}
+	file, err := c.FindFile(ctx, fullPath)
+	if err != nil {
+		return Content{}, err
+	}
+	if file.FullPathName != "" {
+		responsePath, valid := cleanAbsolutePath(file.FullPathName)
+		if !valid || responsePath != fullPath {
+			return Content{}, newError("find_file", ErrorInvalidResponse, nil)
+		}
+	}
+	if file.Size < 0 {
+		return Content{}, newError("find_file", ErrorInvalidResponse, nil)
+	}
+	switch {
+	case file.IsDirectory && file.FileType == pb.CloudDriveFile_Directory:
+		return Content{Path: fullPath, Kind: ContentDirectory, Size: file.Size}, nil
+	case !file.IsDirectory && file.FileType == pb.CloudDriveFile_File:
+		return Content{Path: fullPath, Kind: ContentFile, Size: file.Size}, nil
+	default:
+		return Content{Path: fullPath, Kind: ContentOther, Size: file.Size}, nil
+	}
 }
 
 // ListDirectories returns the immediate child directories of fullPath.

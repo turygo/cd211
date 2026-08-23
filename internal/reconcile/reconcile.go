@@ -33,17 +33,15 @@ const leaseCommitMargin = 15 * time.Second
 type Repository interface {
 	ClaimDue(context.Context, string, time.Time, time.Duration) (*store.Claim, error)
 	CommitClaim(context.Context, store.Claim, domain.Download) error
+	ListDownloadFiles(context.Context, string) ([]domain.DownloadFile, error)
 	NextDue(context.Context, time.Time) (*time.Time, error)
 }
 
 // CloudDrive is the narrow remote operation surface used by Scheduler.
-// File-vs-directory metadata is deliberately not looked up here: uploaded
-// torrents persist it at submission time and magnets learn it from the
-// verified local copy, so the workflow never depends on CloudDrive directory
-// metadata to decide the shape of the download.
 type CloudDrive interface {
 	EnsureOffline(context.Context, clouddrive.OfflineSpec) (clouddrive.OfflineTask, error)
 	InspectOffline(context.Context, string, string) (clouddrive.OfflineTask, bool, error)
+	InspectContent(context.Context, string) (clouddrive.Content, error)
 	CancelOffline(context.Context, string, string) error
 	EnsureCopy(context.Context, clouddrive.CopySpec) (clouddrive.CopyTask, error)
 	InspectCopy(context.Context, string, string) (clouddrive.CopyTask, bool, error)
@@ -171,16 +169,46 @@ func (s *Scheduler) Step(ctx context.Context) (claimed bool, err error) {
 
 func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, error) {
 	now := s.clock.Now()
-	// A finished offline task has supplied the safe Name and cloud source
-	// path; the destination reservation no longer depends on file metadata,
-	// because magnet submissions only learn their shape from the verified
-	// local copy.
-	if d.DestinationName == "" && d.CloudSourcePath != "" &&
-		(d.State == domain.StateSubmittingCopy || d.State == domain.StateWaitingCopy || d.State == domain.StateVerifyingLocal) {
-		d.DestinationName = d.Name
-		d.AttemptCount, d.LastError, d.LastErrorCode = 0, "", ""
-		d.NextRunAt = new(now)
-		return "reserve_destination", nil
+	// Copy-source resolution and destination reservation are independent
+	// durable steps. Remote copy is not touched until both have committed.
+	if d.State == domain.StateSubmittingCopy {
+		if s.timedOut(d, now, s.config.CopyTimeout) {
+			s.fail(d, s.deadlineProblem(d))
+			return "resolve_copy_source", nil
+		}
+		if d.CloudResultPath == "" {
+			s.fail(d, domain.ProblemCloudContentLayoutInvalid)
+			return "resolve_copy_source", nil
+		}
+		if d.CopySourcePath == "" {
+			source, err := s.resolveCopySource(ctx, *d)
+			if err != nil {
+				if errors.Is(err, errCloudContentLayout) {
+					s.fail(d, domain.ProblemCloudContentLayoutInvalid)
+					return "resolve_copy_source", nil
+				}
+				var cloudErr *clouddrive.Error
+				if errors.As(err, &cloudErr) {
+					return "inspect_content", s.cloudFailure(d, err, "inspect_content")
+				}
+				return "resolve_copy_source", err
+			}
+			d.CopySourcePath = source
+			d.AttemptCount, d.LastError, d.LastErrorCode = 0, "", ""
+			d.NextRunAt = new(now)
+			return "resolve_copy_source", nil
+		}
+		if d.DestinationName == "" {
+			name := path.Base(path.Clean(d.CopySourcePath))
+			if !safeName(name) {
+				s.fail(d, domain.ProblemCloudContentLayoutInvalid)
+				return "reserve_destination", nil
+			}
+			d.DestinationName = name
+			d.AttemptCount, d.LastError, d.LastErrorCode = 0, "", ""
+			d.NextRunAt = new(now)
+			return "reserve_destination", nil
+		}
 	}
 	switch d.State {
 	case domain.StateAccepted:
@@ -263,7 +291,7 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 			return "ensure_copy", nil
 		}
 		if d.LastUpstreamStatus == domain.UpstreamCopyFailed {
-			if err := s.cloud.CancelCopy(ctx, d.CloudSourcePath, d.SavePath); err != nil {
+			if err := s.cloud.CancelCopy(ctx, d.CopySourcePath, d.SavePath); err != nil {
 				return "retry_cancel_copy", s.cloudFailure(d, err, "cancel_copy")
 			}
 			d.CopyProgress, d.QbitProgress = 0, 0.9
@@ -297,11 +325,11 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 			d.NextRunAt = new(now)
 			return "preflight_local", nil
 		}
-		task, err := s.cloud.EnsureCopy(ctx, clouddrive.CopySpec{SourcePath: d.CloudSourcePath, DestinationPath: d.SavePath})
+		task, err := s.cloud.EnsureCopy(ctx, clouddrive.CopySpec{SourcePath: d.CopySourcePath, DestinationPath: d.SavePath})
 		if err != nil {
 			return "ensure_copy", s.cloudFailure(d, err, "ensure_copy")
 		}
-		if err := validateCopyTask(task, d.CloudSourcePath, d.SavePath); err != nil {
+		if err := validateCopyTask(task, d.CopySourcePath, d.SavePath); err != nil {
 			s.fail(d, domain.ProblemCloudResponseInvalid)
 			return "ensure_copy", nil
 		}
@@ -322,16 +350,19 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 			s.fail(d, s.deadlineProblem(d))
 			return "inspect_copy", nil
 		}
-		task, found, err := s.cloud.InspectCopy(ctx, d.CloudSourcePath, d.SavePath)
+		task, found, err := s.cloud.InspectCopy(ctx, d.CopySourcePath, d.SavePath)
 		if err != nil {
 			return "inspect_copy", s.cloudFailure(d, err, "inspect_copy")
 		}
 		if !found {
-			verifyErr := s.verifyAndRecord(d)
+			verifyErr := s.verifyAndRecord(ctx, d)
 			if verifyErr == nil {
 				recordCopyCompleted(d, now)
 				s.advance(d, domain.StateVerifyingLocal, now, now)
 				return "verify_local", nil
+			}
+			if isManifestRepositoryError(verifyErr) {
+				return "verify_local", verifyErr
 			}
 			if errors.Is(verifyErr, fs.ErrNotExist) {
 				s.poll(d, now)
@@ -340,7 +371,7 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 			s.fail(d, domain.ProblemLocalVerificationFailed)
 			return "verify_local", nil
 		}
-		if err := validateCopyTask(task, d.CloudSourcePath, d.SavePath); err != nil {
+		if err := validateCopyTask(task, d.CopySourcePath, d.SavePath); err != nil {
 			s.fail(d, domain.ProblemCloudResponseInvalid)
 			return "inspect_copy", nil
 		}
@@ -363,7 +394,7 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 			s.fail(d, domain.ProblemLocalVerificationTimeout)
 			return "verify_local", nil
 		}
-		verifyErr := s.verifyAndRecord(d)
+		verifyErr := s.verifyAndRecord(ctx, d)
 		if verifyErr == nil {
 			// CloudDrive2 reports a directory as zero bytes and a magnet carries
 			// no metadata, so the staged tree is what Sonarr and Radarr are told.
@@ -371,6 +402,9 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 			d.State, d.LastError, d.LastErrorCode, d.AttemptCount = domain.StateCompleted, "", "", 0
 			d.CompletedAt, d.NextRunAt = new(now), nil
 			return "verify_local", nil
+		}
+		if isManifestRepositoryError(verifyErr) {
+			return "verify_local", verifyErr
 		}
 		if errors.Is(verifyErr, fs.ErrNotExist) {
 			s.poll(d, now)
@@ -393,8 +427,8 @@ func (s *Scheduler) cancel(ctx context.Context, d *domain.Download, now time.Tim
 	}
 	var err error
 	op := "cancel_offline"
-	if d.CloudSourcePath != "" {
-		op, err = "cancel_copy", s.cloud.CancelCopy(ctx, d.CloudSourcePath, d.SavePath)
+	if d.CopySourcePath != "" {
+		op, err = "cancel_copy", s.cloud.CancelCopy(ctx, d.CopySourcePath, d.SavePath)
 	} else {
 		err = s.cloud.CancelOffline(ctx, d.CloudFolder, d.Hash)
 	}
@@ -411,7 +445,7 @@ func (s *Scheduler) pause(ctx context.Context, d *domain.Download, now time.Time
 		d.State, d.LastError, d.LastErrorCode, d.AttemptCount, d.NextRunAt = domain.StateStopped, "", "", 0, nil
 		return "pause_verified_copy", nil
 	}
-	if d.CloudSourcePath == "" {
+	if d.CopySourcePath == "" {
 		if err := s.cloud.CancelOffline(ctx, d.CloudFolder, d.Hash); err != nil && !notFound(err) {
 			return "pause_offline", s.cleanupFailure(d, err)
 		}
@@ -420,16 +454,19 @@ func (s *Scheduler) pause(ctx context.Context, d *domain.Download, now time.Time
 		d.State, d.LastError, d.LastErrorCode, d.AttemptCount, d.NextRunAt = domain.StateStopped, "", "", 0, nil
 		return "pause_offline", nil
 	}
-	if err := s.cloud.CancelCopy(ctx, d.CloudSourcePath, d.SavePath); err != nil && !notFound(err) {
+	if err := s.cloud.CancelCopy(ctx, d.CopySourcePath, d.SavePath); err != nil && !notFound(err) {
 		return "pause_copy", s.cleanupFailure(d, err)
 	}
-	destinationName := d.DestinationName
-	if destinationName == "" {
-		destinationName = d.Name
-	}
-	if err := s.files.Delete(filepath.Join(d.SavePath, destinationName), d.SavePath); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		s.cleanupProblem(d, domain.ProblemLocalDeleteFailed)
-		return "pause_copy", nil
+	if d.DestinationName == "" {
+		if hasCopyEvidence(d.LastUpstreamStatus) {
+			s.fail(d, domain.ProblemInternalWorkflowError)
+			return "pause_copy", nil
+		}
+	} else {
+		if err := s.files.Delete(filepath.Join(d.SavePath, d.DestinationName), d.SavePath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			s.cleanupProblem(d, domain.ProblemLocalDeleteFailed)
+			return "pause_copy", nil
+		}
 	}
 	d.CopyProgress, d.QbitProgress = 0, 0.9
 	d.LastUpstreamStatus = domain.UpstreamOfflineFinished
@@ -441,8 +478,8 @@ func (s *Scheduler) delete(ctx context.Context, d *domain.Download, now time.Tim
 	if d.CompletedAt == nil && d.ContentPath == "" && !cleanupCompleted(d.LastUpstreamStatus) {
 		var err error
 		op := "cancel_offline"
-		if d.CloudSourcePath != "" {
-			op, err = "cancel_copy", s.cloud.CancelCopy(ctx, d.CloudSourcePath, d.SavePath)
+		if d.CopySourcePath != "" {
+			op, err = "cancel_copy", s.cloud.CancelCopy(ctx, d.CopySourcePath, d.SavePath)
 		} else {
 			err = s.cloud.CancelOffline(ctx, d.CloudFolder, d.Hash)
 		}
@@ -457,7 +494,11 @@ func (s *Scheduler) delete(ctx context.Context, d *domain.Download, now time.Tim
 	if d.DeleteFilesRequested {
 		contentPath := d.ContentPath
 		if contentPath == "" && hasCopyEvidence(d.LastUpstreamStatus) {
-			contentPath = filepath.Join(d.SavePath, d.Name)
+			if d.DestinationName == "" {
+				s.fail(d, domain.ProblemInternalWorkflowError)
+				return "delete_local", nil
+			}
+			contentPath = filepath.Join(d.SavePath, d.DestinationName)
 		}
 		if contentPath != "" {
 			if err := s.files.Delete(contentPath, d.SavePath); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -488,6 +529,110 @@ func markCleanupCancelled(d *domain.Download) {
 	d.LastUpstreamStatus = cleanupCancelled + "|" + d.LastUpstreamStatus
 }
 
+var errCloudContentLayout = errors.New("cloud content layout invalid")
+
+type manifestRepositoryError struct{ err error }
+
+func (e *manifestRepositoryError) Error() string { return e.err.Error() }
+func (e *manifestRepositoryError) Unwrap() error { return e.err }
+
+func isManifestRepositoryError(err error) bool {
+	var target *manifestRepositoryError
+	return errors.As(err, &target)
+}
+
+// errCloudContentLayout is returned only for durable manifest/layout contradictions.
+
+func (s *Scheduler) resolveCopySource(ctx context.Context, d domain.Download) (string, error) {
+	result := path.Clean(d.CloudResultPath)
+	if !safeCloudPath(d.CloudResultPath) || result != d.CloudResultPath {
+		return "", errCloudContentLayout
+	}
+	// Magnets have no manifest and intentionally treat the offline result as
+	// an opaque copy source; local verification observes the copied shape.
+	if d.SourceKind == domain.SourceMagnet || d.IsMultiFile == nil {
+		return result, nil
+	}
+	manifest, err := s.repo.ListDownloadFiles(ctx, d.Hash)
+	if err != nil {
+		return "", &manifestRepositoryError{err: fmt.Errorf("list download manifest: %w", err)}
+	}
+	if err := validateManifest(d, manifest); err != nil {
+		return "", errCloudContentLayout
+	}
+	content, err := s.cloud.InspectContent(ctx, result)
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case d.IsMultiFile == nil:
+		return result, nil
+	case *d.IsMultiFile:
+		if content.Kind != clouddrive.ContentDirectory {
+			return "", errCloudContentLayout
+		}
+		return result, nil
+	case content.Kind == clouddrive.ContentFile:
+		if content.Size != manifest[0].Size {
+			return "", errCloudContentLayout
+		}
+		return result, nil
+	case content.Kind != clouddrive.ContentDirectory:
+		return "", errCloudContentLayout
+	default:
+		relative := filepath.ToSlash(manifest[0].RelativePath)
+		child := path.Join(result, relative)
+		if !cloudDescendant(result, child) {
+			return "", errCloudContentLayout
+		}
+		childContent, childErr := s.cloud.InspectContent(ctx, child)
+		if childErr != nil {
+			return "", childErr
+		}
+		if childContent.Kind != clouddrive.ContentFile || childContent.Size != manifest[0].Size {
+			return "", errCloudContentLayout
+		}
+		return child, nil
+	}
+}
+
+func validateManifest(d domain.Download, files []domain.DownloadFile) error {
+	if d.IsMultiFile == nil {
+		return nil
+	}
+	if *d.IsMultiFile {
+		if len(files) == 0 {
+			return errCloudContentLayout
+		}
+	} else if len(files) != 1 {
+		return errCloudContentLayout
+	}
+	var total int64
+	seen := make(map[string]struct{}, len(files))
+	for index, file := range files {
+		if file.DownloadHash != d.Hash || file.Index != int64(index) || file.Size < 0 || file.RelativePath == "" ||
+			filepath.IsAbs(file.RelativePath) || filepath.Clean(file.RelativePath) != file.RelativePath ||
+			file.RelativePath == "." || file.RelativePath == ".." ||
+			strings.HasPrefix(file.RelativePath, ".."+string(filepath.Separator)) ||
+			strings.ContainsAny(file.RelativePath, "\\\x00") || !utf8.ValidString(file.RelativePath) ||
+			strings.ContainsFunc(file.RelativePath, unicode.IsControl) {
+			return errCloudContentLayout
+		}
+		if _, exists := seen[file.RelativePath]; exists {
+			return errCloudContentLayout
+		}
+		seen[file.RelativePath] = struct{}{}
+		if total > math.MaxInt64-file.Size {
+			return errCloudContentLayout
+		}
+		total += file.Size
+	}
+	if total != d.TotalSize {
+		return errCloudContentLayout
+	}
+	return nil
+}
+
 func hasCopyEvidence(status string) bool {
 	status = strings.TrimPrefix(status, cleanupCancelled+"|")
 	switch status {
@@ -506,10 +651,10 @@ func hasCopyEvidence(status string) bool {
 // verifyAndRecord checks the staged candidate and records the verified
 // metadata. A magnet without file metadata is verified by type so the staged
 // tree decides file-vs-directory, size, and content path; uploaded torrents
-// keep the strict expected verification.
-func (s *Scheduler) verifyAndRecord(d *domain.Download) error {
-	if d.IsMultiFile == nil {
-		content, err := s.files.VerifyUnknownType(d.SavePath, d.Name)
+// use their durable manifest.
+func (s *Scheduler) verifyAndRecord(ctx context.Context, d *domain.Download) error {
+	if d.SourceKind == domain.SourceMagnet || d.IsMultiFile == nil {
+		content, err := s.files.VerifyUnknownType(d.SavePath, d.DestinationName)
 		if err != nil {
 			return err
 		}
@@ -518,7 +663,18 @@ func (s *Scheduler) verifyAndRecord(d *domain.Download) error {
 		d.ContentPath, d.TotalSize = content.Path, content.Size
 		return nil
 	}
-	content, err := s.files.Verify(d.SavePath, expected(*d))
+	files, err := s.repo.ListDownloadFiles(ctx, d.Hash)
+	if err != nil {
+		return &manifestRepositoryError{err: fmt.Errorf("list download manifest: %w", err)}
+	}
+	if err := validateManifest(*d, files); err != nil {
+		return err
+	}
+	expected := fsafe.ExpectedContent{CandidateName: d.DestinationName, MultiFile: *d.IsMultiFile, Files: make([]fsafe.ExpectedFile, 0, len(files))}
+	for _, file := range files {
+		expected.Files = append(expected.Files, fsafe.ExpectedFile{RelativePath: file.RelativePath, Size: file.Size})
+	}
+	content, err := s.files.Verify(d.SavePath, expected)
 	if err != nil {
 		return err
 	}
@@ -527,7 +683,7 @@ func (s *Scheduler) verifyAndRecord(d *domain.Download) error {
 }
 
 func expected(d domain.Download) fsafe.ExpectedContent {
-	return fsafe.ExpectedContent{Name: d.Name, MultiFile: *d.IsMultiFile}
+	return fsafe.ExpectedContent{CandidateName: d.DestinationName, MultiFile: *d.IsMultiFile}
 }
 
 // preflightDestination verifies the reserved destination is clear before copy
@@ -535,7 +691,7 @@ func expected(d domain.Download) fsafe.ExpectedContent {
 // absent; magnets carry no metadata, so any safe existing regular file or
 // directory at the destination is a collision regardless of type.
 func (s *Scheduler) preflightDestination(d *domain.Download) domain.ProblemCode {
-	if d.IsMultiFile != nil {
+	if d.SourceKind == domain.SourceTorrent && d.IsMultiFile != nil {
 		if _, err := s.files.Verify(d.SavePath, expected(*d)); err == nil {
 			return domain.ProblemDestinationCollision
 		} else if !errors.Is(err, fs.ErrNotExist) {
@@ -543,7 +699,7 @@ func (s *Scheduler) preflightDestination(d *domain.Download) domain.ProblemCode 
 		}
 		return ""
 	}
-	if _, err := s.files.VerifyUnknownType(d.SavePath, d.Name); err == nil {
+	if _, err := s.files.VerifyUnknownType(d.SavePath, d.DestinationName); err == nil {
 		return domain.ProblemDestinationCollision
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return domain.ProblemLocalVerificationFailed
@@ -636,12 +792,12 @@ func (s *Scheduler) cloudProblem(err error, operation string) domain.ProblemCode
 	case clouddrive.ErrorUnauthorized:
 		return domain.ProblemCloudAuthenticationRequired
 	case clouddrive.ErrorNotFound:
-		if operation == "ensure_copy" || operation == "inspect_copy" {
+		if operation == "ensure_copy" || operation == "inspect_copy" || operation == "inspect_content" {
 			return domain.ProblemCloudCopyNotReady
 		}
 		return domain.ProblemCloudFolderUnavailable
 	case clouddrive.ErrorRejected:
-		if operation == "ensure_copy" || operation == "inspect_copy" {
+		if operation == "ensure_copy" || operation == "inspect_copy" || operation == "inspect_content" {
 			return domain.ProblemCloudCopyNotReady
 		}
 		// The workflow operation is not enough: EnsureOffline performs the
@@ -677,7 +833,7 @@ func (s *Scheduler) retryObservation(err error, operation string) bool {
 	case clouddrive.ErrorTemporary, clouddrive.ErrorUnauthorized:
 		return true
 	case clouddrive.ErrorNotFound, clouddrive.ErrorRejected:
-		return operation == "ensure_copy" || operation == "inspect_copy"
+		return operation == "ensure_copy" || operation == "inspect_copy" || operation == "inspect_content"
 	default:
 		return false
 	}
@@ -736,9 +892,12 @@ func (s *Scheduler) recordOffline(d *domain.Download, task clouddrive.OfflineTas
 	d.OfflineProgress, d.QbitProgress = task.Progress, offlineProgress(task.Progress)
 	d.LastUpstreamStatus = "offline:" + string(task.State)
 	if task.State == clouddrive.OfflineFinished {
-		d.CloudTaskName, d.Name, d.CloudSourcePath = task.Name, task.Name, task.SourcePath
+		d.CloudTaskName, d.CloudResultPath = task.Name, task.SourcePath
+		if d.SourceKind == domain.SourceMagnet {
+			d.Name = task.Name
+		}
 	}
-	if d.TotalSize == 0 && task.Size > 0 {
+	if d.SourceKind == domain.SourceMagnet && d.TotalSize == 0 && task.Size > 0 {
 		d.TotalSize = task.Size
 	}
 }
@@ -770,7 +929,7 @@ func cloudDescendant(folder, source string) bool {
 }
 
 func safeCloudPath(value string) bool {
-	return path.IsAbs(value) && utf8.ValidString(value) && !strings.ContainsAny(value, "\\\x00") && !strings.ContainsFunc(value, unicode.IsControl)
+	return path.IsAbs(value) && path.Clean(value) == value && utf8.ValidString(value) && !strings.ContainsAny(value, "\\\x00") && !strings.ContainsFunc(value, unicode.IsControl)
 }
 
 func safeName(value string) bool {

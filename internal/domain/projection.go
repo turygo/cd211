@@ -57,11 +57,14 @@ func ValidateDownload(download Download) error {
 	if !absolutePath(download.SavePath) {
 		return errors.New("save path must be an absolute path")
 	}
-	if download.DestinationName != "" && (!safeComponent(download.DestinationName) || download.DestinationName != download.Name) {
+	if download.DestinationName != "" && !safeComponent(download.DestinationName) {
 		return errors.New("destination name is invalid")
 	}
-	if download.CloudSourcePath != "" && !absolutePath(download.CloudSourcePath) {
-		return errors.New("cloud source path must be an absolute path")
+	if download.CloudResultPath != "" && !absolutePath(download.CloudResultPath) {
+		return errors.New("cloud result path must be an absolute path")
+	}
+	if download.CopySourcePath != "" && !absolutePath(download.CopySourcePath) {
+		return errors.New("copy source path must be an absolute path")
 	}
 	if download.ContentPath != "" && !absolutePath(download.ContentPath) {
 		return errors.New("content path must be an absolute path")
@@ -103,10 +106,13 @@ func ValidateDownload(download Download) error {
 		return errors.New("phase started at is required")
 	}
 	if (download.LeaseOwner == "") != (download.LeaseUntil == nil) {
-		return errors.New("lease owner and lease until must be paired")
+		return errors.New("lease owner and expiry must be paired")
 	}
-	if requiresCloudSource(download.State) && download.CloudSourcePath == "" {
-		return errors.New("cloud source path is required for state")
+	if requiresCloudResult(download.State) && download.CloudResultPath == "" {
+		return errors.New("cloud result path is required for state")
+	}
+	if requiresCopySource(download.State) && download.CopySourcePath == "" {
+		return errors.New("copy source path is required for state")
 	}
 	if download.State == StateCompleted {
 		if download.ContentPath == "" {
@@ -242,9 +248,18 @@ func progress(value float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0 && value <= 1
 }
 
-func requiresCloudSource(state State) bool {
+func requiresCloudResult(state State) bool {
 	switch state {
 	case StateSubmittingCopy, StateWaitingCopy, StateVerifyingLocal, StateCompleted:
+		return true
+	default:
+		return false
+	}
+}
+
+func requiresCopySource(state State) bool {
+	switch state {
+	case StateWaitingCopy, StateVerifyingLocal, StateCompleted:
 		return true
 	default:
 		return false

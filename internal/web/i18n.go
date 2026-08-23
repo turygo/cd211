@@ -112,9 +112,10 @@ type Strings struct {
 	SectionActions     string
 	SectionFiles       string
 	CloudFolder        string
-	CloudSource        string
-	SavePathLabel      string
+	CloudResult        string
+	CopySource         string
 	LocalContent       string
+	SavePathLabel      string
 	CategoryLabel      string
 	FrozenNote         string
 	ProgressLabel      string
@@ -494,9 +495,10 @@ var stringsEN = Strings{
 	SectionActions:     "Actions",
 	SectionFiles:       "Files",
 	CloudFolder:        "115 category folder",
-	CloudSource:        "115 download result",
-	SavePathLabel:      "Shared staging folder",
+	CloudResult:        "115 offline result",
+	CopySource:         "115 copy source",
 	LocalContent:       "Verified content path",
+	SavePathLabel:      "Shared staging folder",
 	CategoryLabel:      "Category",
 	FrozenNote:         "These paths were frozen when the download was accepted. Later root or category changes do not move existing data.",
 	ProgressLabel:      "Progress",
@@ -573,6 +575,7 @@ var stringsEN = Strings{
 		domain.ProblemCloudAuthenticationRequired: "CloudDrive2 requires authentication.",
 		domain.ProblemCloudAuthenticationTimeout:  "CloudDrive2 kept rejecting the credentials until the copy deadline. Check the CloudDrive2 login credentials, then Retry.",
 		domain.ProblemCloudCopyNotReady:           "The 115 offline download finished, but CloudDrive2 has not accepted the copy yet. If this persists, refresh the 115 mount and verify the cloud category and NAS staging paths.",
+		domain.ProblemCloudContentLayoutInvalid:   "The 115 offline result does not match the torrent file layout.",
 		domain.ProblemCloudCopyNotReadyTimeout:    "CloudDrive2 did not accept the copy before the deadline. Refresh the 115 mount and verify the cloud category and NAS staging paths, then Retry.",
 		domain.ProblemCloudFolderUnavailable:      "The 115 category folder is unavailable. Check the cloud root and category configuration, then Retry.",
 		domain.ProblemCloudRequestRejected:        "CloudDrive2 rejected the request. Check the configuration, then Retry.",
@@ -882,9 +885,10 @@ var stringsZH = Strings{
 	SectionChronology:  "时间线",
 	SectionActions:     "操作",
 	CloudFolder:        "115 分类目录",
-	CloudSource:        "115 下载结果",
-	SavePathLabel:      "共享暂存目录",
+	CloudResult:        "115 离线结果",
+	CopySource:         "115 复制源",
 	LocalContent:       "已校验内容路径",
+	SavePathLabel:      "共享暂存目录",
 	CategoryLabel:      "分类",
 	FrozenNote:         "任务提交后，这些路径不会再变；之后修改根目录或分类也不会移动已有数据。",
 	ProgressLabel:      "进度",
@@ -961,7 +965,8 @@ var stringsZH = Strings{
 		domain.ProblemCloudAuthenticationRequired: "CloudDrive2 拒绝了登录请求。",
 		domain.ProblemCloudAuthenticationTimeout:  "复制任务已超时，CloudDrive2 始终拒绝登录请求。请检查 CloudDrive2 的用户名和密码，然后重试。",
 		domain.ProblemCloudCopyNotReady:           "115 离线下载已完成，但 CloudDrive2 尚未接受复制任务。若该状态持续，请刷新 115 挂载，并确认 115 分类目录和共享暂存目录配置正确。",
-		domain.ProblemCloudCopyNotReadyTimeout:    "等待 CloudDrive2 接受复制任务已超时。请刷新 115 挂载，并确认 115 分类目录和共享暂存目录配置正确，然后重试。",
+		domain.ProblemCloudContentLayoutInvalid:   "115 离线下载结果与种子文件结构不一致。",
+		domain.ProblemCloudCopyNotReadyTimeout:    "等待 CloudDrive2 接受复制任务已超时。请刷新 115 挂载，并确认 115 分类目录和共享暂存目录配置正确。",
 		domain.ProblemCloudFolderUnavailable:      "115 分类目录不可用。请检查 115 离线下载根目录和分类配置，然后重试。",
 		domain.ProblemCloudRequestRejected:        "CloudDrive2 拒绝了请求。请检查配置，然后重试。",
 		domain.ProblemCloudResponseInvalid:        "CloudDrive2 返回的响应无效。请重试。",

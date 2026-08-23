@@ -26,7 +26,7 @@ WHERE hash = (
     ORDER BY candidate.next_run_at ASC, candidate.created_at ASC, candidate.hash ASC
     LIMIT 1
 )
-RETURNING hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_source_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version, pause_requested, last_error_code, offline_started_at, copy_completed_at
+RETURNING hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_result_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version, pause_requested, last_error_code, offline_started_at, copy_completed_at, copy_source_path
 `
 
 type ClaimDueParams struct {
@@ -48,7 +48,7 @@ func (q *Queries) ClaimDue(ctx context.Context, arg ClaimDueParams) (Download, e
 		&i.SavePath,
 		&i.DestinationName,
 		&i.CloudTaskName,
-		&i.CloudSourcePath,
+		&i.CloudResultPath,
 		&i.ContentPath,
 		&i.IsMultiFile,
 		&i.TotalSize,
@@ -73,6 +73,7 @@ func (q *Queries) ClaimDue(ctx context.Context, arg ClaimDueParams) (Download, e
 		&i.LastErrorCode,
 		&i.OfflineStartedAt,
 		&i.CopyCompletedAt,
+		&i.CopySourcePath,
 	)
 	return i, err
 }
@@ -83,41 +84,43 @@ SET
     name = ?1,
     destination_name = ?2,
     cloud_task_name = ?3,
-    cloud_source_path = ?4,
-    content_path = ?5,
-    is_multi_file = ?6,
-    total_size = ?7,
-    state = ?8,
-    offline_progress = ?9,
-    copy_progress = ?10,
-    qbit_progress = ?11,
-    last_upstream_status = ?12,
-    last_error = ?13,
-    last_error_code = ?14,
-    phase_started_at = ?15,
-    offline_started_at = ?16,
-    copy_completed_at = ?17,
-    next_run_at = ?18,
-    attempt_count = ?19,
-    delete_files_requested = ?20,
-    pause_requested = ?21,
-    updated_at = ?22,
-    completed_at = ?23,
-    removed_at = ?24,
+    cloud_result_path = ?4,
+    copy_source_path = ?5,
+    content_path = ?6,
+    is_multi_file = ?7,
+    total_size = ?8,
+    state = ?9,
+    offline_progress = ?10,
+    copy_progress = ?11,
+    qbit_progress = ?12,
+    last_upstream_status = ?13,
+    last_error = ?14,
+    last_error_code = ?15,
+    phase_started_at = ?16,
+    offline_started_at = ?17,
+    copy_completed_at = ?18,
+    next_run_at = ?19,
+    attempt_count = ?20,
+    delete_files_requested = ?21,
+    pause_requested = ?22,
+    updated_at = ?23,
+    completed_at = ?24,
+    removed_at = ?25,
     lease_until = NULL,
     lease_owner = NULL,
     row_version = row_version + 1
-WHERE hash = ?25
-  AND state = ?26
-  AND lease_owner = ?27
-  AND row_version = ?28
+WHERE hash = ?26
+  AND state = ?27
+  AND lease_owner = ?28
+  AND row_version = ?29
 `
 
 type CommitClaimParams struct {
 	Name                 string         `json:"name"`
 	DestinationName      sql.NullString `json:"destination_name"`
 	CloudTaskName        sql.NullString `json:"cloud_task_name"`
-	CloudSourcePath      sql.NullString `json:"cloud_source_path"`
+	CloudResultPath      sql.NullString `json:"cloud_result_path"`
+	CopySourcePath       sql.NullString `json:"copy_source_path"`
 	ContentPath          sql.NullString `json:"content_path"`
 	IsMultiFile          sql.NullInt64  `json:"is_multi_file"`
 	TotalSize            int64          `json:"total_size"`
@@ -149,7 +152,8 @@ func (q *Queries) CommitClaim(ctx context.Context, arg CommitClaimParams) (int64
 		arg.Name,
 		arg.DestinationName,
 		arg.CloudTaskName,
-		arg.CloudSourcePath,
+		arg.CloudResultPath,
+		arg.CopySourcePath,
 		arg.ContentPath,
 		arg.IsMultiFile,
 		arg.TotalSize,

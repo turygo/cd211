@@ -301,9 +301,11 @@ func advanceToCompleted(t *testing.T, repository *store.Store, now time.Time, ha
 		next.NextRunAt = &now
 		switch state {
 		case domain.StateSubmittingCopy, domain.StateWaitingCopy, domain.StateVerifyingLocal:
-			next.CloudSourcePath = "/cloud/Model"
+			next.CloudResultPath = "/cloud/Model"
+			next.CopySourcePath = "/cloud/Model"
 		case domain.StateCompleted:
-			next.CloudSourcePath = "/cloud/Model"
+			next.CloudResultPath = "/cloud/Model"
+			next.CopySourcePath = "/cloud/Model"
 			next.NextRunAt = nil
 			next.ContentPath = "/local/Model"
 			completedAt := now
@@ -405,7 +407,8 @@ func TestNativeErrorCodeAndNextRetryFields(t *testing.T) {
 		next.PhaseStartedAt = now
 		next.NextRunAt = &now
 		if state == domain.StateSubmittingCopy {
-			next.CloudSourcePath = "/cloud/Retrying"
+			next.CloudResultPath = "/cloud/Retrying"
+			next.CopySourcePath = "/cloud/Retrying"
 		}
 		if err := harness.repository.CommitClaim(context.Background(), *claim, next); err != nil {
 			t.Fatalf("CommitClaim(%s): %v", state, err)
@@ -496,9 +499,11 @@ func TestNativeRevivedDeletedAndRetainedContent(t *testing.T) {
 	deleted.NextRunAt = nil
 	deleted.UpdatedAt = now.Add(time.Minute)
 	multiFile := false
-	deleted.IsMultiFile = &multiFile
+	deleted.DestinationName = "Retained"
 	deleted.ContentPath = "/local/movies/Retained"
-	deleted.CloudSourcePath = "/cloud/movies/Retained"
+	deleted.IsMultiFile = &multiFile
+	deleted.CloudResultPath = "/cloud/movies/Retained"
+	deleted.CopySourcePath = "/cloud/movies/Retained"
 	if err := harness.repository.CommitClaim(context.Background(), *claim, deleted); err != nil {
 		t.Fatal(err)
 	}
@@ -525,7 +530,7 @@ func TestNativeRevivedDeletedAndRetainedContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if stored.State != domain.StateVerifyingLocal || stored.ContentPath != "/local/movies/Retained" ||
-		stored.CloudSourcePath != "/cloud/movies/Retained" || stored.TotalSize != 42 ||
+		stored.CloudResultPath != "/cloud/movies/Retained" || stored.CopySourcePath != "/cloud/movies/Retained" || stored.TotalSize != 42 ||
 		stored.LastUpstreamStatus != domain.UpstreamRetainedContent {
 		t.Fatalf("revived download lost retained evidence: %+v", stored)
 	}

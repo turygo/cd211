@@ -47,7 +47,8 @@ type Download struct {
 	SavePath             string
 	DestinationName      string
 	CloudTaskName        string
-	CloudSourcePath      string
+	CloudResultPath      string
+	CopySourcePath       string
 	ContentPath          string
 	IsMultiFile          *bool
 	TotalSize            int64

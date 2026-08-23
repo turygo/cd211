@@ -79,7 +79,8 @@ func SanitizeDownloadError(download Download) string {
 	for _, path := range []string{
 		download.CloudFolder,
 		download.SavePath,
-		download.CloudSourcePath,
+		download.CloudResultPath,
+		download.CopySourcePath,
 		download.ContentPath,
 	} {
 		if path = strings.TrimSpace(path); path != "" && strings.Contains(trimmed, path) {

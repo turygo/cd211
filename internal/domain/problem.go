@@ -36,11 +36,13 @@ const (
 	// ProblemCloudRequestRejected reports that CloudDrive2 refused a request
 	// without implying absence or retryability.
 	ProblemCloudRequestRejected ProblemCode = "cloud_request_rejected"
+	// ProblemCloudContentLayoutInvalid reports a durable contradiction between
+	// the torrent manifest and the completed 115 object layout.
+	ProblemCloudContentLayoutInvalid ProblemCode = "cloud_content_layout_invalid"
 	// ProblemCloudResponseInvalid reports a malformed, nil, or inconsistent
 	// CloudDrive2 reply.
 	ProblemCloudResponseInvalid ProblemCode = "cloud_response_invalid"
-	// ProblemOfflineSubmissionRejected reports that 115 rejected the offline
-	// download submission.
+	// ProblemOfflineSubmissionRejected reports that 115 rejected an offline submission.
 	ProblemOfflineSubmissionRejected ProblemCode = "offline_submission_rejected"
 	// ProblemOfflineDownloadFailed reports that the 115 offline task itself
 	// reached an error state.
@@ -89,6 +91,7 @@ func (code ProblemCode) Valid() bool {
 		ProblemCloudCopyNotReady,
 		ProblemCloudCopyNotReadyTimeout,
 		ProblemCloudFolderUnavailable,
+		ProblemCloudContentLayoutInvalid,
 		ProblemCloudRequestRejected,
 		ProblemCloudResponseInvalid,
 		ProblemOfflineSubmissionRejected,
@@ -127,6 +130,8 @@ func ProblemText(code ProblemCode) string {
 		return "CloudDrive2 kept rejecting the credentials until the copy deadline. Check the CloudDrive2 login credentials, then Retry."
 	case ProblemCloudCopyNotReady:
 		return "The 115 offline download finished, but CloudDrive2 has not accepted the copy yet. If this persists, refresh the 115 mount and verify the cloud category and NAS staging paths."
+	case ProblemCloudContentLayoutInvalid:
+		return "The 115 offline result does not match the torrent file layout."
 	case ProblemCloudCopyNotReadyTimeout:
 		return "CloudDrive2 did not accept the copy before the deadline. Refresh the 115 mount and verify the cloud category and NAS staging paths, then Retry."
 	case ProblemCloudFolderUnavailable:

@@ -8,9 +8,12 @@ section using the release version and date.
 
 ## [Unreleased]
 
+## [0.3.14] - 2026-08-23
+
 ### Fixed
 
 - 修复中文下载列表相对时间单位显示为英文缩写的问题，并新增排除队列等待时间的 115 到 NAS 总耗时展示。
+- Fixed torrent cloud-copy resolution so directory-wrapped single-file offline results select the declared inner file, preserve immutable torrent manifests, and verify uploaded files against their stored layout before completion.
 
 ## [0.3.13] - 2026-08-22
 

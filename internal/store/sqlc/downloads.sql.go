@@ -56,7 +56,7 @@ func (q *Queries) DeleteDownloadFiles(ctx context.Context, downloadHash string) 
 }
 
 const getDownload = `-- name: GetDownload :one
-SELECT hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_source_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version, pause_requested, last_error_code, offline_started_at, copy_completed_at
+SELECT hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_result_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version, pause_requested, last_error_code, offline_started_at, copy_completed_at, copy_source_path
 FROM downloads
 WHERE hash = ?1
 `
@@ -74,7 +74,7 @@ func (q *Queries) GetDownload(ctx context.Context, hash string) (Download, error
 		&i.SavePath,
 		&i.DestinationName,
 		&i.CloudTaskName,
-		&i.CloudSourcePath,
+		&i.CloudResultPath,
 		&i.ContentPath,
 		&i.IsMultiFile,
 		&i.TotalSize,
@@ -99,6 +99,7 @@ func (q *Queries) GetDownload(ctx context.Context, hash string) (Download, error
 		&i.LastErrorCode,
 		&i.OfflineStartedAt,
 		&i.CopyCompletedAt,
+		&i.CopySourcePath,
 	)
 	return i, err
 }
@@ -114,7 +115,8 @@ INSERT INTO downloads (
     save_path,
     destination_name,
     cloud_task_name,
-    cloud_source_path,
+    cloud_result_path,
+    copy_source_path,
     content_path,
     is_multi_file,
     total_size,
@@ -171,7 +173,8 @@ INSERT INTO downloads (
     ?30,
     ?31,
     ?32,
-    ?33
+    ?33,
+    ?34
 )
 `
 
@@ -185,7 +188,8 @@ type InsertDownloadParams struct {
 	SavePath             string         `json:"save_path"`
 	DestinationName      sql.NullString `json:"destination_name"`
 	CloudTaskName        sql.NullString `json:"cloud_task_name"`
-	CloudSourcePath      sql.NullString `json:"cloud_source_path"`
+	CloudResultPath      sql.NullString `json:"cloud_result_path"`
+	CopySourcePath       sql.NullString `json:"copy_source_path"`
 	ContentPath          sql.NullString `json:"content_path"`
 	IsMultiFile          sql.NullInt64  `json:"is_multi_file"`
 	TotalSize            int64          `json:"total_size"`
@@ -222,7 +226,8 @@ func (q *Queries) InsertDownload(ctx context.Context, arg InsertDownloadParams) 
 		arg.SavePath,
 		arg.DestinationName,
 		arg.CloudTaskName,
-		arg.CloudSourcePath,
+		arg.CloudResultPath,
+		arg.CopySourcePath,
 		arg.ContentPath,
 		arg.IsMultiFile,
 		arg.TotalSize,
@@ -282,7 +287,7 @@ func (q *Queries) InsertDownloadFile(ctx context.Context, arg InsertDownloadFile
 }
 
 const listAllVisibleDownloads = `-- name: ListAllVisibleDownloads :many
-SELECT hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_source_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version, pause_requested, last_error_code, offline_started_at, copy_completed_at
+SELECT hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_result_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version, pause_requested, last_error_code, offline_started_at, copy_completed_at, copy_source_path
 FROM downloads
 WHERE removed_at IS NULL OR (state = 'DELETE_REQUESTED' AND last_error IS NOT NULL)
 ORDER BY created_at DESC, hash ASC
@@ -307,7 +312,7 @@ func (q *Queries) ListAllVisibleDownloads(ctx context.Context) ([]Download, erro
 			&i.SavePath,
 			&i.DestinationName,
 			&i.CloudTaskName,
-			&i.CloudSourcePath,
+			&i.CloudResultPath,
 			&i.ContentPath,
 			&i.IsMultiFile,
 			&i.TotalSize,
@@ -332,6 +337,7 @@ func (q *Queries) ListAllVisibleDownloads(ctx context.Context) ([]Download, erro
 			&i.LastErrorCode,
 			&i.OfflineStartedAt,
 			&i.CopyCompletedAt,
+			&i.CopySourcePath,
 		); err != nil {
 			return nil, err
 		}
@@ -382,7 +388,7 @@ func (q *Queries) ListDownloadFiles(ctx context.Context, downloadHash string) ([
 }
 
 const listVisibleDownloads = `-- name: ListVisibleDownloads :many
-SELECT hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_source_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version, pause_requested, last_error_code, offline_started_at, copy_completed_at
+SELECT hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_result_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version, pause_requested, last_error_code, offline_started_at, copy_completed_at, copy_source_path
 FROM downloads
 WHERE category = ?1
   AND (removed_at IS NULL OR (state = 'DELETE_REQUESTED' AND last_error IS NOT NULL))
@@ -408,7 +414,7 @@ func (q *Queries) ListVisibleDownloads(ctx context.Context, category string) ([]
 			&i.SavePath,
 			&i.DestinationName,
 			&i.CloudTaskName,
-			&i.CloudSourcePath,
+			&i.CloudResultPath,
 			&i.ContentPath,
 			&i.IsMultiFile,
 			&i.TotalSize,
@@ -433,6 +439,7 @@ func (q *Queries) ListVisibleDownloads(ctx context.Context, category string) ([]
 			&i.LastErrorCode,
 			&i.OfflineStartedAt,
 			&i.CopyCompletedAt,
+			&i.CopySourcePath,
 		); err != nil {
 			return nil, err
 		}
@@ -615,32 +622,33 @@ SET
     save_path = ?6,
     destination_name = ?7,
     cloud_task_name = ?8,
-    cloud_source_path = ?9,
-    content_path = ?10,
-    is_multi_file = ?11,
-    total_size = ?12,
-    state = ?13,
-    offline_progress = ?14,
-    copy_progress = ?15,
-    qbit_progress = ?16,
-    last_upstream_status = ?17,
+    cloud_result_path = ?9,
+    copy_source_path = ?10,
+    content_path = ?11,
+    is_multi_file = ?12,
+    total_size = ?13,
+    state = ?14,
+    offline_progress = ?15,
+    copy_progress = ?16,
+    qbit_progress = ?17,
+    last_upstream_status = ?18,
     last_error = NULL,
     last_error_code = NULL,
-    phase_started_at = ?18,
-    offline_started_at = ?19,
-    copy_completed_at = ?20,
-    next_run_at = ?21,
+    phase_started_at = ?19,
+    offline_started_at = ?20,
+    copy_completed_at = ?21,
+    next_run_at = ?22,
     lease_until = NULL,
     lease_owner = NULL,
     attempt_count = 0,
     delete_files_requested = 0,
     pause_requested = 0,
-    created_at = ?22,
-    updated_at = ?23,
+    created_at = ?23,
+    updated_at = ?24,
     completed_at = NULL,
     removed_at = NULL,
     row_version = row_version + 1
-WHERE hash = ?24
+WHERE hash = ?25
   AND state = 'DELETED'
 `
 
@@ -653,7 +661,8 @@ type ReviveDownloadParams struct {
 	SavePath           string         `json:"save_path"`
 	DestinationName    sql.NullString `json:"destination_name"`
 	CloudTaskName      sql.NullString `json:"cloud_task_name"`
-	CloudSourcePath    sql.NullString `json:"cloud_source_path"`
+	CloudResultPath    sql.NullString `json:"cloud_result_path"`
+	CopySourcePath     sql.NullString `json:"copy_source_path"`
 	ContentPath        sql.NullString `json:"content_path"`
 	IsMultiFile        sql.NullInt64  `json:"is_multi_file"`
 	TotalSize          int64          `json:"total_size"`
@@ -681,7 +690,8 @@ func (q *Queries) ReviveDownload(ctx context.Context, arg ReviveDownloadParams) 
 		arg.SavePath,
 		arg.DestinationName,
 		arg.CloudTaskName,
-		arg.CloudSourcePath,
+		arg.CloudResultPath,
+		arg.CopySourcePath,
 		arg.ContentPath,
 		arg.IsMultiFile,
 		arg.TotalSize,
@@ -728,10 +738,10 @@ const startDownload = `-- name: StartDownload :execrows
 UPDATE downloads
 SET
     state = CASE
-        WHEN cloud_source_path IS NOT NULL
+        WHEN cloud_result_path IS NOT NULL
              AND (content_path IS NOT NULL OR last_upstream_status IN ('copy:COMPLETED', 'revive:retained_content'))
         THEN 'VERIFYING_LOCAL'
-        WHEN cloud_source_path IS NOT NULL
+        WHEN cloud_result_path IS NOT NULL
         THEN 'SUBMITTING_COPY'
         ELSE 'ACCEPTED'
     END,

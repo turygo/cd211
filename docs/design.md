@@ -799,7 +799,8 @@ cloud_folder               text not null        -- frozen at add time
 save_path                  text not null        -- frozen at add time
 destination_name           text                 -- durable live staging reservation
 cloud_task_name            text
-cloud_source_path          text
+cloud_result_path          text                 -- original completed offline result root
+copy_source_path           text                 -- exact object submitted to remote copy
 content_path               text
 is_multi_file              integer
 total_size                 integer

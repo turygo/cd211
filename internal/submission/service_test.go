@@ -24,12 +24,14 @@ type serviceWaker struct{ wakes int }
 func (w *serviceWaker) Wake() { w.wakes++ }
 
 type serviceFilesystem struct {
-	content string
-	size    int64
-	err     error
+	content  string
+	size     int64
+	err      error
+	expected fsafe.ExpectedContent
 }
 
-func (f *serviceFilesystem) Verify(string, fsafe.ExpectedContent) (fsafe.VerifiedContent, error) {
+func (f *serviceFilesystem) Verify(_ string, expected fsafe.ExpectedContent) (fsafe.VerifiedContent, error) {
+	f.expected = expected
 	return fsafe.VerifiedContent{Path: f.content, Size: f.size}, f.err
 }
 
@@ -191,6 +193,51 @@ func TestSubmitTorrentPersistsFiles(t *testing.T) {
 		t.Fatalf("wakes = %d, want 1", harness.waker.wakes)
 	}
 }
+func TestSubmitTorrentRevivalPreservesManifestMetadata(t *testing.T) {
+	t.Parallel()
+	harness := newServiceHarness(t)
+	now := harness.clock.now
+	torrent := []byte("d4:infod6:lengthi3e4:name4:demo12:piece lengthi16384e6:pieces20:01234567890123456789ee")
+	created, inserted, err := harness.service.SubmitTorrent(context.Background(), torrent, "", false)
+	if err != nil || !inserted {
+		t.Fatalf("initial SubmitTorrent() = (%+v, %t, %v)", created, inserted, err)
+	}
+	if err := harness.repository.RequestDelete(context.Background(), []string{created.Hash}, false, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := harness.repository.ClaimDue(context.Background(), "torrent-revive", now.Add(time.Minute), time.Minute)
+	if err != nil || claim == nil {
+		t.Fatalf("ClaimDue() = (%+v, %v)", claim, err)
+	}
+	deleted := claim.Download
+	deleted.State = domain.StateDeleted
+	deleted.NextRunAt = nil
+	deleted.ContentPath = "/local/demo"
+	deleted.CloudResultPath = "/cloud/demo"
+	deleted.CopySourcePath = "/cloud/demo"
+	deleted.UpdatedAt = now.Add(time.Minute)
+	if err := harness.repository.CommitClaim(context.Background(), *claim, deleted); err != nil {
+		t.Fatal(err)
+	}
+
+	harness.filesystem.content = "/local/demo"
+	harness.filesystem.size = 99
+	harness.filesystem.err = nil
+	revived, inserted, err := harness.service.SubmitTorrent(context.Background(), torrent, "", false)
+	if err != nil || !inserted {
+		t.Fatalf("revive SubmitTorrent() = (%+v, %t, %v)", revived, inserted, err)
+	}
+	if revived.Name != created.Name || revived.TotalSize != created.TotalSize || revived.State != domain.StateVerifyingLocal ||
+		revived.DestinationName != "demo" {
+		t.Fatalf("revived torrent metadata = %+v, want immutable parsed metadata and retained reservation", revived)
+	}
+	if harness.filesystem.expected.CandidateName != "demo" ||
+		len(harness.filesystem.expected.Files) != 1 ||
+		harness.filesystem.expected.Files[0].RelativePath != "demo" ||
+		harness.filesystem.expected.Files[0].Size != 3 {
+		t.Fatalf("revival verification manifest = %+v", harness.filesystem.expected)
+	}
+}
 
 func TestSubmitRevivesRetainedContent(t *testing.T) {
 	t.Parallel()
@@ -218,7 +265,8 @@ func TestSubmitRevivesRetainedContent(t *testing.T) {
 	multiFile := false
 	deleted.IsMultiFile = &multiFile
 	deleted.ContentPath = "/local/movies/Retained"
-	deleted.CloudSourcePath = "/cloud/movies/Retained"
+	deleted.CloudResultPath = "/cloud/movies/Retained"
+	deleted.CopySourcePath = "/cloud/movies/Retained"
 	if err := harness.repository.CommitClaim(context.Background(), *claim, deleted); err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +280,8 @@ func TestSubmitRevivesRetainedContent(t *testing.T) {
 		t.Fatalf("revive SubmitMagnet() = (%+v, %t, %v)", revived, inserted, err)
 	}
 	if revived.State != domain.StateVerifyingLocal || revived.ContentPath != "/local/movies/Retained" ||
-		revived.CloudSourcePath != "/cloud/movies/Retained" || revived.Name != "Retained" ||
+		revived.CloudResultPath != "/cloud/movies/Retained" || revived.CopySourcePath != "/cloud/movies/Retained" ||
+		revived.DestinationName != "Retained" || revived.Name != "Retained" ||
 		revived.TotalSize != 42 || revived.LastUpstreamStatus != domain.UpstreamRetainedContent ||
 		revived.QbitProgress != 0.99 || revived.CopyProgress != 1 {
 		t.Fatalf("revived download lost retained evidence: %+v", revived)

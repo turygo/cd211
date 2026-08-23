@@ -9,7 +9,8 @@ INSERT INTO downloads (
     save_path,
     destination_name,
     cloud_task_name,
-    cloud_source_path,
+    cloud_result_path,
+    copy_source_path,
     content_path,
     is_multi_file,
     total_size,
@@ -43,7 +44,8 @@ INSERT INTO downloads (
     sqlc.arg(save_path),
     sqlc.arg(destination_name),
     sqlc.arg(cloud_task_name),
-    sqlc.arg(cloud_source_path),
+    sqlc.arg(cloud_result_path),
+    sqlc.arg(copy_source_path),
     sqlc.arg(content_path),
     sqlc.arg(is_multi_file),
     sqlc.arg(total_size),
@@ -121,7 +123,8 @@ SET
     save_path = sqlc.arg(save_path),
     destination_name = sqlc.narg(destination_name),
     cloud_task_name = sqlc.arg(cloud_task_name),
-    cloud_source_path = sqlc.arg(cloud_source_path),
+    cloud_result_path = sqlc.arg(cloud_result_path),
+    copy_source_path = sqlc.arg(copy_source_path),
     content_path = sqlc.narg(content_path),
     is_multi_file = sqlc.narg(is_multi_file),
     total_size = sqlc.arg(total_size),
@@ -161,10 +164,10 @@ WHERE hash = sqlc.arg(hash);
 UPDATE downloads
 SET
     state = CASE
-        WHEN cloud_source_path IS NOT NULL
+        WHEN cloud_result_path IS NOT NULL
              AND (content_path IS NOT NULL OR last_upstream_status IN ('copy:COMPLETED', 'revive:retained_content'))
         THEN 'VERIFYING_LOCAL'
-        WHEN cloud_source_path IS NOT NULL
+        WHEN cloud_result_path IS NOT NULL
         THEN 'SUBMITTING_COPY'
         ELSE 'ACCEPTED'
     END,

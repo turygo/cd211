@@ -70,27 +70,28 @@ type CategoryOption struct {
 }
 
 type DownloadRow struct {
-	Hash           string
-	HashPrefix     string
-	Name           string
-	Category       string
-	InternalState  string
-	StateLabel     string
-	StateFullLabel string
-	ProjectedState string
-	Projected      string
-	Offline        string
-	Copy           string
-	Age            string
-	Duration       string
-	Error          string
-	ErrorIsWarning bool
-	CloudSource    string
-	ContentPath    string
-	Route          RouteView
-	CanPause       bool
-	CanResume      bool
-	CanRemove      bool
+	Hash            string
+	HashPrefix      string
+	Name            string
+	Category        string
+	InternalState   string
+	StateLabel      string
+	StateFullLabel  string
+	ProjectedState  string
+	Projected       string
+	Offline         string
+	Copy            string
+	Age             string
+	Duration        string
+	Route           RouteView
+	Error           string
+	ErrorIsWarning  bool
+	CloudResultPath string
+	CopySourcePath  string
+	ContentPath     string
+	CanPause        bool
+	CanResume       bool
+	CanRemove       bool
 	// RowVersion is the durable domain.Download.RowVersion. The live-update
 	// client keys rows by Hash and replaces a row only when RowVersion rises.
 	RowVersion int64
@@ -125,7 +126,8 @@ type DetailView struct {
 	Category        string
 	CloudFolder     string
 	SavePath        string
-	CloudSourcePath string
+	CloudResultPath string
+	CopySourcePath  string
 	ContentPath     string
 	InternalState   string
 	StateLabel      string
@@ -312,30 +314,31 @@ func buildDownloadRow(download domain.Download, projection domain.Projection, no
 	}
 	message, warning := problemError(download, str)
 	return DownloadRow{
-		Hash:           download.Hash,
-		HashPrefix:     download.Hash[:8],
-		Name:           download.Name,
-		Category:       displayCategory(download.Category, str),
-		InternalState:  string(download.State),
-		StateLabel:     displayDownloadState(download, str.CompactStates),
-		StateFullLabel: displayDownloadState(download, str.States),
-		ProjectedState: projection.State,
-		Projected:      percent(projection.Progress),
-		Offline:        percent(download.OfflineProgress),
-		Copy:           percent(download.CopyProgress),
-		Age:            displayAge(now, download.UpdatedAt, str),
-		Duration:       displayDownloadDuration(download, now, str),
-		Error:          message,
-		ErrorIsWarning: warning,
-		CloudSource:    displayPath(download.CloudSourcePath, str),
-		ContentPath:    displayPath(download.ContentPath, str),
-		Route:          buildRoute(download, str),
-		CanPause:       canPause(download),
-		CanResume:      download.State == domain.StateStopped,
-		CanRemove:      download.State.Visible(),
-		RowVersion:     download.RowVersion,
-		Terminal:       download.State.Terminal(),
-		Str:            str,
+		Hash:            download.Hash,
+		HashPrefix:      download.Hash[:8],
+		Name:            download.Name,
+		Category:        displayCategory(download.Category, str),
+		InternalState:   string(download.State),
+		StateLabel:      displayDownloadState(download, str.CompactStates),
+		StateFullLabel:  displayDownloadState(download, str.States),
+		ProjectedState:  projection.State,
+		Projected:       percent(projection.Progress),
+		Offline:         percent(download.OfflineProgress),
+		Copy:            percent(download.CopyProgress),
+		Age:             displayAge(now, download.UpdatedAt, str),
+		Duration:        displayDownloadDuration(download, now, str),
+		Route:           buildRoute(download, str),
+		Error:           message,
+		ErrorIsWarning:  warning,
+		CloudResultPath: displayPath(download.CloudResultPath, str),
+		CopySourcePath:  displayPath(download.CopySourcePath, str),
+		ContentPath:     displayPath(download.ContentPath, str),
+		CanPause:        canPause(download),
+		CanResume:       download.State == domain.StateStopped,
+		CanRemove:       download.State.Visible(),
+		RowVersion:      download.RowVersion,
+		Terminal:        download.State.Terminal(),
+		Str:             str,
 	}, nil
 }
 
@@ -353,7 +356,8 @@ func buildDetailView(download domain.Download, files []domain.DownloadFile, csrf
 		Category:        displayCategory(download.Category, str),
 		CloudFolder:     download.CloudFolder,
 		SavePath:        download.SavePath,
-		CloudSourcePath: displayPath(download.CloudSourcePath, str),
+		CloudResultPath: displayPath(download.CloudResultPath, str),
+		CopySourcePath:  displayPath(download.CopySourcePath, str),
 		ContentPath:     displayPath(download.ContentPath, str),
 		InternalState:   string(download.State),
 		StateLabel:      displayDownloadState(download, str.States),
@@ -574,7 +578,7 @@ func retryTarget(download domain.Download) domain.State {
 		return domain.StateSubmittingOffline
 	case strings.HasPrefix(status, "copy:"):
 		return domain.StateSubmittingCopy
-	case status == domain.UpstreamOfflineFinished || download.CloudSourcePath != "":
+	case status == domain.UpstreamOfflineFinished || download.CloudResultPath != "":
 		return domain.StateSubmittingCopy
 	case strings.HasPrefix(status, "offline:"):
 		return domain.StateWaitingOffline

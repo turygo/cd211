@@ -862,23 +862,25 @@ type submitResponse struct {
 // are additive: existing consumers keep reading the sanitized error text and
 // the unchanged response semantics.
 type downloadModel struct {
-	Hash        string     `json:"hash"`
-	Name        string     `json:"name"`
-	Category    string     `json:"category"`
-	State       string     `json:"state"`
-	Progress    float64    `json:"progress"`
-	Version     int64      `json:"version"`
-	Terminal    bool       `json:"terminal"`
-	Outcome     *string    `json:"outcome"`
-	ContentPath *string    `json:"content_path"`
-	TotalSize   int64      `json:"total_size"`
-	Error       *string    `json:"error"`
-	ErrorCode   *string    `json:"error_code"`
-	NextRetryAt *time.Time `json:"next_retry_at"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
-	CompletedAt *time.Time `json:"completed_at"`
-	Links       linksView  `json:"links"`
+	Hash            string     `json:"hash"`
+	Name            string     `json:"name"`
+	Category        string     `json:"category"`
+	State           string     `json:"state"`
+	Progress        float64    `json:"progress"`
+	Version         int64      `json:"version"`
+	Terminal        bool       `json:"terminal"`
+	Outcome         *string    `json:"outcome"`
+	CloudResultPath *string    `json:"cloud_result_path"`
+	CopySourcePath  *string    `json:"copy_source_path"`
+	ContentPath     *string    `json:"content_path"`
+	TotalSize       int64      `json:"total_size"`
+	Error           *string    `json:"error"`
+	ErrorCode       *string    `json:"error_code"`
+	NextRetryAt     *time.Time `json:"next_retry_at"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	CompletedAt     *time.Time `json:"completed_at"`
+	Links           linksView  `json:"links"`
 }
 
 type linksView struct {
@@ -888,7 +890,13 @@ type linksView struct {
 
 func (h *Handler) model(download domain.Download) downloadModel {
 	terminal, outcome := terminalOutcome(download.State)
-	var contentPath *string
+	var cloudResultPath, copySourcePath, contentPath *string
+	if download.CloudResultPath != "" {
+		cloudResultPath = &download.CloudResultPath
+	}
+	if download.CopySourcePath != "" {
+		copySourcePath = &download.CopySourcePath
+	}
 	if download.ContentPath != "" {
 		contentPath = &download.ContentPath
 	}
@@ -912,22 +920,24 @@ func (h *Handler) model(download domain.Download) downloadModel {
 		completedAt = &utc
 	}
 	return downloadModel{
-		Hash:        download.Hash,
-		Name:        download.Name,
-		Category:    download.Category,
-		State:       string(download.State),
-		Progress:    projectProgress(download),
-		Version:     download.RowVersion,
-		Terminal:    terminal,
-		Outcome:     outcome,
-		ContentPath: contentPath,
-		TotalSize:   download.TotalSize,
-		Error:       errorText,
-		ErrorCode:   errorCode,
-		NextRetryAt: nextRetryAt,
-		CreatedAt:   download.CreatedAt.UTC(),
-		UpdatedAt:   download.UpdatedAt.UTC(),
-		CompletedAt: completedAt,
+		Hash:            download.Hash,
+		Name:            download.Name,
+		Category:        download.Category,
+		State:           string(download.State),
+		Progress:        projectProgress(download),
+		Version:         download.RowVersion,
+		Terminal:        terminal,
+		Outcome:         outcome,
+		CloudResultPath: cloudResultPath,
+		CopySourcePath:  copySourcePath,
+		ContentPath:     contentPath,
+		TotalSize:       download.TotalSize,
+		Error:           errorText,
+		ErrorCode:       errorCode,
+		NextRetryAt:     nextRetryAt,
+		CreatedAt:       download.CreatedAt.UTC(),
+		UpdatedAt:       download.UpdatedAt.UTC(),
+		CompletedAt:     completedAt,
 		Links: linksView{
 			Self: "/api/v1/downloads/" + download.Hash,
 			Wait: "/api/v1/downloads/" + download.Hash + "/wait",

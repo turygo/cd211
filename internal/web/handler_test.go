@@ -237,7 +237,8 @@ func (fixture *webFixture) seedDownload(seed string, target domain.State, config
 	}
 	switch target {
 	case domain.StateSubmittingCopy, domain.StateWaitingCopy, domain.StateVerifyingLocal, domain.StateCompleted:
-		download.CloudSourcePath = "/cloud/movies/release-" + seed
+		download.CloudResultPath = "/cloud/movies/release-" + seed
+		download.CopySourcePath = "/cloud/movies/release-" + seed
 	}
 	if target == domain.StateCompleted {
 		download.ContentPath = filepath.Join(fixture.localRoot, "movies", "release-"+seed)
@@ -347,7 +348,8 @@ func (fixture *webFixture) seedProblem(seed string, states []domain.State, code 
 		SubmissionURI: "magnet:?xt=urn:btih:" + hash,
 		Category:      "movies", CloudFolder: "/cloud/movies/release-" + seed,
 		SavePath:        filepath.Join(fixture.localRoot, "movies"),
-		CloudSourcePath: "/cloud/movies/release-" + seed,
+		CloudResultPath: "/cloud/movies/release-" + seed,
+		CopySourcePath:  "/cloud/movies/release-" + seed,
 		OfflineProgress: 1, CopyProgress: 0.9, QbitProgress: 0.9,
 		LastUpstreamStatus: domain.UpstreamOfflineFinished,
 		State:              domain.StateAccepted, PhaseStartedAt: now, NextRunAt: &now,
@@ -882,7 +884,8 @@ func TestActionsUseRealRepositoryAndWake(t *testing.T) {
 		want      domain.State
 	}{
 		{"content", "c", func(download *domain.Download) {
-			download.CloudSourcePath = "/cloud/c"
+			download.CloudResultPath = "/cloud/c"
+			download.CopySourcePath = "/cloud/c"
 			download.ContentPath = filepath.Join(t.TempDir(), "content-c")
 		}, domain.StateVerifyingLocal},
 		{"copy completed", "d", func(download *domain.Download) { download.LastUpstreamStatus = domain.UpstreamCopyCompleted }, domain.StateVerifyingLocal},
@@ -893,7 +896,10 @@ func TestActionsUseRealRepositoryAndWake(t *testing.T) {
 		}, domain.StateSubmittingCopy},
 		{"offline finished", "1", func(download *domain.Download) { download.LastUpstreamStatus = domain.UpstreamOfflineFinished }, domain.StateSubmittingCopy},
 		{"offline downloading", "2", func(download *domain.Download) { download.LastUpstreamStatus = domain.UpstreamOfflineDownloading }, domain.StateWaitingOffline},
-		{"cloud source", "3", func(download *domain.Download) { download.CloudSourcePath = "/cloud/d" }, domain.StateSubmittingCopy},
+		{"cloud source", "3", func(download *domain.Download) {
+			download.CloudResultPath = "/cloud/d"
+			download.CopySourcePath = "/cloud/d"
+		}, domain.StateSubmittingCopy},
 		{"no evidence", "4", nil, domain.StateSubmittingOffline},
 	}
 	for _, item := range retryCases {

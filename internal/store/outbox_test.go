@@ -1523,7 +1523,8 @@ func walkDownload(t *testing.T, store *Store, hash string, states []domain.State
 		}
 		next := claim.Download
 		next.State = state
-		next.CloudSourcePath = "/cloud/downloads/" + hash
+		next.CloudResultPath = "/cloud/downloads/" + hash
+		next.CopySourcePath = next.CloudResultPath
 		next.UpdatedAt = at
 		if state == domain.StateCompleted {
 			next.ContentPath = "/downloads/" + hash

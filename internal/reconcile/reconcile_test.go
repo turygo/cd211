@@ -63,6 +63,8 @@ type fakeRepository struct {
 	commitErrs []error
 	next       *time.Time
 	err        error
+	filesErr   error
+	files      []domain.DownloadFile
 }
 
 func (r *fakeRepository) ClaimDue(context.Context, string, time.Time, time.Duration) (*store.Claim, error) {
@@ -82,10 +84,17 @@ func (r *fakeRepository) CommitClaim(_ context.Context, _ store.Claim, d domain.
 func (r *fakeRepository) NextDue(context.Context, time.Time) (*time.Time, error) {
 	return r.next, r.err
 }
+func (r *fakeRepository) ListDownloadFiles(context.Context, string) ([]domain.DownloadFile, error) {
+	if r.filesErr != nil {
+		return r.files, r.filesErr
+	}
+	return r.files, r.err
+}
 
 type fakeCloud struct {
 	ensureOffline  func(context.Context, clouddrive.OfflineSpec) (clouddrive.OfflineTask, error)
 	inspectOffline func(context.Context, string, string) (clouddrive.OfflineTask, bool, error)
+	inspectContent func(context.Context, string) (clouddrive.Content, error)
 	cancelOffline  func(context.Context, string, string) error
 	ensureCopy     func(context.Context, clouddrive.CopySpec) (clouddrive.CopyTask, error)
 	inspectCopy    func(context.Context, string, string) (clouddrive.CopyTask, bool, error)
@@ -97,6 +106,12 @@ func (c fakeCloud) EnsureOffline(ctx context.Context, spec clouddrive.OfflineSpe
 }
 func (c fakeCloud) InspectOffline(ctx context.Context, folder, hash string) (clouddrive.OfflineTask, bool, error) {
 	return c.inspectOffline(ctx, folder, hash)
+}
+func (c fakeCloud) InspectContent(ctx context.Context, source string) (clouddrive.Content, error) {
+	if c.inspectContent == nil {
+		return clouddrive.Content{Path: source, Kind: clouddrive.ContentDirectory}, nil
+	}
+	return c.inspectContent(ctx, source)
 }
 func (c fakeCloud) CancelOffline(ctx context.Context, folder, hash string) error {
 	return c.cancelOffline(ctx, folder, hash)
@@ -131,7 +146,7 @@ func (f fakeFilesystem) VerifyUnknownType(save, name string) (fsafe.UnknownConte
 func (f fakeFilesystem) Delete(content, save string) error { return f.delete(content, save) }
 
 func baseDownload(state domain.State, now time.Time) domain.Download {
-	return domain.Download{Hash: "0123456789012345678901234567890123456789", Name: "payload", SubmissionURI: "magnet:?xt=urn:btih:0123456789012345678901234567890123456789", CloudFolder: "/cloud", SavePath: "/downloads", CloudSourcePath: "/cloud/payload", State: state, PhaseStartedAt: now}
+	return domain.Download{Hash: "0123456789012345678901234567890123456789", Name: "payload", SourceKind: domain.SourceMagnet, SubmissionURI: "magnet:?xt=urn:btih:0123456789012345678901234567890123456789", CloudFolder: "/cloud", SavePath: "/downloads", CloudResultPath: "/cloud/payload", State: state, PhaseStartedAt: now}
 }
 
 func testScheduler(t *testing.T, clock *fakeClock, repo *fakeRepository, cloud *fakeCloud, files *fakeFilesystem) *Scheduler {
@@ -256,6 +271,7 @@ func TestCleanupRejectionRetainsCleanupIntent(t *testing.T) {
 	}
 	scheduler := testScheduler(t, clock, repo, cloud, files)
 	download := baseDownload(domain.StateCancelRequested, now)
+	download.CopySourcePath = "/cloud/payload"
 	committed := step(t, scheduler, repo, download)
 	if committed.State != domain.StateCancelRequested || committed.NextRunAt != nil ||
 		committed.LastErrorCode != string(domain.ProblemCloudRequestRejected) ||
@@ -281,6 +297,8 @@ func TestDeleteCancelsOnceThenDeletesDerivedLocalPath(t *testing.T) {
 	}
 	scheduler := testScheduler(t, clock, repo, cloud, files)
 	download := baseDownload(domain.StateDeleteRequested, now)
+	download.CopySourcePath = "/cloud/payload/payload.mkv"
+	download.DestinationName = "resolved.mkv"
 	download.ContentPath = ""
 	download.DeleteFilesRequested = true
 	download.LastUpstreamStatus = domain.UpstreamCopyPending
@@ -290,7 +308,7 @@ func TestDeleteCancelsOnceThenDeletesDerivedLocalPath(t *testing.T) {
 	if cancelCalls != 1 {
 		t.Fatalf("cancel copy calls = %d, want 1", cancelCalls)
 	}
-	if deletedContent != "/downloads/payload" || deletedSave != "/downloads" {
+	if deletedContent != "/downloads/resolved.mkv" || deletedSave != "/downloads" {
 		t.Fatalf("derived deletion path = %q under %q", deletedContent, deletedSave)
 	}
 	if afterDelete.State != domain.StateDeleteRequested || afterDelete.LastErrorCode != string(domain.ProblemLocalDeleteFailed) || afterDelete.NextRunAt != nil {
@@ -302,18 +320,185 @@ func TestRecordOfflineTrustsMetadataOnlyAfterFinish(t *testing.T) {
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	scheduler := &Scheduler{}
 	download := baseDownload(domain.StateWaitingOffline, now)
-	download.CloudSourcePath = ""
+	download.CloudResultPath = ""
 	scheduler.recordOffline(&download, clouddrive.OfflineTask{
 		Name: "untrusted", SourcePath: "/outside/untrusted", State: clouddrive.OfflineDownloading, Progress: 0.5,
 	})
-	if download.Name != "payload" || download.CloudTaskName != "" || download.CloudSourcePath != "" {
+	if download.Name != "payload" || download.CloudTaskName != "" || download.CloudResultPath != "" {
 		t.Fatalf("unfinished offline task overwrote durable identity: %+v", download)
 	}
 	scheduler.recordOffline(&download, clouddrive.OfflineTask{
 		Name: "payload", SourcePath: "/cloud/payload", State: clouddrive.OfflineFinished, Progress: 1,
 	})
-	if download.CloudTaskName != "payload" || download.CloudSourcePath != "/cloud/payload" {
+	if download.CloudTaskName != "payload" || download.CloudResultPath != "/cloud/payload" {
 		t.Fatalf("finished offline task evidence was not retained: %+v", download)
+	}
+}
+func torrentDownload(now time.Time, multi bool, total int64) domain.Download {
+	download := baseDownload(domain.StateSubmittingCopy, now)
+	download.SourceKind = domain.SourceTorrent
+	download.IsMultiFile = &multi
+	download.TotalSize = total
+	return download
+}
+
+func TestResolveCopySourceLayouts(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	tests := []struct {
+		name       string
+		download   domain.Download
+		files      []domain.DownloadFile
+		objects    map[string]clouddrive.Content
+		want       string
+		wantLayout bool
+	}{
+		{
+			name:     "direct single file",
+			download: torrentDownload(now, false, 42),
+			files: []domain.DownloadFile{{
+				DownloadHash: "0123456789012345678901234567890123456789", Index: 0, RelativePath: "payload.mkv", Size: 42,
+			}},
+			objects: map[string]clouddrive.Content{"/cloud/payload": {Path: "/cloud/payload", Kind: clouddrive.ContentFile, Size: 42}},
+			want:    "/cloud/payload",
+		},
+		{
+			name:     "directory wrapped single file",
+			download: torrentDownload(now, false, 42),
+			files: []domain.DownloadFile{{
+				DownloadHash: "0123456789012345678901234567890123456789", Index: 0, RelativePath: "payload.mkv", Size: 42,
+			}},
+			objects: map[string]clouddrive.Content{
+				"/cloud/payload":             {Path: "/cloud/payload", Kind: clouddrive.ContentDirectory},
+				"/cloud/payload/payload.mkv": {Path: "/cloud/payload/payload.mkv", Kind: clouddrive.ContentFile, Size: 42},
+			},
+			want: "/cloud/payload/payload.mkv",
+		},
+		{
+			name:     "multi file directory",
+			download: torrentDownload(now, true, 42),
+			files: []domain.DownloadFile{{
+				DownloadHash: "0123456789012345678901234567890123456789", Index: 0, RelativePath: "one.bin", Size: 42,
+			}},
+			objects: map[string]clouddrive.Content{"/cloud/payload": {Path: "/cloud/payload", Kind: clouddrive.ContentDirectory}},
+			want:    "/cloud/payload",
+		},
+		{
+			name:     "single size mismatch",
+			download: torrentDownload(now, false, 42),
+			files: []domain.DownloadFile{{
+				DownloadHash: "0123456789012345678901234567890123456789", Index: 0, RelativePath: "payload.mkv", Size: 42,
+			}},
+			objects:    map[string]clouddrive.Content{"/cloud/payload": {Path: "/cloud/payload", Kind: clouddrive.ContentFile, Size: 41}},
+			wantLayout: true,
+		},
+		{
+			name:     "single child wrong kind",
+			download: torrentDownload(now, false, 42),
+			files: []domain.DownloadFile{{
+				DownloadHash: "0123456789012345678901234567890123456789", Index: 0, RelativePath: "payload.mkv", Size: 42,
+			}},
+			objects: map[string]clouddrive.Content{
+				"/cloud/payload":             {Path: "/cloud/payload", Kind: clouddrive.ContentDirectory},
+				"/cloud/payload/payload.mkv": {Path: "/cloud/payload/payload.mkv", Kind: clouddrive.ContentOther},
+			},
+			wantLayout: true,
+		},
+		{
+			name:     "manifest path escape",
+			download: torrentDownload(now, false, 42),
+			files: []domain.DownloadFile{{
+				DownloadHash: "0123456789012345678901234567890123456789", Index: 0, RelativePath: "../payload.mkv", Size: 42,
+			}},
+			wantLayout: true,
+		},
+		{
+			name:     "control manifest path",
+			download: torrentDownload(now, false, 42),
+			files: []domain.DownloadFile{{
+				DownloadHash: "0123456789012345678901234567890123456789", Index: 0, RelativePath: "bad\x01.mkv", Size: 42,
+			}},
+			wantLayout: true,
+		},
+		{
+			name:     "invalid utf8 manifest path",
+			download: torrentDownload(now, false, 42),
+			files: []domain.DownloadFile{{
+				DownloadHash: "0123456789012345678901234567890123456789", Index: 0, RelativePath: string([]byte{0xff}), Size: 42,
+			}},
+			wantLayout: true,
+		},
+		{
+			name:     "duplicate manifest path",
+			download: torrentDownload(now, true, 84),
+			files: []domain.DownloadFile{
+				{DownloadHash: "0123456789012345678901234567890123456789", Index: 0, RelativePath: "same.bin", Size: 42},
+				{DownloadHash: "0123456789012345678901234567890123456789", Index: 1, RelativePath: "same.bin", Size: 42},
+			},
+			wantLayout: true,
+		},
+		{
+			name:     "magnet opaque result",
+			download: baseDownload(domain.StateSubmittingCopy, now),
+			want:     "/cloud/payload",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo := &fakeRepository{files: test.files}
+			cloud, files := defaults()
+			cloud.inspectContent = func(_ context.Context, source string) (clouddrive.Content, error) {
+				if content, ok := test.objects[source]; ok {
+					return content, nil
+				}
+				return clouddrive.Content{}, errors.New("unexpected content path")
+			}
+			scheduler := testScheduler(t, &fakeClock{now: now}, repo, cloud, files)
+			got, err := scheduler.resolveCopySource(context.Background(), test.download)
+			if test.wantLayout {
+				if !errors.Is(err, errCloudContentLayout) {
+					t.Fatalf("resolveCopySource() error = %v, want layout error", err)
+				}
+				return
+			}
+			if err != nil || got != test.want {
+				t.Fatalf("resolveCopySource() = %q, %v, want %q", got, err, test.want)
+			}
+		})
+	}
+}
+func TestCopyMutationWaitsForDurableResolutionAndReservation(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	clock := &fakeClock{now: now}
+	repo := &fakeRepository{files: []domain.DownloadFile{{
+		DownloadHash: "0123456789012345678901234567890123456789", Index: 0, RelativePath: "payload", Size: 42,
+	}}}
+	cloud, files := defaults()
+	inspectCalls, copyCalls := 0, 0
+	cloud.inspectContent = func(_ context.Context, source string) (clouddrive.Content, error) {
+		inspectCalls++
+		return clouddrive.Content{Path: source, Kind: clouddrive.ContentFile, Size: 42}, nil
+	}
+	cloud.ensureCopy = func(_ context.Context, spec clouddrive.CopySpec) (clouddrive.CopyTask, error) {
+		copyCalls++
+		return clouddrive.CopyTask{SourcePath: spec.SourcePath, DestinationPath: spec.DestinationPath, State: clouddrive.CopyPending}, nil
+	}
+	download := torrentDownload(now, false, 42)
+	scheduler := testScheduler(t, clock, repo, cloud, files)
+	download = step(t, scheduler, repo, download)
+	if inspectCalls != 1 || copyCalls != 0 || download.CopySourcePath != "/cloud/payload" {
+		t.Fatalf("source resolution = %+v, inspect=%d copy=%d", download, inspectCalls, copyCalls)
+	}
+	download = step(t, scheduler, repo, download)
+	if copyCalls != 0 || download.DestinationName != "payload" {
+		t.Fatalf("destination reservation = %+v, copy=%d", download, copyCalls)
+	}
+	download = step(t, scheduler, repo, download)
+	if copyCalls != 0 || download.LastUpstreamStatus != destinationClear {
+		t.Fatalf("preflight reservation = %+v, copy=%d", download, copyCalls)
+	}
+	download = step(t, scheduler, repo, download)
+	if copyCalls != 1 || download.State != domain.StateWaitingCopy {
+		t.Fatalf("copy submission = %+v, copy=%d", download, copyCalls)
 	}
 }
 
@@ -344,6 +529,21 @@ func TestRecordOfflineFillsUnknownTotalSizeAndPreservesKnown(t *testing.T) {
 	})
 	if zeroTask.TotalSize != 0 {
 		t.Fatalf("zero offline size was treated as known: %+v", zeroTask)
+	}
+}
+func TestRecordOfflineDoesNotOverwriteTorrentManifestMetadata(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	scheduler := &Scheduler{}
+	download := baseDownload(domain.StateWaitingOffline, now)
+	download.SourceKind = domain.SourceTorrent
+	multi := false
+	download.IsMultiFile = &multi
+	download.TotalSize = 3
+	scheduler.recordOffline(&download, clouddrive.OfflineTask{
+		Name: "offline-name", SourcePath: "/cloud/offline-name", State: clouddrive.OfflineFinished, Progress: 1, Size: 4096,
+	})
+	if download.Name != "payload" || download.TotalSize != 3 || download.CloudResultPath != "/cloud/offline-name" {
+		t.Fatalf("torrent metadata changed from offline result: %+v", download)
 	}
 }
 
@@ -383,13 +583,17 @@ func TestStepWorkflowAndMissingCopyRecovery(t *testing.T) {
 		t.Fatalf("offline submit state = %s", d.State)
 	}
 	d = step(t, s, repo, d)
-	if d.State != domain.StateSubmittingCopy || d.Name != "payload" || d.CloudSourcePath != "/cloud/payload" {
+	if d.State != domain.StateSubmittingCopy || d.Name != "payload" || d.CloudResultPath != "/cloud/payload" {
 		t.Fatalf("finished offline result = %#v", d)
 	}
 	// A magnet carries no file metadata, so no FindFile lookup happens and
 	// IsMultiFile stays unknown until the verified local copy decides.
 	if d.IsMultiFile != nil {
 		t.Fatalf("magnet metadata was invented before local verification: %#v", d)
+	}
+	d = step(t, s, repo, d)
+	if d.CopySourcePath != "/cloud/payload" || d.DestinationName != "" {
+		t.Fatalf("copy source resolution = %#v", d)
 	}
 	d = step(t, s, repo, d)
 	if d.DestinationName != "payload" || d.LastUpstreamStatus != "offline:FINISHED" {
@@ -436,9 +640,12 @@ func TestStepFailuresBackoffTimeoutCollisionAndCAS(t *testing.T) {
 
 	multi := false
 	collision := baseDownload(domain.StateSubmittingCopy, now)
+	files.verifyUnknownType = func(string, string) (fsafe.UnknownContent, error) {
+		return fsafe.UnknownContent{Path: "/downloads/payload", Size: 4096, MultiFile: false}, nil
+	}
 	collision.IsMultiFile, collision.LastUpstreamStatus = new(multi), "offline:FINISHED"
+	collision.CopySourcePath = collision.CloudResultPath
 	collision.DestinationName = collision.Name
-	files.verify = func(string, fsafe.ExpectedContent) (string, error) { return "/downloads/payload", nil }
 	d = step(t, s, repo, collision)
 	if d.State != domain.StateFailed || d.LastErrorCode != string(domain.ProblemDestinationCollision) {
 		t.Fatalf("collision = %#v", d)
@@ -450,6 +657,48 @@ func TestStepFailuresBackoffTimeoutCollisionAndCAS(t *testing.T) {
 	claimed, err := s.Step(context.Background())
 	if !claimed || err != nil {
 		t.Fatalf("CAS loss result = %v, %v", claimed, err)
+	}
+}
+
+func TestSubmittingCopyTimeoutPrecedesSourceResolution(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	clock := &fakeClock{now: now}
+	repo := &fakeRepository{}
+	cloud, files := defaults()
+	inspectCalls := 0
+	cloud.inspectContent = func(context.Context, string) (clouddrive.Content, error) {
+		inspectCalls++
+		return clouddrive.Content{}, errors.New("must not inspect after deadline")
+	}
+	s := testScheduler(t, clock, repo, cloud, files)
+	s.config.CopyTimeout = time.Minute
+	d := baseDownload(domain.StateSubmittingCopy, now)
+	d.PhaseStartedAt = now.Add(-time.Minute)
+	d.LastErrorCode = string(domain.ProblemCloudCopyNotReady)
+	got := step(t, s, repo, d)
+	if got.State != domain.StateFailed || got.LastErrorCode != string(domain.ProblemCloudCopyNotReadyTimeout) || inspectCalls != 0 {
+		t.Fatalf("copy timeout resolution = %#v, inspect calls=%d", got, inspectCalls)
+	}
+}
+
+func TestManifestRepositoryFailureDoesNotBecomeLocalVerificationFailure(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	clock := &fakeClock{now: now}
+	repo := &fakeRepository{filesErr: errors.New("database unavailable")}
+	cloud, files := defaults()
+	multi := true
+	d := baseDownload(domain.StateVerifyingLocal, now)
+	d.SourceKind = domain.SourceTorrent
+	d.IsMultiFile = &multi
+	d.CloudTaskName = d.Name
+	d.CloudResultPath = "/cloud/payload"
+	d.CopySourcePath = d.CloudResultPath
+	d.DestinationName = d.Name
+	s := testScheduler(t, clock, repo, cloud, files)
+	repo.claim = &store.Claim{Download: d, Owner: "worker", State: d.State, Version: d.RowVersion}
+	claimed, err := s.Step(context.Background())
+	if !claimed || !errors.Is(err, repo.filesErr) || len(repo.commits) != 0 {
+		t.Fatalf("manifest repository failure = claimed:%t err:%v commits:%d", claimed, err, len(repo.commits))
 	}
 }
 
@@ -470,6 +719,7 @@ func TestCancelDeleteAndCancellationDoNotResumeWorkflow(t *testing.T) {
 	}
 	s := testScheduler(t, clock, repo, cloud, files)
 	d := baseDownload(domain.StateCancelRequested, now)
+	d.CopySourcePath = "/cloud/payload"
 	d = step(t, s, repo, d)
 	if d.State != domain.StateCancelled || cancelled != 1 || d.NextRunAt != nil {
 		t.Fatalf("cancel = %#v", d)
@@ -511,7 +761,7 @@ func TestPauseStopsUpstreamWorkAndRetainsResumeEvidence(t *testing.T) {
 		cloud.cancelOffline = func(context.Context, string, string) error { cancelled++; return nil }
 		s := testScheduler(t, clock, repo, cloud, files)
 		d := baseDownload(domain.StateCancelRequested, now)
-		d.CloudSourcePath = ""
+		d.CloudResultPath = ""
 		d.PauseRequested = true
 		d.OfflineProgress, d.QbitProgress = 0.4, 0.16
 		d = step(t, s, repo, d)
@@ -536,6 +786,8 @@ func TestPauseStopsUpstreamWorkAndRetainsResumeEvidence(t *testing.T) {
 		}
 		s := testScheduler(t, clock, repo, cloud, files)
 		d := baseDownload(domain.StateCancelRequested, now)
+		d.CopySourcePath = "/cloud/payload"
+		d.DestinationName = "payload"
 		d.PauseRequested = true
 		d.LastUpstreamStatus = domain.UpstreamCopyScanning
 		d.CopyProgress, d.QbitProgress = 0.5, 0.95
@@ -543,6 +795,25 @@ func TestPauseStopsUpstreamWorkAndRetainsResumeEvidence(t *testing.T) {
 		if d.State != domain.StateStopped || cancelled != 1 || deleted != 1 ||
 			d.LastUpstreamStatus != domain.UpstreamOfflineFinished || d.CopyProgress != 0 || d.QbitProgress != 0.9 {
 			t.Fatalf("copy pause = %#v", d)
+		}
+	})
+
+	t.Run("copy before reservation", func(t *testing.T) {
+		clock := &fakeClock{now: now}
+		repo := &fakeRepository{}
+		cloud, files := defaults()
+		cancelled, deleted := 0, 0
+		cloud.cancelCopy = func(context.Context, string, string) error { cancelled++; return nil }
+		files.delete = func(string, string) error { deleted++; return nil }
+		s := testScheduler(t, clock, repo, cloud, files)
+		d := baseDownload(domain.StateCancelRequested, now)
+		d.CopySourcePath = "/cloud/resolved.mkv"
+		d.DestinationName = ""
+		d.PauseRequested = true
+		d.LastUpstreamStatus = domain.UpstreamCopyScanning
+		d = step(t, s, repo, d)
+		if d.State != domain.StateFailed || d.LastErrorCode != string(domain.ProblemInternalWorkflowError) || cancelled != 1 || deleted != 0 {
+			t.Fatalf("pre-reservation pause guessed local path: %#v, cancel=%d delete=%d", d, cancelled, deleted)
 		}
 	})
 
@@ -736,6 +1007,7 @@ func copySubmission(now time.Time) domain.Download {
 	multi := false
 	download := baseDownload(domain.StateSubmittingCopy, now)
 	download.IsMultiFile = &multi
+	download.CopySourcePath = download.CloudResultPath
 	download.DestinationName = download.Name
 	download.LastUpstreamStatus = destinationClear
 	return download
@@ -746,6 +1018,7 @@ func copySubmission(now time.Time) domain.Download {
 // reserved and preflighted, so the next step submits the copy.
 func magnetCopySubmission(now time.Time) domain.Download {
 	download := baseDownload(domain.StateSubmittingCopy, now)
+	download.CopySourcePath = download.CloudResultPath
 	download.DestinationName = download.Name
 	download.LastUpstreamStatus = destinationClear
 	return download
@@ -873,7 +1146,9 @@ func TestMagnetPreflightCollisionRegardlessOfType(t *testing.T) {
 	}
 	s := testScheduler(t, clock, repo, cloud, files)
 
-	d := step(t, s, repo, baseDownload(domain.StateSubmittingCopy, now))
+	d := baseDownload(domain.StateSubmittingCopy, now)
+	d.CopySourcePath = d.CloudResultPath
+	d = step(t, s, repo, d)
 	if d.DestinationName != "payload" {
 		t.Fatalf("destination reservation = %#v", d)
 	}
@@ -924,6 +1199,7 @@ func TestPollStatesAndPermanentFailures(t *testing.T) {
 	multi := false
 	copyRow := baseDownload(domain.StateWaitingCopy, now)
 	copyRow.IsMultiFile = new(multi)
+	copyRow.CopySourcePath = copyRow.CloudResultPath
 	copyRow.DestinationName = copyRow.Name
 	cloud.inspectCopy = func(_ context.Context, source, destination string) (clouddrive.CopyTask, bool, error) {
 		return clouddrive.CopyTask{SourcePath: source, DestinationPath: destination, State: clouddrive.CopyScanned, Progress: 0.5}, true, nil
@@ -943,12 +1219,20 @@ func TestPollStatesAndPermanentFailures(t *testing.T) {
 	verifyRow := baseDownload(domain.StateVerifyingLocal, now)
 	verifyRow.IsMultiFile = new(multi)
 	verifyRow.DestinationName = verifyRow.Name
-	files.verify = func(string, fsafe.ExpectedContent) (string, error) { return "", fs.ErrNotExist }
+	verifyRow.CopySourcePath = verifyRow.CloudResultPath
+	files.verify = func(string, fsafe.ExpectedContent) (string, error) {
+		return "", errors.New("manifest verification should not run for magnet")
+	}
+	files.verifyUnknownType = func(string, string) (fsafe.UnknownContent, error) {
+		return fsafe.UnknownContent{}, fs.ErrNotExist
+	}
 	d = step(t, s, repo, verifyRow)
 	if d.State != domain.StateVerifyingLocal || d.NextRunAt == nil || !d.NextRunAt.Equal(now.Add(10*time.Second)) {
-		t.Fatalf("verify retry = %#v", d)
+		t.Fatalf("magnet verify retry = %#v", d)
 	}
-	files.verify = func(string, fsafe.ExpectedContent) (string, error) { return "", errors.New("unsafe symlink") }
+	files.verifyUnknownType = func(string, string) (fsafe.UnknownContent, error) {
+		return fsafe.UnknownContent{}, errors.New("unsafe symlink")
+	}
 	d = step(t, s, repo, verifyRow)
 	if d.State != domain.StateFailed || d.LastErrorCode != string(domain.ProblemLocalVerificationFailed) {
 		t.Fatalf("unsafe verification = %#v", d)
