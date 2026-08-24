@@ -368,7 +368,7 @@ function replaceRow(tr, item) {
   // slot. Appending it would leave the server-rendered closed dialog behind,
   // duplicate its IDs, and make focus restoration target the wrong node.
   if (openDialog) {
-    const replacementDialog = next.querySelector("dialog.delete-dialog");
+    const replacementDialog = next.querySelector(`dialog#${cssEscape(openDialog.id)}`);
     if (replacementDialog) replacementDialog.replaceWith(openDialog);
   }
   tr.replaceWith(next);

@@ -64,6 +64,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: ${{ steps.tags.outputs.tags }}
+          build-args: VERSION=${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
 
   release:
     name: GitHub Release

@@ -5,7 +5,7 @@
   <meta name="color-scheme" content="light dark">
   <title>{{.Title}} · CD211</title>
   <script src="/static/theme-init.js?v=2"></script>
-  <link rel="stylesheet" href="/static/app.css?v=16">
+  <link rel="stylesheet" href="/static/app.css?v=17">
   <script type="module" src="/static/app.js?v=9"></script>
   <script type="module" src="/static/actions-motion.js?v=1"></script>
 </head>
@@ -16,6 +16,7 @@
   <a class="brand" href="/" aria-label="CD211 home">
     <span class="brand-mark" aria-hidden="true">CD</span>
     <span class="brand-name">CD211</span>
+    <span class="brand-version">{{appVersion}}</span>
   </a>
   <nav class="side-nav" aria-label="Primary navigation">
     <a class="nav-item" href="/" {{if eq .ActiveNav "downloads"}}aria-current="page"{{end}}>{{.Str.NavDownloads}}</a>

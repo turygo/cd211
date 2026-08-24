@@ -26,6 +26,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/turygo/cd211/internal/buildinfo"
 	"github.com/turygo/cd211/internal/creds"
 	"github.com/turygo/cd211/internal/domain"
 	"github.com/turygo/cd211/internal/fsafe"
@@ -163,6 +164,25 @@ type authenticatedSession struct {
 	session session.Session
 }
 
+func templateFunctions() template.FuncMap {
+	return template.FuncMap{
+		"appVersion":      func() string { return displayVersion(buildinfo.Version) },
+		"localTime":       localTime,
+		"localTimeFormat": localTimeFormat,
+	}
+}
+
+func displayVersion(version string) string {
+	version = strings.TrimSpace(version)
+	if version == "" || version == "dev" {
+		return "dev"
+	}
+	if strings.HasPrefix(version, "v") {
+		return version
+	}
+	return "v" + version
+}
+
 // New constructs the server-rendered operator interface.
 func New(config Config, credentials Credentials, repo Repository, sessions *session.Store, clock Clock, waker Waker, cloudStatus CloudStatus, filesystem Filesystem, settings SettingsDeps, webhooks outbox.EndpointRepository) (http.Handler, error) {
 	if isNil(credentials) || isNil(repo) || sessions == nil || isNil(clock) || isNil(waker) || isNil(cloudStatus) || isNil(filesystem) || isNil(settings.Store) || isNil(settings.Tokens) || isNil(settings.QBTKeys) || isNil(webhooks) {
@@ -179,10 +199,7 @@ func New(config Config, credentials Credentials, repo Repository, sessions *sess
 	if !filepath.IsAbs(config.LocalRoot) || filepath.Clean(config.LocalRoot) != config.LocalRoot {
 		return nil, errors.New("local root must be an absolute clean host path")
 	}
-	templates, err := template.New("root").Funcs(template.FuncMap{
-		"localTime":       localTime,
-		"localTimeFormat": localTimeFormat,
-	}).ParseFS(assets, "templates/*.html")
+	templates, err := template.New("root").Funcs(templateFunctions()).ParseFS(assets, "templates/*.html")
 	if err != nil {
 		return nil, errors.New("parse web templates")
 	}

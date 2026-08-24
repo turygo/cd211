@@ -90,18 +90,17 @@ for (const form of document.querySelectorAll("form[data-confirm]")) {
   });
 }
 
-// Delete-confirmation dialog lifecycle. Native showModal() runs first so the
-// top layer and focus trapping are the browser's; the entrance/exit are the
-// only animation. All close paths (close button, backdrop click, Escape)
-// converge on closeDeleteDialog, which is idempotent and returns the
-// in-flight closing promise so a rapid reopen lands after the close
+// Task-dialog lifecycle. Native showModal() runs first so the top layer and
+// focus trapping are the browser's; the entrance/exit are the only animation.
+// All close paths converge on closeTaskDialog, which is idempotent and returns
+// the in-flight closing promise so a rapid reopen lands after the close
 // finishes. Inline animation styles never survive a completed close.
 const closingDialogs = new WeakMap();
 
-function openDeleteDialog(dialog) {
+function openTaskDialog(dialog) {
   if (dialog.classList.contains("is-closing")) {
     const closing = closingDialogs.get(dialog) || Promise.resolve();
-    closing.then(() => openDeleteDialog(dialog));
+    closing.then(() => openTaskDialog(dialog));
     return;
   }
   if (dialog.open) {
@@ -114,7 +113,7 @@ function openDeleteDialog(dialog) {
   animateElement(dialog, { opacity: 1, transform: "none" }, { duration: motionTiming.standard, clearInline: true });
 }
 
-function closeDeleteDialog(dialog) {
+function closeTaskDialog(dialog) {
   if (!(dialog instanceof HTMLDialogElement) || !dialog.open) {
     return Promise.resolve();
   }
@@ -146,7 +145,7 @@ for (const opener of document.querySelectorAll("[data-dialog-open]")) {
     const id = opener.getAttribute("data-dialog-open");
     const dialog = id ? document.getElementById(id) : null;
     if (dialog instanceof HTMLDialogElement) {
-      openDeleteDialog(dialog);
+      openTaskDialog(dialog);
     }
   });
 }
@@ -155,12 +154,27 @@ for (const closer of document.querySelectorAll("[data-dialog-close]")) {
   closer.addEventListener("click", () => {
     const dialog = closer.closest("dialog");
     if (dialog instanceof HTMLDialogElement) {
-      closeDeleteDialog(dialog);
+      closeTaskDialog(dialog);
     }
   });
 }
 
-for (const dialog of document.querySelectorAll("dialog.delete-dialog")) {
+for (const switcher of document.querySelectorAll("[data-dialog-switch]")) {
+  switcher.addEventListener("click", () => {
+    const id = switcher.getAttribute("data-dialog-switch");
+    const target = id ? document.getElementById(id) : null;
+    const current = switcher.closest("dialog");
+    if (!(target instanceof HTMLDialogElement)) return;
+    const openTarget = () => openTaskDialog(target);
+    if (current instanceof HTMLDialogElement && current.open) {
+      void closeTaskDialog(current).then(openTarget);
+    } else {
+      openTarget();
+    }
+  });
+}
+
+for (const dialog of document.querySelectorAll("dialog.task-dialog")) {
   dialog.addEventListener("click", (event) => {
     const bounds = dialog.getBoundingClientRect();
     const outside =
@@ -169,12 +183,12 @@ for (const dialog of document.querySelectorAll("dialog.delete-dialog")) {
       event.clientY < bounds.top ||
       event.clientY > bounds.bottom;
     if (outside) {
-      closeDeleteDialog(dialog);
+      closeTaskDialog(dialog);
     }
   });
   dialog.addEventListener("cancel", (event) => {
     event.preventDefault();
-    closeDeleteDialog(dialog);
+    closeTaskDialog(dialog);
   });
 }
 

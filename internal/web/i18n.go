@@ -133,9 +133,12 @@ type Strings struct {
 	ActionPause        string
 	ActionResume       string
 	ActionMore         string
+	TaskActionsTitle   string
+	ActionRetry        string
+	ActionDelete       string
+	ActionDetails      string
 	DeleteChoiceTitle  string
 	ConfirmPause       string
-	ActionRetry        string
 	ActionCancel       string
 	ActionRemove       string
 	ActionRemoveFiles  string
@@ -518,6 +521,9 @@ var stringsEN = Strings{
 	ActionRetry:        "Retry",
 	ActionCancel:       "Cancel",
 	ActionMore:         "More actions",
+	TaskActionsTitle:   "Task actions",
+	ActionDelete:       "Delete",
+	ActionDetails:      "Details",
 	DeleteChoiceTitle:  "Delete task",
 	ActionRemove:       "Remove record",
 	ActionRemoveFiles:  "Remove + local files",
@@ -908,6 +914,9 @@ var stringsZH = Strings{
 	ActionRetry:        "重试",
 	ActionCancel:       "取消",
 	ActionMore:         "更多操作",
+	TaskActionsTitle:   "任务操作",
+	ActionDelete:       "删除",
+	ActionDetails:      "详情",
 	DeleteChoiceTitle:  "删除任务",
 	ActionRemove:       "仅删除任务记录",
 	ActionRemoveFiles:  "删除记录和本地文件",

@@ -1,6 +1,7 @@
 FROM --platform=$BUILDPLATFORM golang:1.26.5-bookworm@sha256:6c5605ab3a9a9fb3c4eafe5b3d63cdbf3881caf113262b67862547b54a9db599 AS build
 
 ARG TARGETARCH
+ARG VERSION=dev
 
 WORKDIR /src
 
@@ -10,7 +11,7 @@ RUN go mod download
 COPY . .
 # Cross-compile from the native builder arch; QEMU-emulating the Go build costs
 # roughly ten times the wall time for the same output.
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w" -o /cd211 ./cmd/cd211
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w -X github.com/turygo/cd211/internal/buildinfo.Version=$VERSION" -o /cd211 ./cmd/cd211
 
 FROM alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce
 

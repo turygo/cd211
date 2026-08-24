@@ -28,13 +28,34 @@
       </form>
       {{end}}
       {{if .CanRemove}}
-      <button class="task-control" type="button" data-dialog-open="delete-{{.Hash}}" aria-label="{{.Str.ActionMore}}" title="{{.Str.ActionMore}}">
+      <button class="task-control" type="button" data-dialog-open="actions-{{.Hash}}" aria-label="{{.Str.ActionMore}}" title="{{.Str.ActionMore}}">
         <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r=".8"></circle><circle cx="8" cy="8" r=".8"></circle><circle cx="13" cy="8" r=".8"></circle></svg>
       </button>
-      <dialog class="delete-dialog" id="delete-{{.Hash}}" aria-labelledby="delete-title-{{.Hash}}">
-        <div class="delete-dialog-header">
+      <dialog class="task-dialog task-menu-dialog" id="actions-{{.Hash}}" aria-labelledby="actions-title-{{.Hash}}">
+        <div class="task-dialog-header">
           <div>
             <span class="dialog-eyebrow">{{.Str.ActionMore}}</span>
+            <h2 id="actions-title-{{.Hash}}">{{.Str.TaskActionsTitle}}</h2>
+          </div>
+          <button class="dialog-close" type="button" data-dialog-close aria-label="Close">×</button>
+        </div>
+        <p class="delete-task-name" title="{{.Name}}">{{.Name}}</p>
+        <div class="task-menu">
+          {{if .CanRetry}}
+          <form class="task-menu-form" action="/downloads/{{.Hash}}/retry" method="post">
+            <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+            <input type="hidden" name="return_to" value="{{.ReturnPath}}">
+            <button class="task-menu-item" type="submit">{{.Str.ActionRetry}}</button>
+          </form>
+          {{end}}
+          <button class="task-menu-item is-danger" type="button" data-dialog-switch="delete-{{.Hash}}">{{.Str.ActionDelete}}</button>
+          <a class="task-menu-item" href="/downloads/{{.Hash}}">{{.Str.ActionDetails}}</a>
+        </div>
+      </dialog>
+      <dialog class="task-dialog delete-dialog" id="delete-{{.Hash}}" aria-labelledby="delete-title-{{.Hash}}">
+        <div class="task-dialog-header">
+          <div>
+            <span class="dialog-eyebrow">{{.Str.ActionDelete}}</span>
             <h2 id="delete-title-{{.Hash}}">{{.Str.DeleteChoiceTitle}}</h2>
           </div>
           <button class="dialog-close" type="button" data-dialog-close aria-label="Close">×</button>

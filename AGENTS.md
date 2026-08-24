@@ -48,16 +48,19 @@ make build             # CGO-free binary at bin/cd211
 make test              # GOTOOLCHAIN=go1.26.5 go test ./...
 make lint              # golangci-lint run
 make generate          # regenerate protobuf and sqlc outputs
+make web-preview       # authenticated Web UI preview with temporary seeded data
 make image             # build cd211:local with Docker
 make image-multiarch   # build linux/amd64 and linux/arm64 (requires buildx/QEMU)
 docker compose up -d   # local container deployment
 ```
 
-There is no dedicated run, format, typecheck, coverage, or race target. After `make build`, run locally with an absolute database path, for example:
+There is no dedicated production run, format, typecheck, coverage, or race target. After `make build`, run the production binary locally with an absolute database path, for example:
 
 ```sh
 ./bin/cd211 --http-address :8080 --database-path "$PWD/.tmp/cd211.sqlite"
 ```
+
+For browser verification of authenticated Web UI pages, MUST use `make web-preview` instead of launching a fresh production database and completing Setup. The preview uses the real Web handler, templates, assets, SQLite store, and SID session service, injects an authenticated session, and seeds representative waiting, copying, completed, and failed downloads. It does not require CloudDrive2 and never enters Setup or Login. The default address is `http://127.0.0.1:18080/`; override metadata or the listener with `make web-preview VERSION=v0.3.18 WEB_PREVIEW_ADDRESS=127.0.0.1:18081`. The preview exists only in the test binary and MUST NOT be replaced with a production setup/authentication bypass.
 
 ## Code Conventions & Common Patterns
 
@@ -113,5 +116,6 @@ Tests use the standard `testing` package and live beside production packages as 
 - Run all tests with `make test`; CI uses `go test ./... -count=1` to avoid cached results.
 - Pure packages use unit tests and controllable fakes. Store tests use temporary SQLite databases; HTTP tests use `httptest`; CloudDrive2 contract tests use an in-memory gRPC `bufconn` server.
 - Key contract coverage: `internal/httpapi/contract_test.go`, `internal/clouddrive/grpc_contract_test.go`, `internal/web/handler_test.go`, and `internal/reconcile/reconcile_test.go`.
+- Browser verification of authenticated Web UI changes MUST launch `make web-preview` and exercise the changed page in a real browser; the normal test suite skips the long-running preview server unless `CD211_WEB_PREVIEW_ADDRESS` is explicitly set.
 - Add tests at the layer owning the observable contract. State changes belong in domain/reconcile tests; API behavior belongs in HTTP contract tests; persistence/CAS behavior belongs in store tests.
 - The CI gate is lint + `go test ./... -count=1` + a CGO-free build. No coverage threshold, race target, fuzz suite, or benchmark policy is configured.

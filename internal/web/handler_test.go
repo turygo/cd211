@@ -426,6 +426,34 @@ func requireAbsent(t *testing.T, body string, values ...string) {
 	}
 }
 
+func TestBrandDisplaysBuildVersion(t *testing.T) {
+	fixture := newWebFixture(t)
+
+	for _, page := range []*httptest.ResponseRecorder{
+		fixture.request(http.MethodGet, "/", nil, true),
+		fixture.request(http.MethodGet, "/login", nil, false),
+	} {
+		requireStatus(t, page, http.StatusOK)
+		requireContains(t, page.Body.String(), `<span class="brand-version">dev</span>`)
+	}
+}
+
+func TestDisplayVersion(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  string
+	}{
+		{input: "v0.3.18", want: "v0.3.18"},
+		{input: "0.3.18", want: "v0.3.18"},
+		{input: "dev", want: "dev"},
+		{input: "", want: "dev"},
+	} {
+		if got := displayVersion(test.input); got != test.want {
+			t.Errorf("displayVersion(%q) = %q, want %q", test.input, got, test.want)
+		}
+	}
+}
+
 func TestAuthenticationRedirectLoginAndLogout(t *testing.T) {
 	fixture := newWebFixture(t)
 
@@ -623,7 +651,7 @@ func TestSecurityHeadersAndStaticAssets(t *testing.T) {
 
 	body := login.Body.String()
 	themeInit := strings.Index(body, `<script src="/static/theme-init.js?v=2"></script>`)
-	stylesheet := strings.Index(body, `<link rel="stylesheet" href="/static/app.css?v=16">`)
+	stylesheet := strings.Index(body, `<link rel="stylesheet" href="/static/app.css?v=17">`)
 	if themeInit < 0 || stylesheet < 0 || themeInit > stylesheet {
 		t.Errorf("theme initializer must load before stylesheet: theme=%d stylesheet=%d", themeInit, stylesheet)
 	}
@@ -739,6 +767,32 @@ func TestDashboardFiltersRouteEvidenceRedactionAndCloudStatus(t *testing.T) {
 	if fixture.cloud.calls != 7 {
 		t.Errorf("cloud status calls = %d, want one for each dashboard request", fixture.cloud.calls)
 	}
+}
+
+func TestDashboardMoreMenuActions(t *testing.T) {
+	failedFixture := newWebFixture(t)
+	failed := failedFixture.seedDownload("a", domain.StateFailed, func(download *domain.Download) {
+		download.LastError = "upstream rejected"
+	})
+	failedResponse := failedFixture.request(http.MethodGet, "/", nil, true)
+	requireStatus(t, failedResponse, http.StatusOK)
+	failedBody := failedResponse.Body.String()
+	requireContains(t, failedBody,
+		`data-dialog-open="actions-`+failed.Hash+`"`,
+		`class="task-dialog task-menu-dialog"`,
+		`action="/downloads/`+failed.Hash+`/retry"`,
+		`data-dialog-switch="delete-`+failed.Hash+`"`,
+		`href="/downloads/`+failed.Hash+`"`,
+		`class="task-dialog delete-dialog"`,
+	)
+
+	completedFixture := newWebFixture(t)
+	completed := completedFixture.seedDownload("b", domain.StateCompleted, nil)
+	completedResponse := completedFixture.request(http.MethodGet, "/", nil, true)
+	requireStatus(t, completedResponse, http.StatusOK)
+	completedBody := completedResponse.Body.String()
+	requireContains(t, completedBody, `data-dialog-open="actions-`+completed.Hash+`"`, `href="/downloads/`+completed.Hash+`"`)
+	requireAbsent(t, completedBody, `action="/downloads/`+completed.Hash+`/retry"`)
 }
 
 func TestDashboardSearchPaginationAndInlineReturn(t *testing.T) {

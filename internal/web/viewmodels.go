@@ -89,9 +89,9 @@ type DownloadRow struct {
 	ErrorIsWarning   bool
 	CloudResultPath  string
 	CopySourcePath   string
-	ContentPath      string
 	CanPause         bool
 	CanResume        bool
+	CanRetry         bool
 	CanRemove        bool
 	// RowVersion is the durable domain.Download.RowVersion. The live-update
 	// client keys rows by Hash and replaces a row only when RowVersion rises.
@@ -331,9 +331,9 @@ func buildDownloadRow(download domain.Download, projection domain.Projection, no
 		ErrorIsWarning:   warning,
 		CloudResultPath:  displayPath(download.CloudResultPath, str),
 		CopySourcePath:   displayPath(download.CopySourcePath, str),
-		ContentPath:      displayPath(download.ContentPath, str),
 		CanPause:         canPause(download),
 		CanResume:        download.State == domain.StateStopped,
+		CanRetry:         canRetry(download),
 		CanRemove:        download.State.Visible(),
 		RowVersion:       download.RowVersion,
 		Terminal:         download.State.Terminal(),
