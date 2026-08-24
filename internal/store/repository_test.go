@@ -344,6 +344,49 @@ func TestClaimDueAndCommitCAS(t *testing.T) {
 	}
 }
 
+func TestCommitClaimAllowsDirectOfflineToCopyTransition(t *testing.T) {
+	ctx := context.Background()
+	store := testStore(t)
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	submission := testSubmission("f", now)
+	if _, inserted, err := store.CreateSubmission(ctx, submission); err != nil || !inserted {
+		t.Fatalf("CreateSubmission(): inserted=%t err=%v", inserted, err)
+	}
+
+	acceptedClaim, err := store.ClaimDue(ctx, "offline-submit", now, time.Minute)
+	if err != nil || acceptedClaim == nil {
+		t.Fatalf("ClaimDue(accepted): (%+v, %v), want a claim", acceptedClaim, err)
+	}
+	offline := acceptedClaim.Download
+	offline.State = domain.StateSubmittingOffline
+	offline.UpdatedAt = now.Add(time.Second)
+	if err := store.CommitClaim(ctx, *acceptedClaim, offline); err != nil {
+		t.Fatalf("CommitClaim(offline): %v", err)
+	}
+
+	offlineClaim, err := store.ClaimDue(ctx, "copy-submit", now.Add(2*time.Second), time.Minute)
+	if err != nil || offlineClaim == nil || offlineClaim.State != domain.StateSubmittingOffline {
+		t.Fatalf("ClaimDue(offline): (%+v, %v), want submitting-offline claim", offlineClaim, err)
+	}
+	next := offlineClaim.Download
+	next.State = domain.StateSubmittingCopy
+	next.CloudResultPath = "/cloud/downloads/result"
+	next.OfflineProgress = 1
+	next.QbitProgress = 0.9
+	next.UpdatedAt = now.Add(3 * time.Second)
+	if err := store.CommitClaim(ctx, *offlineClaim, next); err != nil {
+		t.Fatalf("CommitClaim(copy): %v", err)
+	}
+
+	stored, err := store.GetDownload(ctx, next.Hash)
+	if err != nil {
+		t.Fatalf("GetDownload(): %v", err)
+	}
+	if stored.State != domain.StateSubmittingCopy || stored.OfflineProgress != 1 || stored.QbitProgress != 0.9 {
+		t.Fatalf("direct offline-to-copy commit = %+v, want copy state with offline=1 and qbit=0.9", stored)
+	}
+}
+
 func TestDestinationReservationIsUniqueAndReleasedOnDelete(t *testing.T) {
 	ctx := context.Background()
 	store := testStore(t)

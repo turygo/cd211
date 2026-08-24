@@ -72,6 +72,7 @@ func TestCanTransitionExhaustive(t *testing.T) {
 		},
 		StateSubmittingOffline: {
 			StateWaitingOffline:  true,
+			StateSubmittingCopy:  true,
 			StateFailed:          true,
 			StateCancelRequested: true,
 			StateDeleteRequested: true,
