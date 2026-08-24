@@ -295,29 +295,53 @@ func TestVerifyManifestChecksDeclaredFilesAndSymlinks(t *testing.T) {
 	}
 }
 
-func TestVerifySingleFileAllowsLogicalManifestNameDifferentFromCandidate(t *testing.T) {
+func TestVerifySingleFileUsesEffectiveManifestPath(t *testing.T) {
 	verifier, root := newTestVerifier(t)
 	save := mkdir(t, filepath.Join(root, "save"))
-	writeFile(t, filepath.Join(save, "staged.mkv"), "episode")
+	effective := writeFile(t, filepath.Join(save, "Season 01", "episode.mkv"), "episode")
 	content, err := verifier.Verify(save, ExpectedContent{
-		CandidateName: "staged.mkv",
-		Files:         []ExpectedFile{{RelativePath: "episode.mkv", Size: 7}},
+		CandidateName: "original.mkv",
+		Files:         []ExpectedFile{{RelativePath: filepath.Join("Season 01", "episode.mkv"), Size: 7}},
 	})
 	if err != nil {
 		t.Fatalf("Verify() error = %v", err)
 	}
-	want, err := filepath.EvalSymlinks(filepath.Join(save, "staged.mkv"))
+	want, err := filepath.EvalSymlinks(effective)
 	if err != nil {
-		t.Fatalf("EvalSymlinks(candidate): %v", err)
+		t.Fatalf("EvalSymlinks(effective): %v", err)
 	}
-	if content.Path != want {
-		t.Fatalf("verified path = %q, want %q", content.Path, want)
+	if content.Path != want || content.Size != 7 {
+		t.Fatalf("verified content = %+v, want path %q and size 7", content, want)
 	}
 	if _, err := verifier.Verify(save, ExpectedContent{
-		CandidateName: "staged.mkv",
+		CandidateName: "original.mkv",
 		Files:         []ExpectedFile{{RelativePath: "../episode.mkv", Size: 7}},
 	}); err == nil {
 		t.Fatal("Verify() accepted unsafe single-file manifest path")
+	}
+	if _, err := verifier.Verify(save, ExpectedContent{
+		CandidateName: "original.mkv",
+		Files: []ExpectedFile{
+			{RelativePath: filepath.Join("Season 01", "episode.mkv"), Size: 7},
+			{RelativePath: "extra.mkv", Size: 1},
+		},
+	}); err == nil {
+		t.Fatal("Verify() accepted multiple files for a single-file torrent")
+	}
+}
+
+func TestVerifySingleFileRejectsManifestSymlinkComponent(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	save := mkdir(t, filepath.Join(root, "save"))
+	target := mkdir(t, filepath.Join(save, "target"))
+	writeFile(t, filepath.Join(target, "episode.mkv"), "episode")
+	mustSymlink(t, target, filepath.Join(save, "linked"))
+
+	if _, err := verifier.Verify(save, ExpectedContent{
+		CandidateName: "original.mkv",
+		Files:         []ExpectedFile{{RelativePath: filepath.Join("linked", "episode.mkv"), Size: 7}},
+	}); err == nil {
+		t.Fatal("Verify() accepted a symlink in the single-file manifest path")
 	}
 }
 
@@ -354,15 +378,43 @@ func TestDeleteMissingDirectChildIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestDeleteRejectsNonDirectChild(t *testing.T) {
+func TestDeleteRemovesNestedRegularFileOnly(t *testing.T) {
 	verifier, root := newTestVerifier(t)
 	save := mkdir(t, filepath.Join(root, "save"))
-	nested := writeFile(t, filepath.Join(save, "directory", "content"), "keep me")
+	directory := mkdir(t, filepath.Join(save, "directory"))
+	target := writeFile(t, filepath.Join(directory, "content"), "delete me")
+	collateral := writeFile(t, filepath.Join(directory, "keep"), "keep me")
+
+	if err := verifier.Delete(target, save); err != nil {
+		t.Fatalf("Delete() nested file error = %v", err)
+	}
+	assertNotExist(t, target)
+	assertFileContent(t, collateral, "keep me")
+}
+
+func TestDeleteRejectsNestedDirectory(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	save := mkdir(t, filepath.Join(root, "save"))
+	nested := mkdir(t, filepath.Join(save, "parent", "directory"))
+	writeFile(t, filepath.Join(nested, "content"), "keep me")
 
 	if err := verifier.Delete(nested, save); err == nil {
-		t.Fatal("Delete() allowed deleting a non-direct child")
+		t.Fatal("Delete() allowed deleting a nested directory")
 	}
-	assertFileContent(t, nested, "keep me")
+	assertFileContent(t, filepath.Join(nested, "content"), "keep me")
+}
+
+func TestDeleteRejectsNestedSymlinkComponent(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	save := mkdir(t, filepath.Join(root, "save"))
+	outside := mkdir(t, filepath.Join(t.TempDir(), "outside"))
+	target := writeFile(t, filepath.Join(outside, "content"), "keep me")
+	mustSymlink(t, outside, filepath.Join(save, "linked"))
+
+	if err := verifier.Delete(filepath.Join(save, "linked", "content"), save); err == nil {
+		t.Fatal("Delete() accepted a symlink in a nested file path")
+	}
+	assertFileContent(t, target, "keep me")
 }
 
 func TestDeleteRejectsUnsafeSymlinkWithoutTouchingOutsideContent(t *testing.T) {

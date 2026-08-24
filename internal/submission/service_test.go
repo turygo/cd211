@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -236,6 +237,79 @@ func TestSubmitTorrentRevivalPreservesManifestMetadata(t *testing.T) {
 		harness.filesystem.expected.Files[0].RelativePath != "demo" ||
 		harness.filesystem.expected.Files[0].Size != 3 {
 		t.Fatalf("revival verification manifest = %+v", harness.filesystem.expected)
+	}
+}
+
+func TestSubmitTorrentRevivesRenamedNestedSingleFile(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	localRoot := t.TempDir()
+	savePath := filepath.Join(localRoot, "downloads")
+	if err := os.Mkdir(savePath, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := store.Open(ctx, filepath.Join(t.TempDir(), "submission.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repository.Close() })
+	verifier, err := fsafe.New(localRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waker := &serviceWaker{}
+	limits := torrentmeta.Limits{MaxInputBytes: 1 << 20, MaxInfoBytes: 1 << 18, MaxFiles: 16, MaxNameBytes: 255, MaxPathBytes: 1024, MaxComponentBytes: 255, MaxTrackerCount: 16, MaxTrackerBytes: 1024, MaxTotalSize: 1 << 30}
+	service, err := New(Config{CloudRoot: "/cloud", LocalRoot: savePath, TorrentLimits: limits}, repository, serviceClock{now: now}, waker, verifier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	torrent := []byte("d4:infod6:lengthi3e4:name4:demo12:piece lengthi16384e6:pieces20:01234567890123456789ee")
+	created, inserted, err := service.SubmitTorrent(ctx, torrent, "", false)
+	if err != nil || !inserted {
+		t.Fatalf("initial SubmitTorrent() = (%+v, %t, %v)", created, inserted, err)
+	}
+	effectivePath := filepath.Join("Season 01", "episode.mkv")
+	if err := repository.SetFileOverride(ctx, created.Hash, 0, effectivePath, 1, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(savePath, "Season 01"), 0o770); err != nil {
+		t.Fatal(err)
+	}
+	contentPath := filepath.Join(savePath, effectivePath)
+	if err := os.WriteFile(contentPath, []byte("abc"), 0o660); err != nil {
+		t.Fatal(err)
+	}
+	contentPath, err = filepath.EvalSymlinks(contentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.RequestDelete(ctx, []string{created.Hash}, false, now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := repository.ClaimDue(ctx, "torrent-revive-rename", now.Add(2*time.Second), time.Minute)
+	if err != nil || claim == nil {
+		t.Fatalf("ClaimDue() = (%+v, %v)", claim, err)
+	}
+	deleted := claim.Download
+	deleted.State = domain.StateDeleted
+	deleted.NextRunAt = nil
+	deleted.DestinationName = "demo"
+	deleted.ContentPath = contentPath
+	deleted.CloudResultPath = "/cloud/demo"
+	deleted.CopySourcePath = "/cloud/demo"
+	deleted.UpdatedAt = now.Add(2 * time.Second)
+	if err := repository.CommitClaim(ctx, *claim, deleted); err != nil {
+		t.Fatal(err)
+	}
+
+	revived, inserted, err := service.SubmitTorrent(ctx, torrent, "", false)
+	if err != nil || !inserted {
+		t.Fatalf("revive SubmitTorrent() = (%+v, %t, %v)", revived, inserted, err)
+	}
+	if revived.State != domain.StateVerifyingLocal || revived.ContentPath != contentPath ||
+		revived.DestinationName != "demo" || revived.LastUpstreamStatus != domain.UpstreamRetainedContent {
+		t.Fatalf("revived renamed torrent = %+v", revived)
 	}
 }
 

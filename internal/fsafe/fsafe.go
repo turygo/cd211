@@ -178,6 +178,17 @@ func (v *Verifier) Verify(savePath string, expected ExpectedContent) (VerifiedCo
 	if err != nil {
 		return VerifiedContent{}, err
 	}
+	if !expected.MultiFile && len(expected.Files) > 0 {
+		if len(expected.Files) != 1 {
+			return VerifiedContent{}, fmt.Errorf("fsafe: single-file manifest does not match candidate")
+		}
+		size, verifyErr := verifyManifest(saveRoot, expected.Files)
+		if verifyErr != nil {
+			return VerifiedContent{}, verifyErr
+		}
+		candidate := filepath.Join(saveRoot, filepath.FromSlash(expected.Files[0].RelativePath))
+		return VerifiedContent{Path: candidate, Size: size}, nil
+	}
 
 	candidatePath := filepath.Join(filepath.Clean(savePath), expected.CandidateName)
 	info, err := os.Lstat(candidatePath)
@@ -360,8 +371,9 @@ func verifyManifest(root string, files []ExpectedFile) (int64, error) {
 	return total, nil
 }
 
-// Delete safely removes a checked direct child of savePath. A missing direct
-// child is treated as already deleted after its roots have been validated.
+// Delete safely removes verified torrent content beneath savePath. Direct child
+// directories and regular files at any safe relative path are supported. A
+// missing path is treated as already deleted after its roots are validated.
 func (v *Verifier) Delete(contentPath, savePath string) error {
 	if !filepath.IsAbs(savePath) || !filepath.IsAbs(contentPath) {
 		return fmt.Errorf("fsafe: save and content paths must be absolute")
@@ -369,19 +381,24 @@ func (v *Verifier) Delete(contentPath, savePath string) error {
 
 	cleanSavePath := filepath.Clean(savePath)
 	cleanContentPath := filepath.Clean(contentPath)
-	rawDirectChild := directChild(cleanSavePath, cleanContentPath)
-
 	root, evaluatedSavePath, err := v.openSaveRoot(cleanSavePath)
 	if err != nil {
 		return err
 	}
 	defer root.Close()
-	if !rawDirectChild && !directChild(evaluatedSavePath, cleanContentPath) {
-		return fmt.Errorf("fsafe: content must be a direct child of save root")
+
+	relative, err := filepath.Rel(cleanSavePath, cleanContentPath)
+	if err != nil || outsideRoot(relative) {
+		relative, err = filepath.Rel(evaluatedSavePath, cleanContentPath)
+	}
+	if err != nil || !validManifestPath(relative) {
+		return fmt.Errorf("fsafe: content escapes save root")
+	}
+	if err := safePlanComponents(evaluatedSavePath, relative); err != nil {
+		return err
 	}
 
-	name := filepath.Base(cleanContentPath)
-	info, err := root.Lstat(name)
+	info, err := root.Lstat(relative)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -394,19 +411,20 @@ func (v *Verifier) Delete(contentPath, savePath string) error {
 	if !info.IsDir() && !info.Mode().IsRegular() {
 		return fmt.Errorf("fsafe: content is not a regular file or directory")
 	}
+	if info.IsDir() && filepath.Dir(relative) != "." {
+		return fmt.Errorf("fsafe: directory content must be a direct child of save root")
+	}
 
 	if info.IsDir() {
-		if err := rejectSymlinkTree(cleanContentPath); err != nil {
+		if err := rejectSymlinkTree(filepath.Join(evaluatedSavePath, relative)); err != nil {
 			if os.IsNotExist(err) {
 				return nil
 			}
 			return err
 		}
-	}
-	if info.IsDir() {
-		err = root.RemoveAll(name)
+		err = root.RemoveAll(relative)
 	} else {
-		err = root.Remove(name)
+		err = root.Remove(relative)
 	}
 	if os.IsNotExist(err) {
 		return nil
@@ -524,10 +542,6 @@ func strictlyWithin(root, path string) bool {
 		return false
 	}
 	return !outsideRoot(relativePath)
-}
-
-func directChild(parent, child string) bool {
-	return filepath.Dir(child) == parent
 }
 
 func outsideRoot(relativePath string) bool {
