@@ -707,7 +707,10 @@ window.addEventListener("popstate", () => {
 // Forms present at load already carry app.js's data-confirm listener; tag them
 // so replaced fragments (which arrive later) can run their own confirmation.
 if (listRegion || detailRegion) {
-  const host = listRegion || detailRegion;
+  // The detail live region is replaced wholesale on every authoritative
+  // update. Delegate actions from a stable ancestor so retry/pause/remove
+  // handlers continue to work after that replacement.
+  const host = listRegion || document.querySelector("main.content") || detailRegion;
   for (const form of host.querySelectorAll("form[data-confirm]")) {
     form.dataset.confirmWired = "true";
   }
@@ -715,11 +718,22 @@ if (listRegion || detailRegion) {
   // app.js binds dialog openers/closers/backdrops only to the initial DOM
   // nodes. Fragments inserted by live reconciliation need their own native
   // dialog wiring; initial dialogs keep app.js's animated close paths.
-  for (const element of host.querySelectorAll("[data-dialog-open], [data-dialog-close], dialog.delete-dialog")) {
+  for (const element of host.querySelectorAll("[data-dialog-open], [data-dialog-switch], [data-dialog-close], dialog.task-dialog")) {
     element.dataset.dialogWired = "true";
   }
 
   host.addEventListener("click", (event) => {
+    const switcher = event.target.closest("[data-dialog-switch]");
+    if (switcher && switcher.dataset.dialogWired !== "true") {
+      const id = switcher.getAttribute("data-dialog-switch");
+      const current = switcher.closest("dialog");
+      const target = id ? host.querySelector(`#${cssEscape(id)}`) : null;
+      if (target instanceof HTMLDialogElement) {
+        if (current instanceof HTMLDialogElement && current.open) current.close();
+        target.showModal();
+      }
+      return;
+    }
     const opener = event.target.closest("[data-dialog-open]");
     if (opener && opener.dataset.dialogWired !== "true") {
       const id = opener.getAttribute("data-dialog-open");
@@ -738,13 +752,15 @@ if (listRegion || detailRegion) {
       return;
     }
     // Backdrop click: the native dialog element is the click target outside
-    // its own box. app.js's animated backdrop close stays with wired dialogs.
-    const dialog = event.target.closest("dialog.delete-dialog");
+    // its own box. app.js's animated close stays with wired dialogs.
+    const dialog = event.target.closest("dialog.task-dialog");
     if (dialog && dialog.dataset.dialogWired !== "true" && dialog.open) {
       const bounds = dialog.getBoundingClientRect();
       const outside =
-        event.clientX < bounds.left || event.clientX > bounds.right ||
-        event.clientY < bounds.top || event.clientY > bounds.bottom;
+        event.clientX < bounds.left ||
+        event.clientX > bounds.right ||
+        event.clientY < bounds.top ||
+        event.clientY > bounds.bottom;
       if (outside) {
         dialog.close();
       }
