@@ -569,6 +569,8 @@ func retryTarget(download domain.Download) domain.State {
 	switch {
 	case download.State == domain.StateCancelRequested || download.State == domain.StateDeleteRequested:
 		return download.State
+	case download.State == domain.StateFailed && download.LastErrorCode == string(domain.ProblemDestinationConflict):
+		return domain.StateSubmittingCopy
 	case download.ContentPath != "" || status == domain.UpstreamCopyCompleted:
 		return domain.StateVerifyingLocal
 	case status == domain.UpstreamCopyPending ||

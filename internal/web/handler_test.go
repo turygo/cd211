@@ -944,6 +944,11 @@ func TestActionsUseRealRepositoryAndWake(t *testing.T) {
 		}, domain.StateVerifyingLocal},
 		{"copy completed", "d", func(download *domain.Download) { download.LastUpstreamStatus = domain.UpstreamCopyCompleted }, domain.StateVerifyingLocal},
 		{"copy pending", "e", func(download *domain.Download) { download.LastUpstreamStatus = domain.UpstreamCopyPending }, domain.StateWaitingCopy},
+		{"destination conflict after copy evidence", "5", func(download *domain.Download) {
+			download.LastUpstreamStatus = domain.UpstreamCopyPending
+			download.LastError = domain.ProblemText(domain.ProblemDestinationConflict)
+			download.LastErrorCode = string(domain.ProblemDestinationConflict)
+		}, domain.StateSubmittingCopy},
 		{"copy failed", "f", func(download *domain.Download) { download.LastUpstreamStatus = domain.UpstreamCopyFailed }, domain.StateSubmittingCopy},
 		{"copy cleanup", "0", func(download *domain.Download) {
 			download.LastUpstreamStatus = domain.UpstreamCleanupCancelled + "|" + domain.UpstreamCopyFailed
