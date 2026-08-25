@@ -284,7 +284,7 @@ func (s *Service) prepareRetainedContent(ctx context.Context, download *domain.D
 		expected.CandidateName = filepath.Base(candidate)
 	}
 	if download.SourceKind == domain.SourceTorrent {
-		expected.MultiFile = *download.IsMultiFile
+		expected.MultiFile = *download.IsMultiFile && path.Clean(existing.CopySourcePath) == path.Clean(existing.CloudResultPath)
 		expected.Files = make([]fsafe.ExpectedFile, 0, len(files))
 		overrides := make(map[int64]domain.FileOverride)
 		if overrideRepo, ok := s.repo.(interface {

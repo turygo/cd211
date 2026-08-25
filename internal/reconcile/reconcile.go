@@ -563,9 +563,24 @@ func (s *Scheduler) resolveCopySource(ctx context.Context, d domain.Download) (s
 	if err != nil {
 		return "", err
 	}
+	if content.Kind == clouddrive.ContentDirectory && len(manifest) == 1 {
+		relative := filepath.ToSlash(manifest[0].RelativePath)
+		if path.Base(relative) == relative {
+			child := path.Join(result, relative)
+			if !cloudDescendant(result, child) {
+				return "", errCloudContentLayout
+			}
+			childContent, childErr := s.cloud.InspectContent(ctx, child)
+			if childErr != nil {
+				return "", childErr
+			}
+			if childContent.Kind != clouddrive.ContentFile || childContent.Size != manifest[0].Size {
+				return "", errCloudContentLayout
+			}
+			return child, nil
+		}
+	}
 	switch {
-	case d.IsMultiFile == nil:
-		return result, nil
 	case *d.IsMultiFile:
 		if content.Kind != clouddrive.ContentDirectory {
 			return "", errCloudContentLayout
@@ -576,22 +591,8 @@ func (s *Scheduler) resolveCopySource(ctx context.Context, d domain.Download) (s
 			return "", errCloudContentLayout
 		}
 		return result, nil
-	case content.Kind != clouddrive.ContentDirectory:
-		return "", errCloudContentLayout
 	default:
-		relative := filepath.ToSlash(manifest[0].RelativePath)
-		child := path.Join(result, relative)
-		if !cloudDescendant(result, child) {
-			return "", errCloudContentLayout
-		}
-		childContent, childErr := s.cloud.InspectContent(ctx, child)
-		if childErr != nil {
-			return "", childErr
-		}
-		if childContent.Kind != clouddrive.ContentFile || childContent.Size != manifest[0].Size {
-			return "", errCloudContentLayout
-		}
-		return child, nil
+		return "", errCloudContentLayout
 	}
 }
 
@@ -702,7 +703,7 @@ func (s *Scheduler) verifyAndRecord(ctx context.Context, d *domain.Download) err
 		ApplyFilePlan(string, string, []fsafe.FilePlan) error
 	}); ok && hasOverride {
 		planRoot := d.SavePath
-		if d.IsMultiFile != nil && *d.IsMultiFile {
+		if !copiesTorrentAsFile(*d) {
 			planRoot = filepath.Join(d.SavePath, d.DestinationName)
 		}
 		if err := planner.ApplyFilePlan(planRoot, d.Hash, plans); err != nil {
@@ -721,7 +722,7 @@ func (s *Scheduler) verifyAndRecord(ctx context.Context, d *domain.Download) err
 	if err := validateManifest(effectiveDownload, effectiveFiles); err != nil {
 		return err
 	}
-	expected := fsafe.ExpectedContent{CandidateName: d.DestinationName, MultiFile: *d.IsMultiFile, Files: make([]fsafe.ExpectedFile, 0, len(effectiveFiles))}
+	expected := fsafe.ExpectedContent{CandidateName: d.DestinationName, MultiFile: !copiesTorrentAsFile(*d), Files: make([]fsafe.ExpectedFile, 0, len(effectiveFiles))}
 	for _, file := range effectiveFiles {
 		expected.Files = append(expected.Files, fsafe.ExpectedFile{RelativePath: file.RelativePath, Size: file.Size})
 	}
@@ -733,8 +734,13 @@ func (s *Scheduler) verifyAndRecord(ctx context.Context, d *domain.Download) err
 	return nil
 }
 
+func copiesTorrentAsFile(d domain.Download) bool {
+	return d.SourceKind == domain.SourceTorrent && d.IsMultiFile != nil &&
+		(!*d.IsMultiFile || d.CopySourcePath != d.CloudResultPath)
+}
+
 func expected(d domain.Download) fsafe.ExpectedContent {
-	return fsafe.ExpectedContent{CandidateName: d.DestinationName, MultiFile: *d.IsMultiFile}
+	return fsafe.ExpectedContent{CandidateName: d.DestinationName, MultiFile: !copiesTorrentAsFile(d)}
 }
 
 // preflightDestination verifies the reserved destination is clear before copy

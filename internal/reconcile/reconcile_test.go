@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -391,11 +392,24 @@ func TestResolveCopySourceLayouts(t *testing.T) {
 			want: "/cloud/payload/payload.mkv",
 		},
 		{
-			name:     "multi file directory",
+			name:     "single-entry multi-file directory",
 			download: torrentDownload(now, true, 42),
 			files: []domain.DownloadFile{{
-				DownloadHash: "0123456789012345678901234567890123456789", Index: 0, RelativePath: "one.bin", Size: 42,
+				DownloadHash: "0123456789012345678901234567890123456789", Index: 0, RelativePath: "episode.mkv", Size: 42,
 			}},
+			objects: map[string]clouddrive.Content{
+				"/cloud/payload":             {Path: "/cloud/payload", Kind: clouddrive.ContentDirectory},
+				"/cloud/payload/episode.mkv": {Path: "/cloud/payload/episode.mkv", Kind: clouddrive.ContentFile, Size: 42},
+			},
+			want: "/cloud/payload/episode.mkv",
+		},
+		{
+			name:     "multi-file directory",
+			download: torrentDownload(now, true, 84),
+			files: []domain.DownloadFile{
+				{DownloadHash: "0123456789012345678901234567890123456789", Index: 0, RelativePath: "one.bin", Size: 42},
+				{DownloadHash: "0123456789012345678901234567890123456789", Index: 1, RelativePath: "two.bin", Size: 42},
+			},
 			objects: map[string]clouddrive.Content{"/cloud/payload": {Path: "/cloud/payload", Kind: clouddrive.ContentDirectory}},
 			want:    "/cloud/payload",
 		},
@@ -547,7 +561,7 @@ func TestRetryReResolvesHistoricalSharedDirectoryToTorrentFile(t *testing.T) {
 			SourcePath: spec.SourcePath, DestinationPath: spec.DestinationPath, State: clouddrive.CopyPending,
 		}, nil
 	}
-	multiFile := false
+	multiFile := true
 	download := domain.Download{
 		Hash: hash, Name: "Episode 15", SourceKind: domain.SourceTorrent,
 		SubmissionURI: "magnet:?xt=urn:btih:" + hash,
@@ -591,7 +605,7 @@ func TestDestinationConflictRetryPersistsResolutionAndCopy(t *testing.T) {
 		}
 	})
 	hash := "0123456789abcdef0123456789abcdef01234567"
-	multiFile := false
+	multiFile := true
 	nextRun := now
 	submission := domain.Submission{
 		Download: domain.Download{
@@ -644,33 +658,53 @@ func TestDestinationConflictRetryPersistsResolutionAndCopy(t *testing.T) {
 	cloud.ensureCopy = func(_ context.Context, spec clouddrive.CopySpec) (clouddrive.CopyTask, error) {
 		copied = spec
 		return clouddrive.CopyTask{
-			SourcePath: spec.SourcePath, DestinationPath: spec.DestinationPath, State: clouddrive.CopyPending,
+			SourcePath: spec.SourcePath, DestinationPath: spec.DestinationPath,
+			State: clouddrive.CopyPending,
 		}, nil
 	}
+	cloud.inspectCopy = func(_ context.Context, source, destination string) (clouddrive.CopyTask, bool, error) {
+		return clouddrive.CopyTask{
+			SourcePath: source, DestinationPath: destination, State: clouddrive.CopyCompleted, Progress: 1,
+		}, true, nil
+	}
+	files.size = 42
+	files.verify = func(save string, expected fsafe.ExpectedContent) (string, error) {
+		if len(expected.Files) == 0 {
+			return "", fs.ErrNotExist
+		}
+		if expected.MultiFile || expected.CandidateName != "episode-15.mkv" ||
+			len(expected.Files) != 1 || expected.Files[0].RelativePath != "episode-15.mkv" || expected.Files[0].Size != 42 {
+			return "", errors.New("unexpected local verification layout")
+		}
+		return filepath.Join(save, expected.CandidateName), nil
+	}
+	clock := &fakeClock{now: now.Add(2 * time.Minute)}
 	scheduler, err := New(
 		Config{
 			Owner: "worker", LeaseDuration: time.Minute, PollInterval: 10 * time.Second,
 			OfflineTimeout: time.Hour, CopyTimeout: time.Hour, VerifyTimeout: time.Hour, WorkerCount: 1,
 		},
-		repository, cloud, files, &fakeClock{now: now.Add(2 * time.Minute)},
+		repository, cloud, files, clock,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 	if err != nil {
 		t.Fatalf("New(): %v", err)
 	}
-	for step := range 4 {
+	for step := range 6 {
 		claimed, err := scheduler.Step(ctx)
 		if err != nil || !claimed {
 			t.Fatalf("Step(%d) = (%t, %v)", step, claimed, err)
 		}
+		clock.now = clock.now.Add(10 * time.Second)
 	}
 	stored, err := repository.GetDownload(ctx, hash)
 	if err != nil {
 		t.Fatalf("GetDownload(): %v", err)
 	}
-	if stored.State != domain.StateWaitingCopy ||
+	if stored.State != domain.StateCompleted ||
 		stored.CopySourcePath != "/cloud/shared-season/episode-15.mkv" ||
 		stored.DestinationName != "episode-15.mkv" ||
+		stored.ContentPath != "/downloads/anime/show/Season 2/episode-15.mkv" ||
 		copied.SourcePath != stored.CopySourcePath || copied.DestinationPath != stored.SavePath {
 		t.Fatalf("persisted copy workflow = (%+v, %+v)", stored, copied)
 	}
