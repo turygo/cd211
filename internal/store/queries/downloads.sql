@@ -194,6 +194,14 @@ WHERE hash = sqlc.arg(hash)
 UPDATE downloads
 SET
     state = sqlc.arg(state),
+    copy_source_path = CASE
+        WHEN sqlc.arg(state) = 'SUBMITTING_COPY' AND last_error_code = 'destination_conflict' THEN NULL
+        ELSE copy_source_path
+    END,
+    destination_name = CASE
+        WHEN sqlc.arg(state) = 'SUBMITTING_COPY' AND last_error_code = 'destination_conflict' THEN NULL
+        ELSE destination_name
+    END,
     last_error = NULL,
     last_error_code = NULL,
     attempt_count = 0,

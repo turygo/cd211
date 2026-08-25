@@ -519,6 +519,65 @@ func TestCopyMutationWaitsForDurableResolutionAndReservation(t *testing.T) {
 	}
 }
 
+func TestRetryReResolvesHistoricalSharedDirectoryToTorrentFile(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	clock := &fakeClock{now: now}
+	hash := "0123456789012345678901234567890123456789"
+	repo := &fakeRepository{files: []domain.DownloadFile{{
+		DownloadHash: hash,
+		Index:        0,
+		RelativePath: "episode-15.mkv",
+		Size:         42,
+	}}}
+	cloud, files := defaults()
+	cloud.inspectContent = func(_ context.Context, source string) (clouddrive.Content, error) {
+		switch source {
+		case "/cloud/shared-season":
+			return clouddrive.Content{Path: source, Kind: clouddrive.ContentDirectory}, nil
+		case "/cloud/shared-season/episode-15.mkv":
+			return clouddrive.Content{Path: source, Kind: clouddrive.ContentFile, Size: 42}, nil
+		default:
+			return clouddrive.Content{}, errors.New("unexpected content path")
+		}
+	}
+	var copied clouddrive.CopySpec
+	cloud.ensureCopy = func(_ context.Context, spec clouddrive.CopySpec) (clouddrive.CopyTask, error) {
+		copied = spec
+		return clouddrive.CopyTask{
+			SourcePath: spec.SourcePath, DestinationPath: spec.DestinationPath, State: clouddrive.CopyPending,
+		}, nil
+	}
+	multiFile := false
+	download := domain.Download{
+		Hash: hash, Name: "Episode 15", SourceKind: domain.SourceTorrent,
+		SubmissionURI: "magnet:?xt=urn:btih:" + hash,
+		CloudFolder:   "/cloud", SavePath: "/downloads/anime/show/Season 2",
+		CloudResultPath: "/cloud/shared-season", IsMultiFile: &multiFile, TotalSize: 42,
+		State: domain.StateSubmittingCopy, LastUpstreamStatus: domain.UpstreamOfflineFinished,
+		PhaseStartedAt: now,
+	}
+	scheduler := testScheduler(t, clock, repo, cloud, files)
+
+	download = step(t, scheduler, repo, download)
+	if download.CopySourcePath != "/cloud/shared-season/episode-15.mkv" || download.DestinationName != "" {
+		t.Fatalf("resolved copy source = %+v", download)
+	}
+	download = step(t, scheduler, repo, download)
+	if download.DestinationName != "episode-15.mkv" {
+		t.Fatalf("reserved destination = %+v", download)
+	}
+	download = step(t, scheduler, repo, download)
+	if download.LastUpstreamStatus != destinationClear {
+		t.Fatalf("preflight status = %q", download.LastUpstreamStatus)
+	}
+	download = step(t, scheduler, repo, download)
+	if copied.SourcePath != "/cloud/shared-season/episode-15.mkv" ||
+		copied.DestinationPath != "/downloads/anime/show/Season 2" ||
+		download.State != domain.StateWaitingCopy {
+		t.Fatalf("copy submission = (%+v, %+v)", copied, download)
+	}
+}
+
 func TestRecordOfflineFillsUnknownTotalSizeAndPreservesKnown(t *testing.T) {
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	scheduler := &Scheduler{}

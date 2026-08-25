@@ -252,6 +252,76 @@ func TestRetryProblemPersistenceAndClear(t *testing.T) {
 	}
 }
 
+func TestRetryDestinationConflictInvalidatesDerivedCopyTarget(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name        string
+		code        domain.ProblemCode
+		target      domain.State
+		wantDerived bool
+	}{
+		{"copy destination conflict", domain.ProblemDestinationConflict, domain.StateSubmittingCopy, false},
+		{"other copy failure", domain.ProblemCopyTaskFailed, domain.StateSubmittingCopy, true},
+		{"non-copy retry", domain.ProblemDestinationConflict, domain.StateAccepted, true},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			repository := testStore(t)
+			submission := testSubmission(string(rune('b'+index)), now)
+			multiFile := false
+			submission.Download.SourceKind = domain.SourceTorrent
+			submission.Download.IsMultiFile = &multiFile
+			submission.Download.TotalSize = 42
+			submission.Files = []domain.DownloadFile{{
+				DownloadHash: submission.Download.Hash,
+				Index:        0,
+				RelativePath: "episode.mkv",
+				Size:         42,
+			}}
+			if _, inserted, err := repository.CreateSubmission(ctx, submission); err != nil || !inserted {
+				t.Fatalf("CreateSubmission(): inserted=%t err=%v", inserted, err)
+			}
+			claim, err := repository.ClaimDue(ctx, "fail", now, time.Minute)
+			if err != nil || claim == nil {
+				t.Fatalf("ClaimDue() = (%+v, %v)", claim, err)
+			}
+			failed := claim.Download
+			failed.State = domain.StateFailed
+			failed.CloudResultPath = "/cloud/downloads/shared-season"
+			failed.CopySourcePath = failed.CloudResultPath
+			failed.DestinationName = "shared-season"
+			failed.LastUpstreamStatus = domain.UpstreamOfflineFinished
+			failed.LastError = domain.ProblemText(test.code)
+			failed.LastErrorCode = string(test.code)
+			failed.NextRunAt = nil
+			failed.UpdatedAt = now.Add(time.Minute)
+			if err := repository.CommitClaim(ctx, *claim, failed); err != nil {
+				t.Fatalf("CommitClaim(failed): %v", err)
+			}
+
+			if err := repository.Retry(ctx, failed.Hash, test.target, now.Add(2*time.Minute)); err != nil {
+				t.Fatalf("Retry(): %v", err)
+			}
+			retried, err := repository.GetDownload(ctx, failed.Hash)
+			if err != nil {
+				t.Fatalf("GetDownload(): %v", err)
+			}
+			if retried.State != test.target || retried.CloudResultPath != failed.CloudResultPath ||
+				retried.LastError != "" || retried.LastErrorCode != "" {
+				t.Fatalf("retried download lost durable state: %+v", retried)
+			}
+			if gotDerived := retried.CopySourcePath != "" || retried.DestinationName != ""; gotDerived != test.wantDerived {
+				t.Fatalf("derived copy target present = %t, want %t: %+v", gotDerived, test.wantDerived, retried)
+			}
+			manifest, err := repository.ListDownloadFiles(ctx, failed.Hash)
+			if err != nil || len(manifest) != 1 || manifest[0].RelativePath != "episode.mkv" || manifest[0].Size != 42 {
+				t.Fatalf("manifest after retry = (%+v, %v)", manifest, err)
+			}
+		})
+	}
+}
+
 func TestUserIntentPreservesLiveLeaseUntilExternalOperationEnds(t *testing.T) {
 	tests := []struct {
 		name      string

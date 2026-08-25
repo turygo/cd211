@@ -605,6 +605,14 @@ const retryDownload = `-- name: RetryDownload :execrows
 UPDATE downloads
 SET
     state = ?1,
+    copy_source_path = CASE
+        WHEN ?1 = 'SUBMITTING_COPY' AND last_error_code = 'destination_conflict' THEN NULL
+        ELSE copy_source_path
+    END,
+    destination_name = CASE
+        WHEN ?1 = 'SUBMITTING_COPY' AND last_error_code = 'destination_conflict' THEN NULL
+        ELSE destination_name
+    END,
     last_error = NULL,
     last_error_code = NULL,
     attempt_count = 0,
