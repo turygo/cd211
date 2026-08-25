@@ -990,6 +990,38 @@ func TestActionsUseRealRepositoryAndWake(t *testing.T) {
 	}
 }
 
+func TestDestinationConflictRetryResetsStaleCopyEvidence(t *testing.T) {
+	fixture := newWebFixture(t)
+	multiFile := true
+	download := fixture.seedDownload("6", domain.StateFailed, func(download *domain.Download) {
+		download.SourceKind = domain.SourceTorrent
+		download.IsMultiFile = &multiFile
+		download.CloudResultPath = "/cloud/movies/shared-season"
+		download.CopySourcePath = download.CloudResultPath
+		download.DestinationName = "shared-season"
+		download.LastUpstreamStatus = domain.UpstreamCopyPending
+		download.LastError = domain.ProblemText(domain.ProblemDestinationConflict)
+		download.LastErrorCode = string(domain.ProblemDestinationConflict)
+	})
+
+	response := fixture.post("/downloads/"+download.Hash+"/retry", nil)
+	requireStatus(t, response, http.StatusSeeOther)
+	stored, err := fixture.store.GetDownload(context.Background(), download.Hash)
+	if err != nil {
+		t.Fatalf("GetDownload(): %v", err)
+	}
+	if stored.State != domain.StateSubmittingCopy || stored.CloudResultPath != download.CloudResultPath ||
+		stored.CopySourcePath != "" || stored.DestinationName != "" ||
+		stored.LastError != "" || stored.LastErrorCode != "" || fixture.waker.count != 1 {
+		t.Fatalf("retry result = (%+v, wake=%d)", stored, fixture.waker.count)
+	}
+	manifest, err := fixture.store.ListDownloadFiles(context.Background(), download.Hash)
+	if err != nil || len(manifest) != 2 ||
+		manifest[0].RelativePath != "disc/video.mkv" || manifest[1].RelativePath != "disc/subtitle.srt" {
+		t.Fatalf("manifest after retry = (%+v, %v)", manifest, err)
+	}
+}
+
 func TestProblemWarningVsFailurePresentation(t *testing.T) {
 	fixture := newWebFixture(t)
 	nextRun := fixture.clock.now.Add(4 * time.Minute)

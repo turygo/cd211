@@ -578,6 +578,104 @@ func TestRetryReResolvesHistoricalSharedDirectoryToTorrentFile(t *testing.T) {
 	}
 }
 
+func TestDestinationConflictRetryPersistsResolutionAndCopy(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	repository, err := store.Open(ctx, t.TempDir()+"/store.db")
+	if err != nil {
+		t.Fatalf("Open(): %v", err)
+	}
+	t.Cleanup(func() {
+		if err := repository.Close(); err != nil {
+			t.Errorf("Close(): %v", err)
+		}
+	})
+	hash := "0123456789abcdef0123456789abcdef01234567"
+	multiFile := false
+	nextRun := now
+	submission := domain.Submission{
+		Download: domain.Download{
+			Hash: hash, Name: "Episode 15", SourceKind: domain.SourceTorrent,
+			SubmissionURI: "magnet:?xt=urn:btih:" + hash,
+			CloudFolder:   "/cloud", SavePath: "/downloads/anime/show/Season 2",
+			IsMultiFile: &multiFile, TotalSize: 42, State: domain.StateAccepted,
+			PhaseStartedAt: now, NextRunAt: &nextRun, CreatedAt: now, UpdatedAt: now,
+		},
+		Files: []domain.DownloadFile{{
+			DownloadHash: hash, Index: 0, RelativePath: "episode-15.mkv", Size: 42,
+		}},
+	}
+	if _, inserted, err := repository.CreateSubmission(ctx, submission); err != nil || !inserted {
+		t.Fatalf("CreateSubmission(): inserted=%t err=%v", inserted, err)
+	}
+	claim, err := repository.ClaimDue(ctx, "seed", now, time.Minute)
+	if err != nil || claim == nil {
+		t.Fatalf("ClaimDue(seed) = (%+v, %v)", claim, err)
+	}
+	failed := claim.Download
+	failed.State = domain.StateFailed
+	failed.CloudResultPath = "/cloud/shared-season"
+	failed.CopySourcePath = failed.CloudResultPath
+	failed.DestinationName = "shared-season"
+	failed.LastUpstreamStatus = domain.UpstreamCopyPending
+	failed.LastError = domain.ProblemText(domain.ProblemDestinationConflict)
+	failed.LastErrorCode = string(domain.ProblemDestinationConflict)
+	failed.NextRunAt = nil
+	failed.UpdatedAt = now.Add(time.Minute)
+	if err := repository.CommitClaim(ctx, *claim, failed); err != nil {
+		t.Fatalf("CommitClaim(failed): %v", err)
+	}
+	if err := repository.Retry(ctx, hash, domain.StateSubmittingCopy, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("Retry(): %v", err)
+	}
+
+	cloud, files := defaults()
+	cloud.inspectContent = func(_ context.Context, source string) (clouddrive.Content, error) {
+		switch source {
+		case "/cloud/shared-season":
+			return clouddrive.Content{Path: source, Kind: clouddrive.ContentDirectory}, nil
+		case "/cloud/shared-season/episode-15.mkv":
+			return clouddrive.Content{Path: source, Kind: clouddrive.ContentFile, Size: 42}, nil
+		default:
+			return clouddrive.Content{}, errors.New("unexpected content path")
+		}
+	}
+	var copied clouddrive.CopySpec
+	cloud.ensureCopy = func(_ context.Context, spec clouddrive.CopySpec) (clouddrive.CopyTask, error) {
+		copied = spec
+		return clouddrive.CopyTask{
+			SourcePath: spec.SourcePath, DestinationPath: spec.DestinationPath, State: clouddrive.CopyPending,
+		}, nil
+	}
+	scheduler, err := New(
+		Config{
+			Owner: "worker", LeaseDuration: time.Minute, PollInterval: 10 * time.Second,
+			OfflineTimeout: time.Hour, CopyTimeout: time.Hour, VerifyTimeout: time.Hour, WorkerCount: 1,
+		},
+		repository, cloud, files, &fakeClock{now: now.Add(2 * time.Minute)},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	if err != nil {
+		t.Fatalf("New(): %v", err)
+	}
+	for step := range 4 {
+		claimed, err := scheduler.Step(ctx)
+		if err != nil || !claimed {
+			t.Fatalf("Step(%d) = (%t, %v)", step, claimed, err)
+		}
+	}
+	stored, err := repository.GetDownload(ctx, hash)
+	if err != nil {
+		t.Fatalf("GetDownload(): %v", err)
+	}
+	if stored.State != domain.StateWaitingCopy ||
+		stored.CopySourcePath != "/cloud/shared-season/episode-15.mkv" ||
+		stored.DestinationName != "episode-15.mkv" ||
+		copied.SourcePath != stored.CopySourcePath || copied.DestinationPath != stored.SavePath {
+		t.Fatalf("persisted copy workflow = (%+v, %+v)", stored, copied)
+	}
+}
+
 func TestRecordOfflineFillsUnknownTotalSizeAndPreservesKnown(t *testing.T) {
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	scheduler := &Scheduler{}
