@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -943,6 +944,20 @@ func TestActionsUseRealRepositoryAndWake(t *testing.T) {
 			download.ContentPath = filepath.Join(t.TempDir(), "content-c")
 		}, domain.StateVerifyingLocal},
 		{"copy completed", "d", func(download *domain.Download) { download.LastUpstreamStatus = domain.UpstreamCopyCompleted }, domain.StateVerifyingLocal},
+		{"local verification failed after copy completed", "febc97e973498b93f1aa7c0767d730044917dea9", func(download *domain.Download) {
+			download.Name = "[Kirara Fantasia] 碧蓝之海 S03E05"
+			download.SourceKind = domain.SourceTorrent
+			multiFile := false
+			download.IsMultiFile = &multiFile
+			download.CloudFolder = "/115open/云下载/ani-rss"
+			download.SavePath = "/downloads/anime/碧蓝之海/Season 3"
+			download.CloudResultPath = "/115open/云下载/ani-rss/[Dynamis One] Grand Blue Season 3 - 05 (ABEMA 1920x1080 AVC AAC MKV) [0A0DE095].mkv"
+			download.CopySourcePath = download.CloudResultPath + "/" + path.Base(download.CloudResultPath)
+			download.DestinationName = path.Base(download.CopySourcePath)
+			download.LastUpstreamStatus = "copy:COMPLETED"
+			download.LastError = domain.ProblemText(domain.ProblemLocalVerificationFailed)
+			download.LastErrorCode = string(domain.ProblemLocalVerificationFailed)
+		}, domain.StateSubmittingCopy},
 		{"copy pending", "e", func(download *domain.Download) { download.LastUpstreamStatus = domain.UpstreamCopyPending }, domain.StateWaitingCopy},
 		{"destination conflict after copy evidence", "5", func(download *domain.Download) {
 			download.LastUpstreamStatus = domain.UpstreamCopyPending
