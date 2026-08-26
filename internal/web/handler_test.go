@@ -11,7 +11,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -951,12 +950,18 @@ func TestActionsUseRealRepositoryAndWake(t *testing.T) {
 			download.IsMultiFile = &multiFile
 			download.CloudFolder = "/115open/云下载/ani-rss"
 			download.SavePath = "/downloads/anime/碧蓝之海/Season 3"
-			download.CloudResultPath = "/115open/云下载/ani-rss/[Dynamis One] Grand Blue Season 3 - 05 (ABEMA 1920x1080 AVC AAC MKV) [0A0DE095].mkv"
-			download.CopySourcePath = download.CloudResultPath + "/" + path.Base(download.CloudResultPath)
-			download.DestinationName = path.Base(download.CopySourcePath)
+			sourceName := "[Dynamis One] Grand Blue Season 3 - 05 (ABEMA 1920x1080 AVC AAC MKV) [0A0DE095].mkv"
+			download.CloudResultPath = "/115open/云下载/ani-rss/" + sourceName
+			download.CopySourcePath = download.CloudResultPath + "/" + sourceName
+			download.DestinationName = "[Kirara Fantasia] 碧蓝之海 S03E05.mkv"
 			download.LastUpstreamStatus = "copy:COMPLETED"
 			download.LastError = domain.ProblemText(domain.ProblemLocalVerificationFailed)
 			download.LastErrorCode = string(domain.ProblemLocalVerificationFailed)
+		}, domain.StateSubmittingCopy},
+		{"local delete failed after copy completed", "8", func(download *domain.Download) {
+			download.LastUpstreamStatus = domain.UpstreamCopyCompleted
+			download.LastError = domain.ProblemText(domain.ProblemLocalDeleteFailed)
+			download.LastErrorCode = string(domain.ProblemLocalDeleteFailed)
 		}, domain.StateSubmittingCopy},
 		{"copy pending", "e", func(download *domain.Download) { download.LastUpstreamStatus = domain.UpstreamCopyPending }, domain.StateWaitingCopy},
 		{"destination conflict after copy evidence", "5", func(download *domain.Download) {

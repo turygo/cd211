@@ -289,6 +289,22 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 			s.fail(d, s.deadlineProblem(d))
 			return "ensure_copy", nil
 		}
+		if d.LastUpstreamStatus == domain.UpstreamCopyCompleted {
+			if d.DestinationName == "" {
+				s.fail(d, domain.ProblemInternalWorkflowError)
+				return "retry_delete_local", nil
+			}
+			contentPath := filepath.Join(d.SavePath, d.DestinationName)
+			if err := s.files.Delete(contentPath, d.SavePath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				s.fail(d, domain.ProblemLocalDeleteFailed)
+				d.AttemptCount++
+				return "retry_delete_local", nil
+			}
+			d.CopyProgress, d.QbitProgress = 0, 0.9
+			d.LastUpstreamStatus, d.LastError, d.LastErrorCode, d.AttemptCount = domain.UpstreamOfflineFinished, "", "", 0
+			d.NextRunAt = new(now)
+			return "retry_delete_local", nil
+		}
 		if d.LastUpstreamStatus == domain.UpstreamCopyFailed {
 			if err := s.cloud.CancelCopy(ctx, d.CopySourcePath, d.SavePath); err != nil {
 				return "retry_cancel_copy", s.cloudFailure(d, err, "cancel_copy")

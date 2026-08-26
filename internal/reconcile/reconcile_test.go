@@ -710,6 +710,63 @@ func TestDestinationConflictRetryPersistsResolutionAndCopy(t *testing.T) {
 	}
 }
 
+func TestRetryAfterLocalVerificationFailureRemovesStaleCopy(t *testing.T) {
+	now := time.Date(2026, 8, 27, 2, 0, 0, 0, time.UTC)
+	hash := "febc97e973498b93f1aa7c0767d730044917dea9"
+	sourceName := "[Dynamis One] Grand Blue Season 3 - 05 (ABEMA 1920x1080 AVC AAC MKV) [0A0DE095].mkv"
+	cloudResult := "/115open/云下载/ani-rss/" + sourceName
+	copySource := cloudResult + "/" + sourceName
+	savePath := "/downloads/anime/碧蓝之海/Season 3"
+	destinationName := "[Kirara Fantasia] 碧蓝之海 S03E05.mkv"
+	repo := &fakeRepository{files: []domain.DownloadFile{{
+		DownloadHash: hash, Index: 0, RelativePath: sourceName, Size: 42,
+	}}}
+	cloud, files := defaults()
+	ensureCalls, verifyCalls := 0, 0
+	deleted := false
+	cloud.ensureCopy = func(_ context.Context, spec clouddrive.CopySpec) (clouddrive.CopyTask, error) {
+		ensureCalls++
+		return clouddrive.CopyTask{
+			SourcePath: spec.SourcePath, DestinationPath: spec.DestinationPath,
+			State: clouddrive.CopyCompleted, Progress: 1,
+		}, nil
+	}
+	files.verify = func(save string, expected fsafe.ExpectedContent) (string, error) {
+		verifyCalls++
+		if !deleted {
+			return "", errors.New("fsafe: single-file manifest does not match candidate")
+		}
+		if verifyCalls == 1 {
+			return "", fs.ErrNotExist
+		}
+		return filepath.Join(save, expected.CandidateName), nil
+	}
+	files.delete = func(content, save string) error {
+		if content != filepath.Join(savePath, destinationName) || save != savePath {
+			t.Fatalf("Delete(%q, %q), want stale candidate", content, save)
+		}
+		deleted = true
+		return nil
+	}
+	download := domain.Download{
+		Hash: hash, Name: "[Kirara Fantasia] 碧蓝之海 S03E05", SourceKind: domain.SourceTorrent,
+		CloudFolder: "/115open/云下载/ani-rss", SavePath: savePath,
+		CloudResultPath: cloudResult, CopySourcePath: copySource, DestinationName: destinationName,
+		IsMultiFile: new(bool), TotalSize: 42, State: domain.StateSubmittingCopy,
+		LastUpstreamStatus: domain.UpstreamCopyCompleted, PhaseStartedAt: now,
+	}
+	scheduler := testScheduler(t, &fakeClock{now: now}, repo, cloud, files)
+	for index := range 4 {
+		download = step(t, scheduler, repo, download)
+		if index < 3 {
+			download.NextRunAt = nil
+		}
+	}
+	if !deleted || ensureCalls != 1 || verifyCalls != 2 || download.State != domain.StateCompleted {
+		t.Fatalf("retry recovery = deleted:%t ensure:%d verify:%d download:%+v", deleted, ensureCalls, verifyCalls, download)
+	}
+}
+
 func TestRecordOfflineFillsUnknownTotalSizeAndPreservesKnown(t *testing.T) {
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	scheduler := &Scheduler{}
