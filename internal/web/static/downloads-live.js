@@ -364,14 +364,22 @@ function replaceRow(tr, item) {
   const openDialog = tr.querySelector("dialog[open]");
   const next = parseRow(item.html);
   if (!next || !next.dataset) return tr;
-  // Preserve the live top-layer dialog in the replacement fragment's exact
-  // slot. Appending it would leave the server-rendered closed dialog behind,
-  // duplicate its IDs, and make focus restoration target the wrong node.
+  const reopenDialog = openDialog && !openDialog.classList.contains("is-closing");
+  let openDialogID = "";
   if (openDialog) {
-    const replacementDialog = next.querySelector(`dialog#${cssEscape(openDialog.id)}`);
-    if (replacementDialog) replacementDialog.replaceWith(openDialog);
+    // Moving an open dialog between rows removes it from the browser's top
+    // layer, leaving the open element embedded at its new DOM position.
+    openDialogID = openDialog.id;
+    openDialog.close();
   }
   tr.replaceWith(next);
+  if (reopenDialog && openDialogID) {
+    const replacementDialog = next.querySelector(`dialog#${cssEscape(openDialogID)}`);
+    if (replacementDialog) {
+      // Re-enter the top layer after the replacement is connected.
+      replacementDialog.showModal();
+    }
+  }
   const hasError = next.querySelector(".cell-error") !== null;
   if (hasError && !hadError) revealError(next);
   const view = listRegion ? listRegion.dataset.view : "";
@@ -381,8 +389,8 @@ function replaceRow(tr, item) {
   } else if (item.state === "FAILED" && oldState !== "FAILED") {
     announceTerminal(next, item);
   }
-  // A row replaced while its delete dialog is open keeps that same live
-  // dialog; polling never closes it or duplicates its IDs.
+  // A row replaced while its delete dialog is open reopens the replacement
+  // dialog in the native top layer; polling never embeds it in the row.
   return next;
 }
 
