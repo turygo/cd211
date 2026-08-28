@@ -969,11 +969,6 @@ func TestActionsUseRealRepositoryAndWake(t *testing.T) {
 			download.LastError = domain.ProblemText(domain.ProblemDestinationConflict)
 			download.LastErrorCode = string(domain.ProblemDestinationConflict)
 		}, domain.StateSubmittingCopy},
-		{"effective destination collision", "9", func(download *domain.Download) {
-			download.LastUpstreamStatus = domain.UpstreamCopyCompleted
-			download.LastError = domain.ProblemText(domain.ProblemDestinationCollision)
-			download.LastErrorCode = string(domain.ProblemDestinationCollision)
-		}, domain.StateSubmittingCopy},
 		{"copy failed", "f", func(download *domain.Download) { download.LastUpstreamStatus = domain.UpstreamCopyFailed }, domain.StateSubmittingCopy},
 		{"copy cleanup", "0", func(download *domain.Download) {
 			download.LastUpstreamStatus = domain.UpstreamCleanupCancelled + "|" + domain.UpstreamCopyFailed

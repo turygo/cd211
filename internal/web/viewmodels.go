@@ -569,9 +569,7 @@ func retryTarget(download domain.Download) domain.State {
 	switch {
 	case download.State == domain.StateCancelRequested || download.State == domain.StateDeleteRequested:
 		return download.State
-	case download.State == domain.StateFailed &&
-		(download.LastErrorCode == string(domain.ProblemDestinationConflict) ||
-			download.LastErrorCode == string(domain.ProblemDestinationCollision)):
+	case download.State == domain.StateFailed && download.LastErrorCode == string(domain.ProblemDestinationConflict):
 		return domain.StateSubmittingCopy
 	case download.State == domain.StateFailed &&
 		(download.LastErrorCode == string(domain.ProblemLocalVerificationFailed) ||

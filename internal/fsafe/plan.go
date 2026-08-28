@@ -1,14 +1,10 @@
 package fsafe
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 )
-
-// ErrDestinationCollision reports that an effective rename target is already occupied.
-var ErrDestinationCollision = errors.New("destination collision")
 
 // FilePlan describes one effective manifest operation inside a verified torrent root.
 type FilePlan struct {
@@ -88,13 +84,13 @@ func (v *Verifier) ApplyFilePlan(root, hash string, plans []FilePlan) error {
 					completed[source] = true
 					continue
 				}
-				return fmt.Errorf("fsafe: %w", ErrDestinationCollision)
+				return fmt.Errorf("fsafe: target collision")
 			}
 			if targetErr != nil && !os.IsNotExist(targetErr) {
 				return targetErr
 			}
 			if targetErr == nil {
-				return fmt.Errorf("fsafe: %w", ErrDestinationCollision)
+				return fmt.Errorf("fsafe: target collision")
 			}
 		}
 		if sourceErr == nil {
@@ -112,7 +108,7 @@ func (v *Verifier) ApplyFilePlan(root, hash string, plans []FilePlan) error {
 				return fmt.Errorf("fsafe: target is symlink")
 			}
 			if _, targetIsMovingSource := moving[target]; !targetIsMovingSource {
-				return fmt.Errorf("fsafe: %w", ErrDestinationCollision)
+				return fmt.Errorf("fsafe: target collision")
 			}
 		} else if !os.IsNotExist(targetErr) {
 			return targetErr
@@ -139,7 +135,7 @@ func (v *Verifier) ApplyFilePlan(root, hash string, plans []FilePlan) error {
 				if _, expectedFinal := targetSources[target]; expectedFinal {
 					continue
 				}
-				return fmt.Errorf("fsafe: %w", ErrDestinationCollision)
+				return fmt.Errorf("fsafe: target collision")
 			}
 			return err
 		} else if err != nil {
@@ -156,7 +152,7 @@ func (v *Verifier) ApplyFilePlan(root, hash string, plans []FilePlan) error {
 				return fmt.Errorf("fsafe: target is symlink")
 			}
 			if _, sourceTarget := moving[target]; !sourceTarget {
-				return fmt.Errorf("fsafe: %w", ErrDestinationCollision)
+				return fmt.Errorf("fsafe: target collision")
 			}
 		} else if !os.IsNotExist(targetErr) {
 			return targetErr

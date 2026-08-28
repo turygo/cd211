@@ -80,49 +80,6 @@ func TestVerifyAndRecordMovesAndVerifiesSingleFileAtEffectivePath(t *testing.T) 
 	}
 }
 
-func TestVerifyAndRecordClassifiesObservedRenamedEpisodeCollision(t *testing.T) {
-	hash := "4cf8f88032cef98cf39caa789b51755cb7210074"
-	sourceName := "[Studio GreenTea] Seihantai na Kimi to Boku [07][WebRip][HEVC-10bit 1080p AAC][JPTC].mp4"
-	effectiveName := "[绿茶字幕组] 正相反的你与我 S01E07.mp4"
-	localRoot := t.TempDir()
-	savePath := filepath.Join(localRoot, "anime", "正相反的你与我", "Season 1")
-	if err := os.MkdirAll(savePath, 0o770); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(savePath, sourceName), []byte("new-release"), 0o660); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(savePath, effectiveName), []byte("old-release"), 0o660); err != nil {
-		t.Fatal(err)
-	}
-	verifier, err := fsafe.New(localRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	repo := &fakeRepository{
-		files: []domain.DownloadFile{{
-			DownloadHash: hash, Index: 0, RelativePath: sourceName, Size: int64(len("new-release")),
-		}},
-		overrides: []domain.FileOverride{{
-			DownloadHash: hash, FileIndex: 0, RelativePath: effectiveName, Priority: 1,
-		}},
-	}
-	scheduler := &Scheduler{repo: repo, files: verifier}
-	multi := false
-	download := domain.Download{
-		Hash: hash, Name: "[绿茶字幕组] 正相反的你与我 S01E07", SourceKind: domain.SourceTorrent,
-		SavePath: savePath, DestinationName: sourceName, IsMultiFile: &multi,
-		TotalSize: int64(len("new-release")), State: domain.StateVerifyingLocal, PhaseStartedAt: time.Now(),
-	}
-	err = scheduler.verifyAndRecord(context.Background(), &download)
-	if !errors.Is(err, fsafe.ErrDestinationCollision) {
-		t.Fatalf("verifyAndRecord() error = %v, want destination collision", err)
-	}
-	if code := localVerificationProblem(err); code != domain.ProblemDestinationCollision {
-		t.Fatalf("localVerificationProblem() = %q, want %q", code, domain.ProblemDestinationCollision)
-	}
-}
-
 func TestVerifyAndRecordKeepsUnrenamedSingleFileBehavior(t *testing.T) {
 	hash := "fedcba9876543210fedcba9876543210fedcba98"
 	localRoot := t.TempDir()

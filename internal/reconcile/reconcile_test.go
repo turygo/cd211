@@ -717,17 +717,13 @@ func TestRetryAfterLocalVerificationFailureRemovesStaleCopy(t *testing.T) {
 	cloudResult := "/115open/云下载/ani-rss/" + sourceName
 	copySource := cloudResult + "/" + sourceName
 	savePath := "/downloads/anime/碧蓝之海/Season 3"
-	destinationName := sourceName
+	destinationName := "[Kirara Fantasia] 碧蓝之海 S03E05.mkv"
 	repo := &fakeRepository{files: []domain.DownloadFile{{
 		DownloadHash: hash, Index: 0, RelativePath: sourceName, Size: 42,
 	}}}
 	cloud, files := defaults()
-	ensureCalls, cancelCalls, verifyCalls := 0, 0, 0
+	ensureCalls, verifyCalls := 0, 0
 	deleted := false
-	cloud.cancelCopy = func(context.Context, string, string) error {
-		cancelCalls++
-		return nil
-	}
 	cloud.ensureCopy = func(_ context.Context, spec clouddrive.CopySpec) (clouddrive.CopyTask, error) {
 		ensureCalls++
 		return clouddrive.CopyTask{
@@ -760,14 +756,14 @@ func TestRetryAfterLocalVerificationFailureRemovesStaleCopy(t *testing.T) {
 		LastUpstreamStatus: domain.UpstreamCopyCompleted, PhaseStartedAt: now,
 	}
 	scheduler := testScheduler(t, &fakeClock{now: now}, repo, cloud, files)
-	for index := range 5 {
+	for index := range 4 {
 		download = step(t, scheduler, repo, download)
-		if index < 4 {
+		if index < 3 {
 			download.NextRunAt = nil
 		}
 	}
-	if !deleted || cancelCalls != 1 || ensureCalls != 1 || verifyCalls != 2 || download.State != domain.StateCompleted {
-		t.Fatalf("retry recovery = deleted:%t cancel:%d ensure:%d verify:%d download:%+v", deleted, cancelCalls, ensureCalls, verifyCalls, download)
+	if !deleted || ensureCalls != 1 || verifyCalls != 2 || download.State != domain.StateCompleted {
+		t.Fatalf("retry recovery = deleted:%t ensure:%d verify:%d download:%+v", deleted, ensureCalls, verifyCalls, download)
 	}
 }
 
