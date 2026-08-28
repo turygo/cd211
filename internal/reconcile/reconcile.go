@@ -290,20 +290,14 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 			return "ensure_copy", nil
 		}
 		if d.LastUpstreamStatus == domain.UpstreamCopyCompleted {
-			if d.DestinationName == "" {
-				s.fail(d, domain.ProblemInternalWorkflowError)
-				return "retry_delete_local", nil
-			}
-			contentPath := filepath.Join(d.SavePath, d.DestinationName)
-			if err := s.files.Delete(contentPath, d.SavePath); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				s.fail(d, domain.ProblemLocalDeleteFailed)
-				d.AttemptCount++
-				return "retry_delete_local", nil
+			if err := s.cloud.CancelCopy(ctx, d.CopySourcePath, d.SavePath); err != nil {
+				return "retry_cancel_copy", s.cloudFailure(d, err, "cancel_copy")
 			}
 			d.CopyProgress, d.QbitProgress = 0, 0.9
-			d.LastUpstreamStatus, d.LastError, d.LastErrorCode, d.AttemptCount = domain.UpstreamOfflineFinished, "", "", 0
+			markCleanupCancelled(d)
+			d.LastError, d.LastErrorCode, d.AttemptCount = "", "", 0
 			d.NextRunAt = new(now)
-			return "retry_delete_local", nil
+			return "retry_cancel_copy", nil
 		}
 		if d.LastUpstreamStatus == domain.UpstreamCopyFailed {
 			if err := s.cloud.CancelCopy(ctx, d.CopySourcePath, d.SavePath); err != nil {
@@ -315,7 +309,8 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 			d.NextRunAt = new(now)
 			return "retry_cancel_copy", nil
 		}
-		if d.LastUpstreamStatus == cleanupCancelled+"|"+domain.UpstreamCopyFailed {
+		if d.LastUpstreamStatus == cleanupCancelled+"|"+domain.UpstreamCopyFailed ||
+			d.LastUpstreamStatus == cleanupCancelled+"|"+domain.UpstreamCopyCompleted {
 			if d.DestinationName == "" {
 				s.fail(d, domain.ProblemInternalWorkflowError)
 				return "retry_delete_copy", nil
@@ -383,7 +378,7 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 				s.poll(d, now)
 				return "verify_local", nil
 			}
-			s.fail(d, domain.ProblemLocalVerificationFailed)
+			s.fail(d, localVerificationProblem(verifyErr))
 			return "verify_local", nil
 		}
 		if err := validateCopyTask(task, d.CopySourcePath, d.SavePath); err != nil {
@@ -425,7 +420,7 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 			s.poll(d, now)
 			return "verify_local", nil
 		}
-		s.fail(d, domain.ProblemLocalVerificationFailed)
+		s.fail(d, localVerificationProblem(verifyErr))
 		return "verify_local", nil
 	case domain.StateCancelRequested:
 		return s.cancel(ctx, d, now)
@@ -633,6 +628,7 @@ func validateManifest(d domain.Download, files []domain.DownloadFile) error {
 			strings.ContainsAny(file.RelativePath, "\\\x00") || !utf8.ValidString(file.RelativePath) ||
 			strings.ContainsFunc(file.RelativePath, unicode.IsControl) {
 			return errCloudContentLayout
+
 		}
 		if _, exists := seen[file.RelativePath]; exists {
 			return errCloudContentLayout
@@ -647,6 +643,12 @@ func validateManifest(d domain.Download, files []domain.DownloadFile) error {
 		return errCloudContentLayout
 	}
 	return nil
+}
+func localVerificationProblem(err error) domain.ProblemCode {
+	if errors.Is(err, fsafe.ErrDestinationCollision) {
+		return domain.ProblemDestinationCollision
+	}
+	return domain.ProblemLocalVerificationFailed
 }
 
 func hasCopyEvidence(status string) bool {
