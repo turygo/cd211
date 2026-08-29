@@ -719,6 +719,30 @@ func addContractTorrent(t *testing.T, harness *contractHarness, cookie *http.Coo
 	return metadata
 }
 
+func TestAddTorrentFetchesRemoteTorrentURL(t *testing.T) {
+	t.Parallel()
+	harness := newContractHarness(t)
+	cookie := harness.login(t)
+	torrent := []byte("d4:infod6:lengthi3e4:name4:demo12:piece lengthi16384e6:pieces20:01234567890123456789ee")
+	receivedCookie := make(chan string, 1)
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedCookie <- r.Header.Get("Cookie")
+		_, _ = w.Write(torrent)
+	}))
+	defer source.Close()
+
+	response := doForm(t, harness.api, http.MethodPost, "/api/v2/torrents/add", url.Values{
+		"urls":   {source.URL + "/download.torrent"},
+		"cookie": {"session=secret"},
+	}, cookie)
+	if response.Code != http.StatusOK || harness.waker.wakes != 1 {
+		t.Fatalf("remote add = %d %q wakes=%d", response.Code, response.Body.String(), harness.waker.wakes)
+	}
+	if got := <-receivedCookie; got != "session=secret" {
+		t.Fatalf("remote cookie = %q", got)
+	}
+}
+
 func TestQBTFileRenameIsScopedPerHash(t *testing.T) {
 	t.Parallel()
 	harness := newContractHarness(t)

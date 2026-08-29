@@ -1,14 +1,17 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"io"
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/turygo/cd211/internal/domain"
 	"github.com/turygo/cd211/internal/store"
@@ -122,7 +125,33 @@ func (h *handler) addTorrent(w http.ResponseWriter, r *http.Request) {
 			badRequest(w)
 			return
 		}
-		_, _, err = h.service.SubmitMagnetWithOptions(r.Context(), urls[0], category, stopped, options)
+		source, parseErr := url.ParseRequestURI(urls[0])
+		if parseErr != nil {
+			badRequest(w)
+			return
+		}
+		switch strings.ToLower(source.Scheme) {
+		case "magnet":
+			_, _, err = h.service.SubmitMagnetWithOptions(r.Context(), urls[0], category, stopped, options)
+		case "http", "https":
+			var cookie string
+			if values, present := r.PostForm["cookie"]; present {
+				if len(values) != 1 {
+					badRequest(w)
+					return
+				}
+				cookie = values[0]
+			}
+			data, fetchErr := fetchTorrent(r.Context(), source, cookie, h.config.TorrentLimits.MaxInputBytes)
+			if fetchErr != nil {
+				badRequest(w)
+				return
+			}
+			_, _, err = h.service.SubmitTorrentWithOptions(r.Context(), data, category, stopped, options)
+		default:
+			badRequest(w)
+			return
+		}
 	case len(files["torrents"]) > 0:
 		if mediaType != "multipart/form-data" || len(files["torrents"]) != 1 {
 			badRequest(w)
@@ -159,6 +188,32 @@ func readUpload(header *multipart.FileHeader) ([]byte, error) {
 	}
 	defer file.Close()
 	return io.ReadAll(file)
+}
+
+func fetchTorrent(ctx context.Context, source *url.URL, cookie string, limit int) ([]byte, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, source.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	if cookie != "" {
+		request.Header.Set("Cookie", cookie)
+	}
+	response, err := (&http.Client{Timeout: 30 * time.Second}).Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return nil, errors.New("torrent URL returned an unsuccessful response")
+	}
+	data, err := io.ReadAll(io.LimitReader(response.Body, int64(limit)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > limit {
+		return nil, errors.New("torrent URL response is too large")
+	}
+	return data, nil
 }
 
 func addCategory(form map[string][]string) (string, bool) {
