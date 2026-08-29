@@ -6,6 +6,8 @@ CD211 的所有重要变更均记录在此文件中。
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-08-30
+
 ### Fixed
 
 - 修复 qBittorrent 兼容接口无法从 HTTP/HTTPS 地址获取 `.torrent` 文件的问题，AutoBangumi 等客户端现在可直接提交远程种子链接。
