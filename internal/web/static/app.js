@@ -19,9 +19,13 @@ function formatLocalTimes(root = document) {
     const value = element.getAttribute("datetime");
     if (!value || element.dataset.localTimeValue === value) continue;
     const date = new Date(value);
-    if (Number.isNaN(date.getTime())) continue;
+    if (Number.isNaN(date.getTime())) {
+      element.classList.add("is-localized");
+      continue;
+    }
     element.textContent = localDateTimeFormatter.format(date);
     element.dataset.localTimeValue = value;
+    element.classList.add("is-localized");
   }
 }
 

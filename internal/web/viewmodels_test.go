@@ -33,3 +33,21 @@ func TestDisplayDownloadDurationReportsUnavailableWithoutOfflineStart(t *testing
 		t.Fatalf("missing duration = %q, want 暂无数据", got)
 	}
 }
+
+func TestPreviewPathMatchesClientPathJoin(t *testing.T) {
+	tests := []struct {
+		name, root, subpath, want string
+	}{
+		{"clean root", "/cloud", "movies", "/cloud/movies"},
+		{"trailing root slash", "/cloud/", "movies", "/cloud/movies"},
+		{"root path", "/", "movies", "/movies"},
+		{"empty root", "", "movies", "/movies"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := previewPath(test.root, test.subpath); got != test.want {
+				t.Fatalf("previewPath(%q, %q) = %q, want %q", test.root, test.subpath, got, test.want)
+			}
+		})
+	}
+}

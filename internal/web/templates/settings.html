@@ -54,9 +54,9 @@
               <div class="remap-row">
                 <strong>{{.Name}}</strong>
                 {{if .Valid}}
-                <code data-remap-cloud data-subpath="{{.CloudSubpath}}">{{$.Values.CloudRoot}}/{{.CloudSubpath}}</code>
+                <code data-remap-cloud data-subpath="{{.CloudSubpath}}">{{previewPath $.Values.CloudRoot .CloudSubpath}}</code>
                 <span aria-hidden="true">→</span>
-                <code data-remap-local data-subpath="{{.SaveSubpath}}">{{$.Values.LocalRoot}}/{{.SaveSubpath}}</code>
+                <code data-remap-local data-subpath="{{.SaveSubpath}}">{{previewPath $.Values.LocalRoot .SaveSubpath}}</code>
                 {{else}}
                 <span class="category-path-error">{{$.Str.CategoryPathDetached}}</span>
                 {{end}}

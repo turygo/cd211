@@ -747,6 +747,10 @@ func displayPath(value string, str *Strings) string {
 	return value
 }
 
+func previewPath(root, subpath string) string {
+	return strings.TrimRight(root, "/") + "/" + strings.TrimLeft(subpath, "/")
+}
+
 func displayTime(value time.Time, str *Strings) string {
 	if value.IsZero() {
 		return str.NotRecorded

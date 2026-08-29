@@ -169,6 +169,7 @@ func templateFunctions() template.FuncMap {
 		"appVersion":      func() string { return displayVersion(buildinfo.Version) },
 		"localTime":       localTime,
 		"localTimeFormat": localTimeFormat,
+		"previewPath":     previewPath,
 	}
 }
 

@@ -170,6 +170,8 @@ a:hover { color: var(--accent-hover); }
 
 .muted { color: var(--text-tertiary); }
 
+html.js .local-time:not(.is-localized) { visibility: hidden; }
+
 /* ---------- Shell ---------- */
 
 .app-shell {
