@@ -127,6 +127,7 @@ type DetailView struct {
 	Category         string
 	CloudFolder      string
 	SavePath         string
+	WorkspacePath    string
 	CloudResultPath  string
 	CopySourcePath   string
 	ContentPath      string
@@ -355,6 +356,7 @@ func buildDetailView(download domain.Download, files []domain.DownloadFile, csrf
 		Category:         displayCategory(download.Category, str),
 		CloudFolder:      download.CloudFolder,
 		SavePath:         download.SavePath,
+		WorkspacePath:    displayWorkspacePath(download.WorkspacePath, str),
 		CloudResultPath:  displayPath(download.CloudResultPath, str),
 		CopySourcePath:   displayPath(download.CopySourcePath, str),
 		ContentPath:      displayPath(download.ContentPath, str),
@@ -730,6 +732,12 @@ func displayCategory(category string, str *Strings) string {
 		return str.Uncategorized
 	}
 	return category
+}
+func displayWorkspacePath(value string, str *Strings) string {
+	if value == "" {
+		return str.LegacyWorkspace
+	}
+	return value
 }
 
 func displayPath(value string, str *Strings) string {

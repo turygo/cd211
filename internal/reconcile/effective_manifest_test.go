@@ -65,10 +65,6 @@ func TestVerifyAndRecordMovesAndVerifiesSingleFileAtEffectivePath(t *testing.T) 
 		t.Fatal(err)
 	}
 	wantPath := filepath.Join(savePath, effectivePath)
-	wantPath, err = filepath.EvalSymlinks(wantPath)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if download.ContentPath != wantPath || download.TotalSize != 7 {
 		t.Fatalf("verified download = %+v, want content path %q and size 7", download, wantPath)
 	}
@@ -105,10 +101,6 @@ func TestVerifyAndRecordKeepsUnrenamedSingleFileBehavior(t *testing.T) {
 	}
 
 	if err := scheduler.verifyAndRecord(context.Background(), &download); err != nil {
-		t.Fatal(err)
-	}
-	contentPath, err = filepath.EvalSymlinks(contentPath)
-	if err != nil {
 		t.Fatal(err)
 	}
 	if download.ContentPath != contentPath || download.TotalSize != 7 {
@@ -148,10 +140,7 @@ func TestVerifyAndRecordKeepsMultiFileRootWithEffectivePaths(t *testing.T) {
 	if err := scheduler.verifyAndRecord(context.Background(), &download); err != nil {
 		t.Fatal(err)
 	}
-	wantRoot, err := filepath.EvalSymlinks(torrentRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
+	wantRoot := torrentRoot
 	if download.ContentPath != wantRoot || download.TotalSize != 7 {
 		t.Fatalf("verified download = %+v, want content root %q and size 7", download, wantRoot)
 	}

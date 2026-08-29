@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -137,6 +138,8 @@ type fakeFilesystem struct {
 	verifyUnknownType func(string, string) (fsafe.UnknownContent, error)
 	size              int64
 	delete            func(string, string) error
+	prepareWorkspace  func(string, string) (string, error)
+	deleteWorkspace   func(string, string) error
 	plans             []fsafe.FilePlan
 }
 
@@ -162,18 +165,90 @@ func (f *fakeFilesystem) Delete(content, save string) error {
 	}
 	return f.delete(content, save)
 }
+func (f *fakeFilesystem) PrepareWorkspace(savePath, hash string) (string, error) {
+	if f.prepareWorkspace == nil {
+		return fsafe.WorkspacePath(savePath, hash)
+	}
+	return f.prepareWorkspace(savePath, hash)
+}
 
+func (f *fakeFilesystem) DeleteWorkspace(savePath, hash string) error {
+	if f.deleteWorkspace == nil {
+		return nil
+	}
+	return f.deleteWorkspace(savePath, hash)
+}
 func baseDownload(state domain.State, now time.Time) domain.Download {
 	return domain.Download{Hash: "0123456789012345678901234567890123456789", Name: "payload", SourceKind: domain.SourceMagnet, SubmissionURI: "magnet:?xt=urn:btih:0123456789012345678901234567890123456789", CloudFolder: "/cloud", SavePath: "/downloads", CloudResultPath: "/cloud/payload", State: state, PhaseStartedAt: now}
 }
 
-func testScheduler(t *testing.T, clock *fakeClock, repo *fakeRepository, cloud *fakeCloud, files *fakeFilesystem) *Scheduler {
+func testScheduler(t *testing.T, clock *fakeClock, repo Repository, cloud *fakeCloud, files Filesystem) *Scheduler {
 	t.Helper()
 	s, err := New(Config{Owner: "worker", LeaseDuration: time.Minute, PollInterval: 10 * time.Second, OfflineTimeout: time.Hour, CopyTimeout: time.Hour, VerifyTimeout: time.Hour, WorkerCount: 1}, repo, cloud, files, clock, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return s
+}
+
+func retryFailedCopy(t *testing.T, now time.Time, download domain.Download) (*store.Store, domain.Download) {
+	t.Helper()
+	ctx := context.Background()
+	repository, err := store.Open(ctx, t.TempDir()+"/store.db")
+	if err != nil {
+		t.Fatalf("Open(): %v", err)
+	}
+	t.Cleanup(func() {
+		if err := repository.Close(); err != nil {
+			t.Errorf("Close(): %v", err)
+		}
+	})
+	nextRun := now
+	download.State = domain.StateAccepted
+	download.NextRunAt = &nextRun
+	download.CreatedAt = now
+	download.UpdatedAt = now
+	if _, inserted, err := repository.CreateSubmission(ctx, domain.Submission{Download: download}); err != nil || !inserted {
+		t.Fatalf("CreateSubmission(): inserted=%t err=%v", inserted, err)
+	}
+	claim, err := repository.ClaimDue(ctx, "seed", now, time.Minute)
+	if err != nil || claim == nil {
+		t.Fatalf("ClaimDue(seed) = (%+v, %v)", claim, err)
+	}
+	failed := claim.Download
+	failed.State = domain.StateFailed
+	failed.LastError = domain.ProblemText(domain.ProblemCopyTaskFailed)
+	failed.LastErrorCode = string(domain.ProblemCopyTaskFailed)
+	failed.NextRunAt = nil
+	failed.UpdatedAt = now.Add(time.Second)
+	if err := repository.CommitClaim(ctx, *claim, failed); err != nil {
+		t.Fatalf("CommitClaim(failed): %v", err)
+	}
+	retryTime := now
+	if err := repository.Retry(ctx, failed.Hash, domain.StateSubmittingCopy, retryTime); err != nil {
+		t.Fatalf("Retry(): %v", err)
+	}
+	retried, err := repository.GetDownload(ctx, failed.Hash)
+	if err != nil {
+		t.Fatalf("GetDownload(): %v", err)
+	}
+	if retried.State != domain.StateSubmittingCopy {
+		t.Fatalf("retried state = %s, want SUBMITTING_COPY", retried.State)
+	}
+	return repository, retried
+}
+
+func storeStep(t *testing.T, scheduler *Scheduler, repository *store.Store, hash string) domain.Download {
+	t.Helper()
+	claimed, err := scheduler.Step(context.Background())
+	if err != nil || !claimed {
+		t.Fatalf("Step() = %v, %v", claimed, err)
+	}
+	download, err := repository.GetDownload(context.Background(), hash)
+	if err != nil {
+		t.Fatalf("GetDownload(after Step): %v", err)
+	}
+	return download
 }
 
 func TestNewValidatesConfigAndTypedNilDependencies(t *testing.T) {
@@ -722,6 +797,14 @@ func TestRetryAfterLocalVerificationFailureRemovesStaleCopy(t *testing.T) {
 		DownloadHash: hash, Index: 0, RelativePath: sourceName, Size: 42,
 	}}}
 	cloud, files := defaults()
+	cancelCalls := 0
+	cloud.cancelCopy = func(_ context.Context, source, destination string) error {
+		cancelCalls++
+		if source != copySource || destination != savePath {
+			t.Fatalf("CancelCopy(%q, %q), want old legacy identity", source, destination)
+		}
+		return nil
+	}
 	ensureCalls, verifyCalls := 0, 0
 	deleted := false
 	cloud.ensureCopy = func(_ context.Context, spec clouddrive.CopySpec) (clouddrive.CopyTask, error) {
@@ -756,14 +839,66 @@ func TestRetryAfterLocalVerificationFailureRemovesStaleCopy(t *testing.T) {
 		LastUpstreamStatus: domain.UpstreamCopyCompleted, PhaseStartedAt: now,
 	}
 	scheduler := testScheduler(t, &fakeClock{now: now}, repo, cloud, files)
-	for index := range 4 {
+	for index := range 5 {
 		download = step(t, scheduler, repo, download)
-		if index < 3 {
+		if index < 4 {
 			download.NextRunAt = nil
 		}
 	}
-	if !deleted || ensureCalls != 1 || verifyCalls != 2 || download.State != domain.StateCompleted {
-		t.Fatalf("retry recovery = deleted:%t ensure:%d verify:%d download:%+v", deleted, ensureCalls, verifyCalls, download)
+	if !deleted || cancelCalls != 1 || ensureCalls != 1 || verifyCalls != 2 || download.State != domain.StateCompleted {
+		t.Fatalf("retry recovery = deleted:%t cancel:%d ensure:%d verify:%d download:%+v", deleted, cancelCalls, ensureCalls, verifyCalls, download)
+	}
+}
+func TestCompletedCopyRetryCancelsBeforeWorkspaceCleanup(t *testing.T) {
+	now := time.Date(2026, 8, 29, 14, 0, 0, 0, time.UTC)
+	hash := "0123456789abcdef0123456789abcdef01234567"
+	savePath := "/downloads"
+	workspace, err := fsafe.WorkspacePath(savePath, hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cloud, files := defaults()
+	var events []string
+	cloud.cancelCopy = func(_ context.Context, source, destination string) error {
+		events = append(events, "cancel:"+source+":"+destination)
+		return nil
+	}
+	files.deleteWorkspace = func(save, gotHash string) error {
+		events = append(events, "cleanup:"+save+":"+gotHash)
+		return nil
+	}
+	cloud.ensureCopy = func(_ context.Context, spec clouddrive.CopySpec) (clouddrive.CopyTask, error) {
+		events = append(events, "ensure:"+spec.SourcePath+":"+spec.DestinationPath)
+		return clouddrive.CopyTask{SourcePath: spec.SourcePath, DestinationPath: spec.DestinationPath, State: clouddrive.CopyPending}, nil
+	}
+	download := domain.Download{
+		Hash: hash, Name: "payload", SourceKind: domain.SourceMagnet,
+		SubmissionURI: "magnet:?xt=urn:btih:" + hash, CloudFolder: "/cloud",
+		SavePath: savePath, WorkspacePath: workspace,
+		CloudResultPath: "/cloud/payload",
+		CopySourcePath:  "/cloud/payload", DestinationName: "payload.mkv",
+		LastUpstreamStatus: domain.UpstreamCopyCompleted, PhaseStartedAt: now,
+	}
+	repo, _ := retryFailedCopy(t, now, download)
+	scheduler := testScheduler(t, &fakeClock{now: now}, repo, cloud, files)
+
+	download = storeStep(t, scheduler, repo, hash)
+	if download.LastUpstreamStatus != cleanupCancelled+"|"+domain.UpstreamCopyCompleted {
+		t.Fatalf("cancel marker = %q", download.LastUpstreamStatus)
+	}
+	download = storeStep(t, scheduler, repo, hash)
+	download = storeStep(t, scheduler, repo, hash)
+	download = storeStep(t, scheduler, repo, hash)
+	want := []string{
+		"cancel:/cloud/payload:" + workspace,
+		"cleanup:" + savePath + ":" + hash,
+		"ensure:/cloud/payload:" + workspace,
+	}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("retry operation order = %v, want %v", events, want)
+	}
+	if download.State != domain.StateWaitingCopy {
+		t.Fatalf("retry state = %s, want WAITING_COPY", download.State)
 	}
 }
 

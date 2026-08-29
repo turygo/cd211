@@ -255,6 +255,185 @@ func TestDomainEventsSequenceMigrationPreservesCanonicalCursor(t *testing.T) {
 	}
 }
 
+func TestWorkspaceMigrationRejectsRetainedLegacyCD211Destination(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "legacy-workspace.sqlite")
+	db := openDatabaseAtMigration(t, databasePath, 14)
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO downloads (
+			hash, name, source_kind, submission_uri, category, cloud_folder,
+			save_path, destination_name, content_path, state, phase_started_at, created_at, updated_at
+		) VALUES (?, ?, 'magnet', ?, '', '/cloud', '/downloads', '.cd211',
+		          '/downloads/.cd211', 'DELETED', ?, ?, ?)
+	`, strings.Repeat("a", 40), "legacy", "magnet:?xt=urn:btih:"+strings.Repeat("a", 40), now, now, now)
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("insert legacy .cd211 fixture: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy workspace fixture: %v", err)
+	}
+
+	if migrated, err := Open(ctx, databasePath); err == nil {
+		_ = migrated.Close()
+		t.Fatal("Open() accepted a retained legacy .cd211 destination")
+	}
+
+	raw, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatalf("reopen failed migration fixture: %v", err)
+	}
+	defer raw.Close()
+	var columns int
+	if err := raw.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('downloads') WHERE name = 'workspace_path'`).Scan(&columns); err != nil {
+		t.Fatalf("inspect rolled-back workspace column: %v", err)
+	}
+	if columns != 0 {
+		t.Fatalf("workspace migration partially applied: workspace_path columns = %d", columns)
+	}
+}
+func TestWorkspaceMigrationRejectsReservedLogicalSavePaths(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name     string
+		savePath string
+		category bool
+	}{
+		{name: "download save root", savePath: "/downloads/.cd211"},
+		{name: "download quarantine", savePath: "/downloads/.cd211/.quarantine"},
+		{name: "category save root", savePath: "/downloads/.cd211/category", category: true},
+		{name: "category quarantine", savePath: "/downloads/.cd211/.quarantine", category: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			databasePath := filepath.Join(t.TempDir(), "legacy-workspace.sqlite")
+			db := openDatabaseAtMigration(t, databasePath, 14)
+			now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+			if test.category {
+				_, err := db.ExecContext(ctx, `
+					INSERT INTO categories (name, cloud_path, save_path, enabled, created_at, updated_at)
+					VALUES ('reserved', '/cloud', ?, 1, ?, ?)
+				`, test.savePath, now, now)
+				if err != nil {
+					_ = db.Close()
+					t.Fatalf("insert reserved category fixture: %v", err)
+				}
+			} else {
+				insertLegacyWorkspaceDownload(t, db, strings.Repeat("a", 40), test.savePath, "ACCEPTED", nil)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatalf("close legacy workspace fixture: %v", err)
+			}
+
+			if migrated, err := Open(ctx, databasePath); err == nil {
+				_ = migrated.Close()
+				t.Fatal("Open() accepted a reserved logical save path")
+			}
+			assertWorkspaceMigrationRolledBack(t, databasePath)
+		})
+	}
+}
+
+func TestWorkspaceMigrationAllowsUnretainedDeletedReservedSavePath(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "legacy-workspace.sqlite")
+	db := openDatabaseAtMigration(t, databasePath, 14)
+	hash := strings.Repeat("b", 40)
+	insertLegacyWorkspaceDownload(t, db, hash, "/downloads/.cd211", "DELETED", nil)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy workspace fixture: %v", err)
+	}
+
+	store, err := Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("Open() rejected an unretained deleted reserved save path: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	download, err := store.GetDownload(ctx, hash)
+	if err != nil {
+		t.Fatalf("GetDownload() after migration: %v", err)
+	}
+	if download.WorkspacePath != "" {
+		t.Fatalf("deleted reserved save path was backfilled to %q", download.WorkspacePath)
+	}
+}
+func TestWorkspaceMigrationRejectsRetainedDeletedReservedSavePath(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "legacy-workspace.sqlite")
+	db := openDatabaseAtMigration(t, databasePath, 14)
+	contentPath := "/downloads/.cd211/content"
+	insertLegacyWorkspaceDownload(t, db, strings.Repeat("d", 40), "/downloads/.cd211", "DELETED", &contentPath)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy workspace fixture: %v", err)
+	}
+
+	if migrated, err := Open(ctx, databasePath); err == nil {
+		_ = migrated.Close()
+		t.Fatal("Open() accepted a retained deleted reserved save path")
+	}
+	assertWorkspaceMigrationRolledBack(t, databasePath)
+}
+
+func TestWorkspaceMigrationAllowsNearReservedSavePath(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "legacy-workspace.sqlite")
+	db := openDatabaseAtMigration(t, databasePath, 14)
+	hash := strings.Repeat("c", 40)
+	insertLegacyWorkspaceDownload(t, db, hash, "/downloads/.cd211-backup", "ACCEPTED", nil)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy workspace fixture: %v", err)
+	}
+
+	store, err := Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("Open() rejected a near-reserved save path: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	download, err := store.GetDownload(ctx, hash)
+	if err != nil {
+		t.Fatalf("GetDownload() after migration: %v", err)
+	}
+	wantWorkspace := "/downloads/.cd211-backup/.cd211/" + hash
+	if download.WorkspacePath != wantWorkspace {
+		t.Fatalf("workspace path = %q, want %q", download.WorkspacePath, wantWorkspace)
+	}
+}
+
+func insertLegacyWorkspaceDownload(t *testing.T, db *sql.DB, hash, savePath, state string, contentPath *string) {
+	t.Helper()
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	var content sql.NullString
+	if contentPath != nil {
+		content = sql.NullString{String: *contentPath, Valid: true}
+	}
+	_, err := db.ExecContext(context.Background(), `
+		INSERT INTO downloads (
+			hash, name, source_kind, submission_uri, category, cloud_folder,
+			save_path, destination_name, content_path, state, phase_started_at, created_at, updated_at
+		) VALUES (?, ?, 'magnet', ?, '', '/cloud', ?, NULL, ?, ?, ?, ?, ?)
+	`, hash, "legacy", "magnet:?xt=urn:btih:"+hash, savePath, content, state, now, now, now)
+	if err != nil {
+		t.Fatalf("insert legacy workspace fixture: %v", err)
+	}
+}
+
+func assertWorkspaceMigrationRolledBack(t *testing.T, databasePath string) {
+	t.Helper()
+	raw, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatalf("reopen failed migration fixture: %v", err)
+	}
+	defer raw.Close()
+	var columns int
+	if err := raw.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM pragma_table_info('downloads') WHERE name = 'workspace_path'`).Scan(&columns); err != nil {
+		t.Fatalf("inspect rolled-back workspace column: %v", err)
+	}
+	if columns != 0 {
+		t.Fatalf("workspace migration partially applied: workspace_path columns = %d", columns)
+	}
+}
+
 func openDatabaseAtMigration(t *testing.T, databasePath string, version int64) *sql.DB {
 	t.Helper()
 	ctx := context.Background()

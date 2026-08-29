@@ -7,12 +7,14 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/turygo/cd211/internal/creds"
+	"github.com/turygo/cd211/internal/domain"
 	"github.com/turygo/cd211/internal/reconcile"
 	"github.com/turygo/cd211/internal/session"
 	"github.com/turygo/cd211/internal/settings"
@@ -46,6 +48,218 @@ func openApplyStore(t *testing.T) *store.Store {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	return st
+}
+func persistedRootAlias(t *testing.T, root, name string) string {
+	t.Helper()
+	target := filepath.Join(root, ".cd211", "0123456789012345678901234567890123456789")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("MkdirAll reserved target: %v", err)
+	}
+	alias := filepath.Join(root, name)
+	if err := os.Symlink(target, alias); err != nil {
+		t.Fatalf("Symlink persisted root alias: %v", err)
+	}
+	return alias
+}
+
+func TestManagerBuildRejectsPersistedRootAliasBeforeActivation(t *testing.T) {
+	ctx := context.Background()
+	st := openApplyStore(t)
+	cfg := applyTestConfig(t)
+	alias := persistedRootAlias(t, cfg.LocalRoot, "legacy")
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	if _, err := st.UpsertCategory(ctx, domain.Category{
+		Name: "legacy", CloudPath: "/cloud/legacy", SavePath: alias,
+		Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("UpsertCategory: %v", err)
+	}
+
+	m := newManager(&switchHandler{}, st, nil, reconcile.RealClock{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if _, err := m.build(ctx, cfg); err == nil {
+		t.Fatal("build accepted persisted root alias")
+	}
+	if m.currentGeneration() != nil {
+		t.Fatal("failed build activated a runtime generation")
+	}
+}
+
+func TestManagerApplyRejectsPersistedRootAliasWithoutSwapping(t *testing.T) {
+	ctx := context.Background()
+	st := openApplyStore(t)
+	cfg := applyTestConfig(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	sessions, err := session.New(st, reconcile.RealClock{}, rand.Reader, sessionTTL, sessionRefreshInterval, sessionCapacity)
+	if err != nil {
+		t.Fatalf("session.New: %v", err)
+	}
+	m := newManager(&switchHandler{}, st, sessions, reconcile.RealClock{}, logger)
+	first, err := m.build(ctx, cfg)
+	if err != nil {
+		t.Fatalf("build first generation: %v", err)
+	}
+	m.activate(first)
+	defer m.shutdown()
+
+	alias := persistedRootAlias(t, cfg.LocalRoot, "legacy")
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	if _, err := st.UpsertCategory(ctx, domain.Category{
+		Name: "legacy", CloudPath: "/cloud/legacy", SavePath: alias,
+		Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("UpsertCategory: %v", err)
+	}
+	if err := m.Apply(ctx, cfg); err == nil {
+		t.Fatal("Apply accepted persisted root alias")
+	}
+	if got := m.currentGeneration(); got != first {
+		t.Fatal("failed Apply swapped out the active runtime generation")
+	}
+}
+
+func TestManagerBuildAllowsPersistedRootEqualityAndNearName(t *testing.T) {
+	ctx := context.Background()
+	st := openApplyStore(t)
+	cfg := applyTestConfig(t)
+	near := filepath.Join(cfg.LocalRoot, ".cd211-backup")
+	if err := os.Mkdir(near, 0o755); err != nil {
+		t.Fatalf("Mkdir near-name root: %v", err)
+	}
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	for name, savePath := range map[string]string{"root": cfg.LocalRoot, "near": near} {
+		if _, err := st.UpsertCategory(ctx, domain.Category{
+			Name: name, CloudPath: "/cloud/" + name, SavePath: savePath,
+			Enabled: true, CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatalf("UpsertCategory(%s): %v", name, err)
+		}
+	}
+
+	sessions, err := session.New(st, reconcile.RealClock{}, rand.Reader, sessionTTL, sessionRefreshInterval, sessionCapacity)
+	if err != nil {
+		t.Fatalf("session.New: %v", err)
+	}
+	m := newManager(&switchHandler{}, st, sessions, reconcile.RealClock{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	generation, err := m.build(ctx, cfg)
+	if err != nil {
+		t.Fatalf("build valid persisted roots: %v", err)
+	}
+	m.activate(generation)
+	m.shutdown()
+}
+
+func TestManagerBuildAppliesRetainedDownloadPreflightPredicate(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+
+	t.Run("live alias rejected", func(t *testing.T) {
+		st := openApplyStore(t)
+		cfg := applyTestConfig(t)
+		alias := persistedRootAlias(t, cfg.LocalRoot, "legacy")
+		hash := "0123456789012345678901234567890123456789"
+		nextRun := now
+		_, _, err := st.CreateSubmission(ctx, domain.Submission{
+			Download: domain.Download{
+				Hash: hash, Name: "live", SourceKind: domain.SourceMagnet,
+				SubmissionURI: "magnet:?xt=urn:btih:" + hash, CloudFolder: "/cloud",
+				SavePath: alias, TotalSize: 1, State: domain.StateAccepted,
+				PhaseStartedAt: now, NextRunAt: &nextRun, CreatedAt: now, UpdatedAt: now,
+			},
+			Files: []domain.DownloadFile{{DownloadHash: hash, Index: 0, RelativePath: "file", Size: 1}},
+		})
+		if err != nil {
+			t.Fatalf("CreateSubmission: %v", err)
+		}
+
+		m := newManager(&switchHandler{}, st, nil, reconcile.RealClock{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		if _, err := m.build(ctx, cfg); err == nil {
+			t.Fatal("build accepted live download alias")
+		}
+	})
+
+	t.Run("ordinary deleted alias exempt", func(t *testing.T) {
+		st := openApplyStore(t)
+		cfg := applyTestConfig(t)
+		alias := persistedRootAlias(t, cfg.LocalRoot, "legacy")
+		hash := "1234567890123456789012345678901234567890"
+		nextRun := now
+		created, inserted, err := st.CreateSubmission(ctx, domain.Submission{
+			Download: domain.Download{
+				Hash: hash, Name: "deleted", SourceKind: domain.SourceMagnet,
+				SubmissionURI: "magnet:?xt=urn:btih:" + hash, CloudFolder: "/cloud",
+				SavePath: alias, TotalSize: 1, State: domain.StateAccepted,
+				PhaseStartedAt: now, NextRunAt: &nextRun, CreatedAt: now, UpdatedAt: now,
+			},
+			Files: []domain.DownloadFile{{DownloadHash: hash, Index: 0, RelativePath: "file", Size: 1}},
+		})
+		if err != nil || !inserted {
+			t.Fatalf("CreateSubmission: inserted=%t err=%v", inserted, err)
+		}
+		if err := st.RequestDelete(ctx, []string{created.Hash}, false, now.Add(time.Minute)); err != nil {
+			t.Fatalf("RequestDelete: %v", err)
+		}
+		claim, err := st.ClaimDue(ctx, "runtime-test", now.Add(2*time.Minute), time.Minute)
+		if err != nil || claim == nil {
+			t.Fatalf("ClaimDue: claim=%+v err=%v", claim, err)
+		}
+		deleted := claim.Download
+		deleted.State = domain.StateDeleted
+		deleted.UpdatedAt = now.Add(3 * time.Minute)
+		if err := st.CommitClaim(ctx, *claim, deleted); err != nil {
+			t.Fatalf("CommitClaim: %v", err)
+		}
+
+		sessions, err := session.New(st, reconcile.RealClock{}, rand.Reader, sessionTTL, sessionRefreshInterval, sessionCapacity)
+		if err != nil {
+			t.Fatalf("session.New: %v", err)
+		}
+		m := newManager(&switchHandler{}, st, sessions, reconcile.RealClock{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		generation, err := m.build(ctx, cfg)
+		if err != nil {
+			t.Fatalf("build rejected ordinary deleted alias: %v", err)
+		}
+		m.activate(generation)
+		m.shutdown()
+	})
+
+	t.Run("retained deleted alias rejected", func(t *testing.T) {
+		st := openApplyStore(t)
+		cfg := applyTestConfig(t)
+		alias := persistedRootAlias(t, cfg.LocalRoot, "legacy")
+		hash := "2345678901234567890123456789012345678901"
+		nextRun := now
+		created, inserted, err := st.CreateSubmission(ctx, domain.Submission{
+			Download: domain.Download{
+				Hash: hash, Name: "retained", SourceKind: domain.SourceMagnet,
+				SubmissionURI: "magnet:?xt=urn:btih:" + hash, CloudFolder: "/cloud",
+				SavePath: alias, TotalSize: 1, State: domain.StateAccepted,
+				PhaseStartedAt: now, NextRunAt: &nextRun, CreatedAt: now, UpdatedAt: now,
+			},
+			Files: []domain.DownloadFile{{DownloadHash: hash, Index: 0, RelativePath: "file", Size: 1}},
+		})
+		if err != nil || !inserted {
+			t.Fatalf("CreateSubmission: inserted=%t err=%v", inserted, err)
+		}
+		if err := st.RequestDelete(ctx, []string{created.Hash}, false, now.Add(time.Minute)); err != nil {
+			t.Fatalf("RequestDelete: %v", err)
+		}
+		claim, err := st.ClaimDue(ctx, "runtime-test", now.Add(2*time.Minute), time.Minute)
+		if err != nil || claim == nil {
+			t.Fatalf("ClaimDue: claim=%+v err=%v", claim, err)
+		}
+		deleted := claim.Download
+		deleted.State = domain.StateDeleted
+		deleted.ContentPath = "/cloud/content"
+		deleted.UpdatedAt = now.Add(3 * time.Minute)
+		if err := st.CommitClaim(ctx, *claim, deleted); err != nil {
+			t.Fatalf("CommitClaim: %v", err)
+		}
+
+		m := newManager(&switchHandler{}, st, nil, reconcile.RealClock{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		if _, err := m.build(ctx, cfg); err == nil {
+			t.Fatal("build accepted retained deleted download alias")
+		}
+	})
 }
 
 func TestManagerApplySwapsGenerations(t *testing.T) {

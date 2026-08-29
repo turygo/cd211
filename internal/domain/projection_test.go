@@ -230,3 +230,20 @@ func validDownload(state State) Download {
 func projectionTime() time.Time {
 	return time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
 }
+func TestValidateDownloadWorkspacePath(t *testing.T) {
+	download := validDownload(StateAccepted)
+	download.WorkspacePath = "/downloads/.cd211/" + download.Hash
+	if err := ValidateDownload(download); err != nil {
+		t.Fatalf("valid workspace path rejected: %v", err)
+	}
+	for _, workspace := range []string{
+		"/downloads/.cd211/" + strings.ToUpper(download.Hash),
+		"/downloads/workspace",
+		"relative",
+	} {
+		download.WorkspacePath = workspace
+		if err := ValidateDownload(download); err == nil {
+			t.Errorf("workspace path %q accepted", workspace)
+		}
+	}
+}

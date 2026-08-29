@@ -537,7 +537,7 @@ func TestCategoryReservationConflictPrecedesFilesystemPreparation(t *testing.T) 
 	}
 	harness.filesystem.prepareCalls = 0
 	response := doForm(t, harness.api, http.MethodPost, "/api/v2/torrents/createCategory", url.Values{"category": {"blocked"}}, cookie)
-	if response.Code != http.StatusBadRequest || response.Body.String() != "Bad Request\n" {
+	if response.Code != http.StatusConflict || response.Body.String() != "Conflict\n" {
 		t.Fatalf("conflicting category = %d %q", response.Code, response.Body.String())
 	}
 	if harness.filesystem.prepareCalls != 0 {
@@ -686,6 +686,143 @@ func TestBase32MagnetDuplicateAndRedactionContract(t *testing.T) {
 	} {
 		if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "passkey") || strings.Contains(response.Body.String(), "secret") {
 			t.Fatalf("redacted response = %d %q", response.Code, response.Body.String())
+		}
+	}
+}
+
+func addContractTorrent(t *testing.T, harness *contractHarness, cookie *http.Cookie, torrent []byte) torrentmeta.Result {
+	t.Helper()
+	metadata, err := torrentmeta.ParseTorrent(torrent, harness.limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("torrents", "fixture.torrent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(torrent); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v2/torrents/add", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	harness.api.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("multipart add = %d %q", response.Code, response.Body.String())
+	}
+	return metadata
+}
+
+func TestQBTFileRenameIsScopedPerHash(t *testing.T) {
+	t.Parallel()
+	harness := newContractHarness(t)
+	cookie := harness.login(t)
+	first := addContractTorrent(t, harness, cookie, []byte("d4:infod6:lengthi3e4:name3:one12:piece lengthi16384e6:pieces20:01234567890123456789ee"))
+	second := addContractTorrent(t, harness, cookie, []byte("d4:infod6:lengthi3e4:name3:two12:piece lengthi16384e6:pieces20:11234567890123456789ee"))
+
+	for _, fixture := range []struct {
+		hash string
+		old  string
+	}{
+		{hash: first.Hash, old: "one"},
+		{hash: second.Hash, old: "two"},
+	} {
+		response := doForm(t, harness.api, http.MethodPost, "/api/v2/torrents/renameFile", url.Values{
+			"hash": {fixture.hash}, "oldPath": {fixture.old}, "newPath": {"shared.mkv"},
+		}, cookie)
+		if response.Code != http.StatusOK {
+			t.Fatalf("rename %s = %d %q", fixture.hash, response.Code, response.Body.String())
+		}
+		files := doRequest(t, harness.api, http.MethodGet, "/api/v2/torrents/files?hash="+fixture.hash, nil, cookie)
+		if files.Code != http.StatusOK || !strings.Contains(files.Body.String(), `"name":"shared.mkv"`) {
+			t.Fatalf("renamed files %s = %d %q", fixture.hash, files.Code, files.Body.String())
+		}
+	}
+}
+
+func TestQBTFileRenameRejectsIntraHashCollision(t *testing.T) {
+	t.Parallel()
+	harness := newContractHarness(t)
+	cookie := harness.login(t)
+	fixture := addContractTorrent(t, harness, cookie, []byte("d4:infod5:filesld6:lengthi3e4:pathl5:firsteed6:lengthi3e4:pathl6:secondeee4:name4:root12:piece lengthi16384e6:pieces20:01234567890123456789ee"))
+	response := doForm(t, harness.api, http.MethodPost, "/api/v2/torrents/renameFile", url.Values{
+		"hash": {fixture.Hash}, "oldPath": {"first"}, "newPath": {"second"},
+	}, cookie)
+	if response.Code != http.StatusConflict || response.Body.String() != "Conflict\n" {
+		t.Fatalf("intra-hash rename = %d %q, want 409 Conflict", response.Code, response.Body.String())
+	}
+}
+
+func TestQBTProjectionKeepsLogicalSavePathAndWorkspaceContentPath(t *testing.T) {
+	t.Parallel()
+	harness := newContractHarness(t)
+	cookie := harness.login(t)
+	now := harness.clock.now
+	if _, err := harness.repository.UpsertCategory(context.Background(), domain.Category{
+		Name: "movies", CloudPath: "/cloud/movies", SavePath: "/local/movies", Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	hash := "abcdef0123456789abcdef0123456789abcdef01"
+	if response := doForm(t, harness.api, http.MethodPost, "/api/v2/torrents/add", url.Values{
+		"urls":     {"magnet:?xt=urn:btih:" + hash + "&dn=Logical"},
+		"category": {"movies"},
+	}, cookie); response.Code != http.StatusOK {
+		t.Fatalf("add = %d %q", response.Code, response.Body.String())
+	}
+	advanceToCompletedAtWorkspace(t, harness.repository, now, hash)
+	response := doRequest(t, harness.api, http.MethodGet, "/api/v2/torrents/info?category=movies", nil, cookie)
+	if response.Code != http.StatusOK {
+		t.Fatalf("info = %d %q", response.Code, response.Body.String())
+	}
+	var info []torrentInfo
+	if err := json.Unmarshal(response.Body.Bytes(), &info); err != nil {
+		t.Fatalf("decode info = %v", err)
+	}
+	if len(info) != 1 || info[0].SavePath != "/local/movies/" || info[0].ContentPath != "/local/movies/.cd211/"+hash+"/Logical" {
+		t.Fatalf("projected paths = %+v", info)
+	}
+	properties := doRequest(t, harness.api, http.MethodGet, "/api/v2/torrents/properties?hash="+hash, nil, cookie)
+	var projected torrentProperties
+	if properties.Code != http.StatusOK || json.Unmarshal(properties.Body.Bytes(), &projected) != nil || projected.SavePath != "/local/movies/" {
+		t.Fatalf("properties paths = %d %q", properties.Code, properties.Body.String())
+	}
+}
+
+func advanceToCompletedAtWorkspace(t *testing.T, repository *store.Store, now time.Time, hash string) {
+	t.Helper()
+	states := []domain.State{domain.StateSubmittingOffline, domain.StateWaitingOffline, domain.StateSubmittingCopy, domain.StateWaitingCopy, domain.StateVerifyingLocal, domain.StateCompleted}
+	for _, state := range states {
+		claim, err := repository.ClaimDue(context.Background(), "http-contract-worker", now, time.Minute)
+		if err != nil || claim == nil {
+			t.Fatalf("claim for %s = (%+v, %v)", state, claim, err)
+		}
+		next := claim.Download
+		next.State = state
+		next.UpdatedAt = now
+		next.PhaseStartedAt = now
+		next.NextRunAt = &now
+		if state == domain.StateSubmittingCopy || state == domain.StateWaitingCopy || state == domain.StateVerifyingLocal || state == domain.StateCompleted {
+			next.CloudResultPath = "/cloud/Logical"
+			next.CopySourcePath = "/cloud/Logical"
+		}
+		if state == domain.StateVerifyingLocal || state == domain.StateCompleted {
+			next.DestinationName = "Logical"
+			next.ContentPath = next.WorkspacePath + "/Logical"
+		}
+		if state == domain.StateCompleted {
+			next.NextRunAt = nil
+			next.CompletedAt = &now
+			next.QbitProgress = 1
+		}
+		if err := repository.CommitClaim(context.Background(), *claim, next); err != nil {
+			t.Fatalf("commit %s: %v", state, err)
 		}
 	}
 }

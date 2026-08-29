@@ -12,6 +12,7 @@ import (
 
 	"github.com/turygo/cd211/internal/clouddrive"
 	"github.com/turygo/cd211/internal/creds"
+	"github.com/turygo/cd211/internal/domain"
 	"github.com/turygo/cd211/internal/fsafe"
 	"github.com/turygo/cd211/internal/httpapi"
 	"github.com/turygo/cd211/internal/nativeapi"
@@ -184,6 +185,10 @@ func (m *manager) build(ctx context.Context, cfg settings.Config) (*runtime, err
 	}
 	cfg.LocalRoot = files.LocalRoot()
 
+	if err := m.validatePersistedRoots(ctx, files); err != nil {
+		return nil, err
+	}
+
 	cloud, err := clouddrive.Dial(cfg.CD2Address, cfg.CD2Username, cfg.CD2Password, cloudRPCTimeout, cfg.CD2Insecure)
 	if err != nil {
 		return nil, fmt.Errorf("clouddrive dial: %w", err)
@@ -285,6 +290,32 @@ func (m *manager) build(ctx context.Context, cfg settings.Config) (*runtime, err
 		cancel:  cancel,
 		done:    make(chan struct{}),
 	}, nil
+}
+
+func (m *manager) validatePersistedRoots(ctx context.Context, files *fsafe.Verifier) error {
+	categories, err := m.store.ListCategories(ctx)
+	if err != nil {
+		return fmt.Errorf("persisted root preflight categories: %w", err)
+	}
+	for _, category := range categories {
+		if _, err := files.ValidatePersistedRoot(category.SavePath); err != nil {
+			return fmt.Errorf("persisted root preflight category %q save path %q: %w", category.Name, category.SavePath, err)
+		}
+	}
+
+	downloads, err := m.store.ListAllDownloads(ctx)
+	if err != nil {
+		return fmt.Errorf("persisted root preflight downloads: %w", err)
+	}
+	for _, download := range downloads {
+		if download.State == domain.StateDeleted && (download.ContentPath == "" || download.DeleteFilesRequested) {
+			continue
+		}
+		if _, err := files.ValidatePersistedRoot(download.SavePath); err != nil {
+			return fmt.Errorf("persisted root preflight download %q save path %q: %w", download.Hash, download.SavePath, err)
+		}
+	}
+	return nil
 }
 
 // setupModeMux serves the HTTP surface while setup has not completed: the

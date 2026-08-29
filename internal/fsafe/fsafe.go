@@ -46,11 +46,17 @@ func New(localRoot string) (*Verifier, error) {
 		return nil, fmt.Errorf("fsafe: local root must be absolute")
 	}
 	configuredRoot := filepath.Clean(localRoot)
+	if err := rejectReservedComponent(configuredRoot); err != nil {
+		return nil, err
+	}
 	evaluatedRoot, err := filepath.EvalSymlinks(configuredRoot)
 	if err != nil {
 		return nil, fmt.Errorf("fsafe: resolve local root: %w", err)
 	}
 	evaluatedRoot = filepath.Clean(evaluatedRoot)
+	if err := rejectReservedComponent(evaluatedRoot); err != nil {
+		return nil, err
+	}
 
 	info, err := os.Stat(evaluatedRoot)
 	if err != nil {
@@ -68,12 +74,31 @@ func (v *Verifier) LocalRoot() string {
 	return v.localRoot
 }
 
+// ValidatePersistedRoot validates a configured save root without changing the filesystem.
+// Unlike ResolveSaveRoot, the local root itself is a valid persisted root.
+func (v *Verifier) ValidatePersistedRoot(savePath string) (string, error) {
+	if err := validateExternalSaveRoot(savePath); err != nil {
+		return "", err
+	}
+	evaluated, err := v.resolveSaveRoot(savePath)
+	if err != nil {
+		return "", err
+	}
+	if err := rejectReservedComponent(evaluated); err != nil {
+		return "", err
+	}
+	return filepath.Clean(evaluated), nil
+}
+
 // ResolveSaveRoot returns the canonical save root without changing the filesystem.
 func (v *Verifier) ResolveSaveRoot(savePath string) (string, bool, error) {
-	if !filepath.IsAbs(savePath) || filepath.Clean(savePath) != savePath {
-		return "", false, fmt.Errorf("fsafe: save root must be an absolute clean path")
+	if err := validateExternalSaveRoot(savePath); err != nil {
+		return "", false, err
 	}
 	if evaluated, err := v.resolveSaveRoot(savePath); err == nil {
+		if err := rejectReservedComponent(evaluated); err != nil {
+			return "", false, err
+		}
 		if evaluated == v.localRoot {
 			return "", false, fmt.Errorf("fsafe: save root must be below local root")
 		}
@@ -89,6 +114,9 @@ func (v *Verifier) ResolveSaveRoot(savePath string) (string, bool, error) {
 		evaluated, err := filepath.EvalSymlinks(current)
 		if err == nil {
 			evaluatedParent = filepath.Clean(evaluated)
+			if err := rejectReservedComponent(evaluatedParent); err != nil {
+				return "", false, err
+			}
 			break
 		}
 		if !errors.Is(err, fs.ErrNotExist) {
@@ -111,20 +139,64 @@ func (v *Verifier) ResolveSaveRoot(savePath string) (string, bool, error) {
 	for index := len(missing) - 1; index >= 0; index-- {
 		relative = filepath.Join(relative, missing[index])
 	}
-	return filepath.Join(v.localRoot, relative), false, nil
+	canonical := filepath.Join(v.localRoot, relative)
+	if err := rejectReservedComponent(canonical); err != nil {
+		return "", false, err
+	}
+	return canonical, false, nil
+}
+
+// validateExternalSaveRoot rejects reserved logical roots before any operation
+// can mutate the filesystem. Internal callers use resolveSaveRoot directly so
+// derived workspace paths remain valid roots.
+func validateExternalSaveRoot(savePath string) error {
+	if !filepath.IsAbs(savePath) || filepath.Clean(savePath) != savePath {
+		return fmt.Errorf("fsafe: save root must be an absolute clean path")
+	}
+	if err := rejectReservedComponent(savePath); err != nil {
+		return err
+	}
+	if evaluated, err := filepath.EvalSymlinks(savePath); err == nil {
+		if err := rejectReservedComponent(filepath.Clean(evaluated)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // saveRootMode lets CloudDrive2 copy into the staging directory and makes the
 // content it creates inherit the group, which is what allows CD211 to delete it
 // again. CD211 and CloudDrive2 must therefore share a group.
-const saveRootMode = os.ModeSetgid | 0o770
+const (
+	saveRootMode        = os.ModeSticky | os.ModeSetgid | 0o770
+	workspaceParentMode = os.ModeSetgid | 0o750
+	workspaceMode       = os.ModeSetgid | 0o770
+	quarantineMode      = 0o700
+)
 
-// PrepareSaveRoot creates a missing canonical staging directory. An existing
-// directory keeps the mode and owner it already has.
+// PrepareSaveRoot creates a missing canonical staging directory and hardens
+// the resulting directory for shared use.
 func (v *Verifier) PrepareSaveRoot(savePath string) (string, error) {
+	if err := validateExternalSaveRoot(savePath); err != nil {
+		return "", err
+	}
 	canonical, exists, err := v.ResolveSaveRoot(savePath)
-	if err != nil || exists {
-		return canonical, err
+	if err != nil {
+		return "", err
+	}
+	if exists {
+		root, evaluated, err := v.openSaveRoot(canonical)
+		if err != nil {
+			return "", err
+		}
+		defer root.Close()
+		if evaluated != canonical {
+			return "", fmt.Errorf("fsafe: save root changed during preparation")
+		}
+		if err := setRootMode(root, saveRootMode, "save root"); err != nil {
+			return "", err
+		}
+		return canonical, nil
 	}
 	relative, err := filepath.Rel(v.localRoot, canonical)
 	if err != nil || outsideRoot(relative) {
@@ -138,24 +210,13 @@ func (v *Verifier) PrepareSaveRoot(savePath string) (string, error) {
 	if err := root.MkdirAll(relative, 0o770); err != nil {
 		return "", fmt.Errorf("fsafe: create save root: %w", err)
 	}
-	// MkdirAll applies the process umask, so the group and setgid bits are set
-	// explicitly. The mode is applied through the descriptor of the directory
-	// that was just checked, which a path-based chmod cannot do without racing
-	// a symlink swap.
-	created, err := root.Open(relative)
+	created, err := root.OpenRoot(relative)
 	if err != nil {
 		return "", fmt.Errorf("fsafe: open save root: %w", err)
 	}
 	defer created.Close()
-	info, err := created.Stat()
-	if err != nil {
-		return "", fmt.Errorf("fsafe: inspect save root: %w", err)
-	}
-	if !info.IsDir() {
-		return "", fmt.Errorf("fsafe: save root is not a directory")
-	}
-	if err := created.Chmod(saveRootMode); err != nil {
-		return "", fmt.Errorf("fsafe: set save root mode: %w", err)
+	if err := setRootMode(created, saveRootMode, "save root"); err != nil {
+		return "", err
 	}
 	prepared, err := v.resolveSaveRoot(canonical)
 	if err != nil {
@@ -167,8 +228,334 @@ func (v *Verifier) PrepareSaveRoot(savePath string) (string, error) {
 	return prepared, nil
 }
 
+// WorkspacePath derives the isolated workspace for a torrent hash.
+func WorkspacePath(savePath, hash string) (string, error) {
+	if !filepath.IsAbs(savePath) || filepath.Clean(savePath) != savePath {
+		return "", fmt.Errorf("fsafe: save root must be an absolute clean path")
+	}
+	if err := validateWorkspaceHash(hash); err != nil {
+		return "", err
+	}
+	return filepath.Join(savePath, ".cd211", hash), nil
+}
+
+// PrepareWorkspace securely creates and validates the isolated workspace for
+// hash beneath savePath. The returned path preserves the logical save path.
+func (v *Verifier) PrepareWorkspace(savePath, hash string) (string, error) {
+	if err := validateExternalSaveRoot(savePath); err != nil {
+		return "", err
+	}
+	logicalWorkspacePath, err := WorkspacePath(savePath, hash)
+	if err != nil {
+		return "", err
+	}
+
+	saveRoot, _, err := v.openWorkspaceSaveRoot(savePath)
+	if err != nil {
+		return "", err
+	}
+	defer saveRoot.Close()
+
+	cdRoot, err := ensureWorkspaceDir(saveRoot, ".cd211", workspaceParentMode)
+	if err != nil {
+		return "", fmt.Errorf("fsafe: prepare workspace parent: %w", err)
+	}
+	defer cdRoot.Close()
+	cdInfo, err := saveRoot.Lstat(".cd211")
+	if err != nil {
+		return "", fmt.Errorf("fsafe: revalidate workspace parent: %w", err)
+	}
+	if err := sameRootDirectory(saveRoot, ".cd211", cdInfo, cdRoot); err != nil {
+		return "", err
+	}
+	workspaceRoot, err := ensureWorkspaceDir(cdRoot, hash, workspaceMode)
+	if err != nil {
+		return "", fmt.Errorf("fsafe: prepare workspace: %w", err)
+	}
+	if err := sameRootDirectory(saveRoot, ".cd211", cdInfo, cdRoot); err != nil {
+		_ = workspaceRoot.Close()
+		return "", err
+	}
+	if err := workspaceRoot.Close(); err != nil {
+		return "", fmt.Errorf("fsafe: close workspace: %w", err)
+	}
+	return logicalWorkspacePath, nil
+}
+
+// DeleteWorkspace safely and idempotently removes exactly hash's workspace,
+// retaining the shared .cd211 parent.
+func (v *Verifier) DeleteWorkspace(savePath, hash string) error {
+	if _, err := WorkspacePath(savePath, hash); err != nil {
+		return err
+	}
+
+	saveRoot, _, err := v.openWorkspaceSaveRoot(savePath)
+	if err != nil {
+		return err
+	}
+	defer saveRoot.Close()
+
+	cdInfo, err := saveRoot.Lstat(".cd211")
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("fsafe: inspect workspace parent: %w", err)
+	}
+	if cdInfo.Mode()&os.ModeSymlink != 0 || !cdInfo.IsDir() {
+		return fmt.Errorf("fsafe: workspace parent must be a directory")
+	}
+	cdRoot, err := saveRoot.OpenRoot(".cd211")
+	if err != nil {
+		return fmt.Errorf("fsafe: open workspace parent: %w", err)
+	}
+	defer cdRoot.Close()
+	if err := sameRootDirectory(saveRoot, ".cd211", cdInfo, cdRoot); err != nil {
+		return err
+	}
+
+	quarantineRoot, err := ensureWorkspaceDir(cdRoot, ".quarantine", quarantineMode)
+	if err != nil {
+		return fmt.Errorf("fsafe: prepare workspace quarantine: %w", err)
+	}
+	defer quarantineRoot.Close()
+	quarantineInfo, err := cdRoot.Lstat(".quarantine")
+	if err != nil {
+		return fmt.Errorf("fsafe: revalidate workspace quarantine: %w", err)
+	}
+	if err := sameRootDirectory(cdRoot, ".quarantine", quarantineInfo, quarantineRoot); err != nil {
+		return err
+	}
+
+	// A previous process may have crashed after quarantine. Clean that exact
+	// inode first; a mismatched entry is never recursively removed.
+	if err := removeQuarantinedWorkspace(quarantineRoot, hash); err != nil {
+		return err
+	}
+
+	hashInfo, err := cdRoot.Lstat(hash)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("fsafe: inspect workspace: %w", err)
+	}
+	if hashInfo.Mode()&os.ModeSymlink != 0 || !hashInfo.IsDir() {
+		return fmt.Errorf("fsafe: workspace must be a directory")
+	}
+	hashRoot, err := cdRoot.OpenRoot(hash)
+	if err != nil {
+		return fmt.Errorf("fsafe: open workspace: %w", err)
+	}
+	if err := sameRootDirectory(cdRoot, hash, hashInfo, hashRoot); err != nil {
+		_ = hashRoot.Close()
+		return err
+	}
+	if err := rejectWorkspaceTree(hashRoot); err != nil {
+		_ = hashRoot.Close()
+		return err
+	}
+	if err := sameRootDirectory(saveRoot, ".cd211", cdInfo, cdRoot); err != nil {
+		_ = hashRoot.Close()
+		return err
+	}
+	if err := sameRootDirectory(cdRoot, hash, hashInfo, hashRoot); err != nil {
+		_ = hashRoot.Close()
+		return err
+	}
+	if err := cdRoot.Rename(hash, filepath.Join(".quarantine", hash)); err != nil {
+		_ = hashRoot.Close()
+		return fmt.Errorf("fsafe: quarantine workspace: %w", err)
+	}
+	quarantinedInfo, err := quarantineRoot.Lstat(hash)
+	if err != nil {
+		_ = hashRoot.Close()
+		return fmt.Errorf("fsafe: revalidate quarantined workspace: %w", err)
+	}
+	if !os.SameFile(hashInfo, quarantinedInfo) {
+		_ = hashRoot.Close()
+		return fmt.Errorf("fsafe: workspace changed during quarantine")
+	}
+	if err := sameRootDirectory(quarantineRoot, hash, quarantinedInfo, hashRoot); err != nil {
+		_ = hashRoot.Close()
+		return err
+	}
+	if err := rejectWorkspaceTree(hashRoot); err != nil {
+		_ = hashRoot.Close()
+		return err
+	}
+	if err := hashRoot.Close(); err != nil {
+		return fmt.Errorf("fsafe: close quarantined workspace: %w", err)
+	}
+	if err := quarantineRoot.RemoveAll(hash); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("fsafe: remove quarantined workspace: %w", err)
+	}
+	return nil
+}
+
+func validateWorkspaceHash(hash string) error {
+	if len(hash) != 40 {
+		return fmt.Errorf("fsafe: workspace hash must be a lowercase 40-character hex string")
+	}
+	for index := range len(hash) {
+		char := hash[index]
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return fmt.Errorf("fsafe: workspace hash must be a lowercase 40-character hex string")
+		}
+	}
+	return nil
+}
+
+func rejectReservedComponent(path string) error {
+	for _, component := range strings.Split(filepath.Clean(path), string(filepath.Separator)) {
+		if component == ".cd211" {
+			return fmt.Errorf("fsafe: path contains reserved component %q", component)
+		}
+	}
+	return nil
+}
+
+func (v *Verifier) openWorkspaceSaveRoot(savePath string) (*os.Root, string, error) {
+	root, evaluatedSavePath, err := v.openSaveRoot(savePath)
+	if err != nil {
+		return nil, "", err
+	}
+	if !withinOrEqual(v.localRoot, evaluatedSavePath) {
+		_ = root.Close()
+		return nil, "", fmt.Errorf("fsafe: save root must be below or equal to local root")
+	}
+	if err := setRootMode(root, saveRootMode, "save root"); err != nil {
+		_ = root.Close()
+		return nil, "", err
+	}
+	return root, evaluatedSavePath, nil
+}
+
+func setRootMode(root *os.Root, mode os.FileMode, name string) error {
+	dir, err := root.Open(".")
+	if err != nil {
+		return fmt.Errorf("fsafe: open %s descriptor: %w", name, err)
+	}
+	defer dir.Close()
+	if err := dir.Chmod(mode); err != nil {
+		return fmt.Errorf("fsafe: set %s mode: %w", name, err)
+	}
+	return nil
+}
+
+func removeQuarantinedWorkspace(parent *os.Root, hash string) error {
+	info, err := parent.Lstat(hash)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("fsafe: inspect quarantined workspace: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("fsafe: quarantined workspace must be a directory")
+	}
+	child, err := parent.OpenRoot(hash)
+	if err != nil {
+		return fmt.Errorf("fsafe: open quarantined workspace: %w", err)
+	}
+	defer child.Close()
+	if err := sameRootDirectory(parent, hash, info, child); err != nil {
+		return err
+	}
+	if err := rejectWorkspaceTree(child); err != nil {
+		return err
+	}
+	if err := sameRootDirectory(parent, hash, info, child); err != nil {
+		return err
+	}
+	if err := parent.RemoveAll(hash); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("fsafe: remove quarantined workspace: %w", err)
+	}
+	return nil
+}
+
+func ensureWorkspaceDir(parent *os.Root, name string, mode os.FileMode) (*os.Root, error) {
+	info, err := parent.Lstat(name)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("fsafe: inspect %q: %w", name, err)
+		}
+		if err := parent.Mkdir(name, 0o770); err != nil && !os.IsExist(err) {
+			return nil, fmt.Errorf("fsafe: create %q: %w", name, err)
+		}
+		info, err = parent.Lstat(name)
+		if err != nil {
+			return nil, fmt.Errorf("fsafe: inspect created %q: %w", name, err)
+		}
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("fsafe: %q must not be a symbolic link", name)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("fsafe: %q is not a directory", name)
+	}
+
+	child, err := parent.OpenRoot(name)
+	if err != nil {
+		return nil, fmt.Errorf("fsafe: open %q: %w", name, err)
+	}
+	if err := sameRootDirectory(parent, name, info, child); err != nil {
+		_ = child.Close()
+		return nil, err
+	}
+	if err := setRootMode(child, mode, name); err != nil {
+		_ = child.Close()
+		return nil, err
+	}
+	if err := sameRootDirectory(parent, name, info, child); err != nil {
+		_ = child.Close()
+		return nil, err
+	}
+	return child, nil
+}
+
+func sameRootDirectory(parent *os.Root, name string, expected os.FileInfo, child *os.Root) error {
+	anchored, err := child.Stat(".")
+	if err != nil {
+		return fmt.Errorf("fsafe: inspect anchored %q: %w", name, err)
+	}
+	if !os.SameFile(expected, anchored) {
+		return fmt.Errorf("fsafe: %q changed during validation", name)
+	}
+	current, err := parent.Lstat(name)
+	if err != nil {
+		return fmt.Errorf("fsafe: revalidate %q: %w", name, err)
+	}
+	if current.Mode()&os.ModeSymlink != 0 || !os.SameFile(expected, current) {
+		return fmt.Errorf("fsafe: %q changed during validation", name)
+	}
+	return nil
+}
+
+func rejectWorkspaceTree(root *os.Root) error {
+	return fs.WalkDir(root.FS(), ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return fmt.Errorf("fsafe: inspect workspace tree: %w", err)
+		}
+		if path == "." {
+			return nil
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("fsafe: workspace tree contains symbolic link at %q", path)
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return fmt.Errorf("fsafe: inspect workspace tree entry %q: %w", path, err)
+		}
+		if !info.IsDir() && !info.Mode().IsRegular() {
+			return fmt.Errorf("fsafe: workspace tree contains special file at %q", path)
+		}
+		return nil
+	})
+}
+
 // Verify checks that the expected torrent content is a safe child of savePath
-// and returns its cleaned, evaluated absolute path with the bytes on disk.
+// and returns its cleaned logical absolute path with the bytes on disk.
 func (v *Verifier) Verify(savePath string, expected ExpectedContent) (VerifiedContent, error) {
 	if err := validateName(expected.CandidateName); err != nil {
 		return VerifiedContent{}, err
@@ -186,7 +573,7 @@ func (v *Verifier) Verify(savePath string, expected ExpectedContent) (VerifiedCo
 		if verifyErr != nil {
 			return VerifiedContent{}, verifyErr
 		}
-		candidate := filepath.Join(saveRoot, filepath.FromSlash(expected.Files[0].RelativePath))
+		candidate := filepath.Join(filepath.Clean(savePath), filepath.FromSlash(expected.Files[0].RelativePath))
 		return VerifiedContent{Path: candidate, Size: size}, nil
 	}
 
@@ -222,7 +609,7 @@ func (v *Verifier) Verify(savePath string, expected ExpectedContent) (VerifiedCo
 				return VerifiedContent{}, fmt.Errorf("fsafe: single-file manifest does not match candidate")
 			}
 		}
-		return VerifiedContent{Path: candidate, Size: info.Size()}, nil
+		return VerifiedContent{Path: candidatePath, Size: info.Size()}, nil
 	}
 	if !info.IsDir() {
 		return VerifiedContent{}, fmt.Errorf("fsafe: multi-file candidate is not a directory")
@@ -232,13 +619,13 @@ func (v *Verifier) Verify(savePath string, expected ExpectedContent) (VerifiedCo
 		if err != nil {
 			return VerifiedContent{}, err
 		}
-		return VerifiedContent{Path: candidate, Size: size}, nil
+		return VerifiedContent{Path: candidatePath, Size: size}, nil
 	}
 	size, err := verifyManifest(candidate, expected.Files)
 	if err != nil {
 		return VerifiedContent{}, err
 	}
-	return VerifiedContent{Path: candidate, Size: size}, nil
+	return VerifiedContent{Path: filepath.Join(filepath.Clean(savePath), expected.CandidateName), Size: size}, nil
 }
 
 // UnknownContent is the verified shape of magnet content whose file-vs-folder
@@ -292,12 +679,12 @@ func (v *Verifier) VerifyUnknownType(savePath, name string) (UnknownContent, err
 		if err != nil {
 			return UnknownContent{}, err
 		}
-		return UnknownContent{Path: candidate, Size: size, MultiFile: true}, nil
+		return UnknownContent{Path: candidatePath, Size: size, MultiFile: true}, nil
 	}
 	if !info.Mode().IsRegular() {
 		return UnknownContent{}, fmt.Errorf("fsafe: candidate is not a regular file or directory")
 	}
-	return UnknownContent{Path: candidate, Size: info.Size(), MultiFile: false}, nil
+	return UnknownContent{Path: candidatePath, Size: info.Size(), MultiFile: false}, nil
 }
 
 // treeSize sums the regular files under root. Symlinks are skipped rather than
@@ -449,17 +836,20 @@ func rejectSymlinkTree(root string) error {
 }
 
 func (v *Verifier) openSaveRoot(savePath string) (*os.Root, string, error) {
+	cleanSavePath := filepath.Clean(savePath)
+
 	localRoot, err := os.OpenRoot(v.localRoot)
 	if err != nil {
 		return nil, "", fmt.Errorf("fsafe: open local root: %w", err)
 	}
 	defer localRoot.Close()
 
-	evaluatedSavePath, err := filepath.EvalSymlinks(filepath.Clean(savePath))
+	evaluatedSavePath, err := filepath.EvalSymlinks(cleanSavePath)
 	if err != nil {
 		return nil, "", fmt.Errorf("fsafe: resolve save root: %w", err)
 	}
 	evaluatedSavePath = filepath.Clean(evaluatedSavePath)
+
 	expectedInfo, err := os.Stat(evaluatedSavePath)
 	if err != nil {
 		return nil, "", fmt.Errorf("fsafe: inspect save root: %w", err)
@@ -485,6 +875,7 @@ func (v *Verifier) openSaveRoot(savePath string) (*os.Root, string, error) {
 		_ = saveRoot.Close()
 		return nil, "", fmt.Errorf("fsafe: save root changed during validation")
 	}
+
 	return saveRoot, evaluatedSavePath, nil
 }
 
@@ -492,8 +883,9 @@ func (v *Verifier) resolveSaveRoot(savePath string) (string, error) {
 	if !filepath.IsAbs(savePath) {
 		return "", fmt.Errorf("fsafe: save root must be absolute")
 	}
+	cleanSavePath := filepath.Clean(savePath)
 
-	evaluatedSavePath, err := filepath.EvalSymlinks(filepath.Clean(savePath))
+	evaluatedSavePath, err := filepath.EvalSymlinks(cleanSavePath)
 	if err != nil {
 		return "", fmt.Errorf("fsafe: resolve save root: %w", err)
 	}

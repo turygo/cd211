@@ -90,9 +90,10 @@ func TestSubmitMagnetCreatesAndWakesOnce(t *testing.T) {
 	}
 	if created.Hash != hash || created.Name != "Example" || created.Category != "" ||
 		created.CloudFolder != "/cloud" || created.SavePath != "/local" ||
+		created.WorkspacePath != "/local/.cd211/"+hash ||
 		created.State != domain.StateAccepted || created.SourceKind != domain.SourceMagnet ||
 		created.SubmissionURI == "" || created.NextRunAt == nil {
-		t.Fatalf("created download = %+v", created)
+		t.Fatalf("created download = %+v, want complete submission fields", created)
 	}
 	if harness.waker.wakes != 1 {
 		t.Fatalf("wakes = %d, want 1", harness.waker.wakes)
@@ -213,7 +214,8 @@ func TestSubmitTorrentRevivalPreservesManifestMetadata(t *testing.T) {
 	deleted := claim.Download
 	deleted.State = domain.StateDeleted
 	deleted.NextRunAt = nil
-	deleted.ContentPath = "/local/demo"
+	contentPath := filepath.Join(created.WorkspacePath, "demo")
+	deleted.ContentPath = contentPath
 	deleted.CloudResultPath = "/cloud/demo"
 	deleted.CopySourcePath = "/cloud/demo"
 	deleted.UpdatedAt = now.Add(time.Minute)
@@ -221,7 +223,7 @@ func TestSubmitTorrentRevivalPreservesManifestMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	harness.filesystem.content = "/local/demo"
+	harness.filesystem.content = contentPath
 	harness.filesystem.size = 99
 	harness.filesystem.err = nil
 	revived, inserted, err := harness.service.SubmitTorrent(context.Background(), torrent, "", false)
@@ -273,15 +275,11 @@ func TestSubmitTorrentRevivesRenamedNestedSingleFile(t *testing.T) {
 	if err := repository.SetFileOverride(ctx, created.Hash, 0, effectivePath, 1, now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(filepath.Join(savePath, "Season 01"), 0o770); err != nil {
+	contentPath := filepath.Join(created.WorkspacePath, effectivePath)
+	if err := os.MkdirAll(filepath.Dir(contentPath), 0o770); err != nil {
 		t.Fatal(err)
 	}
-	contentPath := filepath.Join(savePath, effectivePath)
 	if err := os.WriteFile(contentPath, []byte("abc"), 0o660); err != nil {
-		t.Fatal(err)
-	}
-	contentPath, err = filepath.EvalSymlinks(contentPath)
-	if err != nil {
 		t.Fatal(err)
 	}
 	if err := repository.RequestDelete(ctx, []string{created.Hash}, false, now.Add(2*time.Second)); err != nil {
@@ -321,7 +319,7 @@ func TestSubmitRevivesRetainedContent(t *testing.T) {
 	now := harness.clock.now
 
 	// Drive the download to DELETED with retained content evidence.
-	_, _, err := harness.service.SubmitMagnet(context.Background(), magnet(hash, "Retained"), "movies", false)
+	created, _, err := harness.service.SubmitMagnet(context.Background(), magnet(hash, "Retained"), "movies", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +336,8 @@ func TestSubmitRevivesRetainedContent(t *testing.T) {
 	deleted.UpdatedAt = now.Add(time.Minute)
 	multiFile := false
 	deleted.IsMultiFile = &multiFile
-	deleted.ContentPath = "/local/movies/Retained"
+	contentPath := filepath.Join(created.WorkspacePath, "Retained")
+	deleted.ContentPath = contentPath
 	deleted.CloudResultPath = "/cloud/movies/Retained"
 	deleted.CopySourcePath = "/cloud/movies/Retained"
 	if err := harness.repository.CommitClaim(context.Background(), *claim, deleted); err != nil {
@@ -346,14 +345,14 @@ func TestSubmitRevivesRetainedContent(t *testing.T) {
 	}
 
 	// A matching submission verifies the retained tree and revives it.
-	harness.filesystem.content = "/local/movies/Retained"
+	harness.filesystem.content = contentPath
 	harness.filesystem.size = 42
 	harness.filesystem.err = nil
 	revived, inserted, err := harness.service.SubmitMagnet(context.Background(), magnet(hash, "Ignored"), "movies", false)
 	if err != nil || !inserted {
 		t.Fatalf("revive SubmitMagnet() = (%+v, %t, %v)", revived, inserted, err)
 	}
-	if revived.State != domain.StateVerifyingLocal || revived.ContentPath != "/local/movies/Retained" ||
+	if revived.State != domain.StateVerifyingLocal || revived.ContentPath != contentPath ||
 		revived.CloudResultPath != "/cloud/movies/Retained" || revived.CopySourcePath != "/cloud/movies/Retained" ||
 		revived.DestinationName != "Retained" || revived.Name != "Retained" ||
 		revived.TotalSize != 42 || revived.LastUpstreamStatus != domain.UpstreamRetainedContent ||

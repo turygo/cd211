@@ -243,9 +243,11 @@ func TestNativeGetDownloadModelAndOutcomes(t *testing.T) {
 	if model["hash"] != hash || model["name"] != "Model" || model["category"] != "" ||
 		model["state"] != "ACCEPTED" || model["version"] != float64(0) ||
 		model["terminal"] != false || model["outcome"] != nil ||
+		model["workspace_path"] != "/local/.cd211/"+hash ||
 		model["content_path"] != nil || model["error"] != nil || model["completed_at"] != nil {
 		t.Fatalf("accepted model = %#v", model)
 	}
+
 	links := model["links"].(map[string]any)
 	if links["self"] != "/api/v1/downloads/"+hash {
 		t.Fatalf("self link = %#v", links["self"])
@@ -255,8 +257,8 @@ func TestNativeGetDownloadModelAndOutcomes(t *testing.T) {
 	advanceToCompleted(t, harness.repository, now, hash)
 	completed := decodeObject(t, harness.get(t, "/api/v1/downloads/"+hash))
 	if completed["state"] != "COMPLETED" || completed["terminal"] != true || completed["outcome"] != "completed" ||
-		completed["progress"] != float64(1) || completed["content_path"] != "/local/Model" ||
-		completed["completed_at"] == nil {
+		completed["progress"] != float64(1) || completed["workspace_path"] != "/local/.cd211/"+hash ||
+		completed["content_path"] != "/local/.cd211/"+hash+"/Model" || completed["completed_at"] == nil {
 		t.Fatalf("completed model = %#v", completed)
 	}
 
@@ -286,6 +288,18 @@ func TestNativeGetDownloadModelAndOutcomes(t *testing.T) {
 	}
 }
 
+func TestNativeLegacyWorkspaceIsNull(t *testing.T) {
+	t.Parallel()
+	model := (&Handler{}).model(domain.Download{
+		Hash:  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Name:  "legacy",
+		State: domain.StateAccepted,
+	})
+	if model.WorkspacePath != nil {
+		t.Fatalf("legacy workspace_path = %v, want null", *model.WorkspacePath)
+	}
+}
+
 func advanceToCompleted(t *testing.T, repository *store.Store, now time.Time, hash string) {
 	t.Helper()
 	states := []domain.State{domain.StateSubmittingOffline, domain.StateWaitingOffline, domain.StateSubmittingCopy, domain.StateWaitingCopy, domain.StateVerifyingLocal, domain.StateCompleted}
@@ -307,7 +321,7 @@ func advanceToCompleted(t *testing.T, repository *store.Store, now time.Time, ha
 			next.CloudResultPath = "/cloud/Model"
 			next.CopySourcePath = "/cloud/Model"
 			next.NextRunAt = nil
-			next.ContentPath = "/local/Model"
+			next.ContentPath = "/local/.cd211/" + hash + "/Model"
 			completedAt := now
 			next.CompletedAt = &completedAt
 			next.QbitProgress = 1

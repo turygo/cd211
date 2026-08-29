@@ -10,6 +10,27 @@ import (
 	"testing"
 )
 
+func TestNewRejectsReservedLocalRootComponent(t *testing.T) {
+	base := t.TempDir()
+	reserved := mkdir(t, filepath.Join(base, ".cd211"))
+	if _, err := New(reserved); err == nil {
+		t.Fatal("New() accepted a local root with the reserved component")
+	}
+
+	targetParent := mkdir(t, filepath.Join(base, "target"))
+	target := mkdir(t, filepath.Join(targetParent, ".cd211"))
+	alias := filepath.Join(base, "alias")
+	mustSymlink(t, target, alias)
+	if _, err := New(alias); err == nil {
+		t.Fatal("New() accepted a symlink target with the reserved component")
+	}
+
+	near := mkdir(t, filepath.Join(base, ".cd211-backup"))
+	if _, err := New(near); err != nil {
+		t.Fatalf("New() rejected near-name local root: %v", err)
+	}
+}
+
 func TestVerifySingleFile(t *testing.T) {
 	verifier, root := newTestVerifier(t)
 	save := mkdir(t, filepath.Join(root, "save"))
@@ -19,10 +40,7 @@ func TestVerifySingleFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify() error = %v", err)
 	}
-	want, err := filepath.EvalSymlinks(content)
-	if err != nil {
-		t.Fatalf("EvalSymlinks() error = %v", err)
-	}
+	want := content
 	if got.Path != want {
 		t.Fatalf("Verify() path = %q, want %q", got.Path, want)
 	}
@@ -45,10 +63,7 @@ func TestVerifyMultiFileDirectorySumsRegularFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify() error = %v", err)
 	}
-	want, err := filepath.EvalSymlinks(content)
-	if err != nil {
-		t.Fatalf("EvalSymlinks() error = %v", err)
-	}
+	want := content
 	if got.Path != want {
 		t.Fatalf("Verify() path = %q, want %q", got.Path, want)
 	}
@@ -148,10 +163,7 @@ func TestVerifyUnknownTypeAcceptsFileAndDirectory(t *testing.T) {
 	if fileContent.MultiFile || fileContent.Size != int64(len("content")) {
 		t.Fatalf("VerifyUnknownType(file) = %+v, want single file", fileContent)
 	}
-	filePath, err := filepath.EvalSymlinks(file)
-	if err != nil {
-		t.Fatal(err)
-	}
+	filePath := file
 	if fileContent.Path != filePath {
 		t.Fatalf("VerifyUnknownType(file) path = %q, want %q", fileContent.Path, filePath)
 	}
@@ -163,10 +175,7 @@ func TestVerifyUnknownTypeAcceptsFileAndDirectory(t *testing.T) {
 	if !directoryContent.MultiFile || directoryContent.Size != int64(len("content")+len("xx")) {
 		t.Fatalf("VerifyUnknownType(directory) = %+v, want multi-file tree", directoryContent)
 	}
-	directoryPath, err := filepath.EvalSymlinks(directory)
-	if err != nil {
-		t.Fatal(err)
-	}
+	directoryPath := directory
 	if directoryContent.Path != directoryPath {
 		t.Fatalf("VerifyUnknownType(directory) path = %q, want %q", directoryContent.Path, directoryPath)
 	}
@@ -306,10 +315,7 @@ func TestVerifySingleFileUsesEffectiveManifestPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify() error = %v", err)
 	}
-	want, err := filepath.EvalSymlinks(effective)
-	if err != nil {
-		t.Fatalf("EvalSymlinks(effective): %v", err)
-	}
+	want := effective
 	if content.Path != want || content.Size != 7 {
 		t.Fatalf("verified content = %+v, want path %q and size 7", content, want)
 	}
@@ -522,12 +528,9 @@ func TestVerifyThenDeleteThroughSaveRootSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify() through save-root symlink: %v", err)
 	}
-	evaluatedTarget, err := filepath.EvalSymlinks(target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if contentPath.Path != evaluatedTarget {
-		t.Fatalf("Verify() content path = %q, want %q", contentPath.Path, evaluatedTarget)
+	want := filepath.Join(saveLink, "payload")
+	if contentPath.Path != want {
+		t.Fatalf("Verify() content path = %q, want %q", contentPath.Path, want)
 	}
 	if err := verifier.Delete(contentPath.Path, saveLink); err != nil {
 		t.Fatalf("Delete() verified symlink-root content: %v", err)

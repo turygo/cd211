@@ -26,7 +26,7 @@ WHERE hash = (
     ORDER BY candidate.next_run_at ASC, candidate.created_at ASC, candidate.hash ASC
     LIMIT 1
 )
-RETURNING hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_result_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version, pause_requested, last_error_code, offline_started_at, copy_completed_at, copy_source_path, tags, auto_tmm, name_overridden
+RETURNING hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_result_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version, pause_requested, last_error_code, offline_started_at, copy_completed_at, copy_source_path, tags, auto_tmm, name_overridden, workspace_path
 `
 
 type ClaimDueParams struct {
@@ -77,6 +77,7 @@ func (q *Queries) ClaimDue(ctx context.Context, arg ClaimDueParams) (Download, e
 		&i.Tags,
 		&i.AutoTmm,
 		&i.NameOverridden,
+		&i.WorkspacePath,
 	)
 	return i, err
 }
@@ -88,37 +89,38 @@ SET
     auto_tmm = ?2,
     name_overridden = ?3,
     name = ?4,
-    destination_name = ?5,
-    cloud_task_name = ?6,
-    cloud_result_path = ?7,
-    copy_source_path = ?8,
-    content_path = ?9,
-    is_multi_file = ?10,
-    total_size = ?11,
-    state = ?12,
-    offline_progress = ?13,
-    copy_progress = ?14,
-    qbit_progress = ?15,
-    last_upstream_status = ?16,
-    last_error = ?17,
-    last_error_code = ?18,
-    phase_started_at = ?19,
-    offline_started_at = ?20,
-    copy_completed_at = ?21,
-    next_run_at = ?22,
-    attempt_count = ?23,
-    delete_files_requested = ?24,
-    pause_requested = ?25,
-    updated_at = ?26,
-    completed_at = ?27,
-    removed_at = ?28,
+    cloud_task_name = ?5,
+    workspace_path = ?6,
+    destination_name = ?7,
+    cloud_result_path = ?8,
+    copy_source_path = ?9,
+    content_path = ?10,
+    is_multi_file = ?11,
+    total_size = ?12,
+    state = ?13,
+    offline_progress = ?14,
+    copy_progress = ?15,
+    qbit_progress = ?16,
+    last_upstream_status = ?17,
+    last_error = ?18,
+    last_error_code = ?19,
+    phase_started_at = ?20,
+    offline_started_at = ?21,
+    copy_completed_at = ?22,
+    next_run_at = ?23,
+    attempt_count = ?24,
+    delete_files_requested = ?25,
+    pause_requested = ?26,
+    updated_at = ?27,
+    completed_at = ?28,
+    removed_at = ?29,
     lease_until = NULL,
     lease_owner = NULL,
     row_version = row_version + 1
-WHERE hash = ?29
-  AND state = ?30
-  AND lease_owner = ?31
-  AND row_version = ?32
+WHERE hash = ?30
+  AND state = ?31
+  AND lease_owner = ?32
+  AND row_version = ?33
 `
 
 type CommitClaimParams struct {
@@ -126,8 +128,9 @@ type CommitClaimParams struct {
 	AutoTmm              int64          `json:"auto_tmm"`
 	NameOverridden       int64          `json:"name_overridden"`
 	Name                 string         `json:"name"`
-	DestinationName      sql.NullString `json:"destination_name"`
 	CloudTaskName        sql.NullString `json:"cloud_task_name"`
+	WorkspacePath        sql.NullString `json:"workspace_path"`
+	DestinationName      sql.NullString `json:"destination_name"`
 	CloudResultPath      sql.NullString `json:"cloud_result_path"`
 	CopySourcePath       sql.NullString `json:"copy_source_path"`
 	ContentPath          sql.NullString `json:"content_path"`
@@ -162,8 +165,9 @@ func (q *Queries) CommitClaim(ctx context.Context, arg CommitClaimParams) (int64
 		arg.AutoTmm,
 		arg.NameOverridden,
 		arg.Name,
-		arg.DestinationName,
 		arg.CloudTaskName,
+		arg.WorkspacePath,
+		arg.DestinationName,
 		arg.CloudResultPath,
 		arg.CopySourcePath,
 		arg.ContentPath,

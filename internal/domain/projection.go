@@ -59,6 +59,13 @@ func ValidateDownload(download Download) error {
 	if !absolutePath(download.SavePath) {
 		return errors.New("save path must be an absolute path")
 	}
+	if download.WorkspacePath != "" {
+		expectedWorkspace := filepath.Join(download.SavePath, ".cd211", download.Hash)
+		if !absolutePath(download.WorkspacePath) || filepath.Clean(download.WorkspacePath) != download.WorkspacePath ||
+			filepath.Clean(download.SavePath) != download.SavePath || download.WorkspacePath != expectedWorkspace {
+			return errors.New("workspace path is invalid")
+		}
+	}
 	if download.DestinationName != "" && !safeComponent(download.DestinationName) {
 		return errors.New("destination name is invalid")
 	}

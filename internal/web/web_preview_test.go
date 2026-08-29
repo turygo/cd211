@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
@@ -55,9 +56,14 @@ func TestWebPreview(t *testing.T) {
 
 	fixture := newWebFixture(t)
 	fixture.seedCategory("movies", true)
-	fixture.seedDownload("1", domain.StateWaitingOffline, nil)
+	fixture.seedDownload("1", domain.StateWaitingOffline, func(download *domain.Download) {
+		download.WorkspacePath = filepath.Join(download.SavePath, ".cd211", download.Hash)
+	})
 	fixture.seedDownload("2", domain.StateWaitingCopy, nil)
-	fixture.seedDownload("3", domain.StateCompleted, nil)
+	fixture.seedDownload("3", domain.StateCompleted, func(download *domain.Download) {
+		download.WorkspacePath = filepath.Join(download.SavePath, ".cd211", download.Hash)
+		download.ContentPath = filepath.Join(download.WorkspacePath, download.Name)
+	})
 	fixture.seedDownload("4", domain.StateFailed, func(download *domain.Download) {
 		download.LastError = "The upstream task failed."
 	})

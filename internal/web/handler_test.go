@@ -897,6 +897,37 @@ func TestDetailIsRedactedAndExposesOnlyLegalActions(t *testing.T) {
 	}
 }
 
+func TestDetailShowsLogicalWorkspaceAndVerifiedContentPaths(t *testing.T) {
+	fixture := newWebFixture(t)
+	isolated := fixture.seedDownload("e", domain.StateCompleted, func(download *domain.Download) {
+		download.WorkspacePath = filepath.Join(download.SavePath, ".cd211", download.Hash)
+		download.ContentPath = filepath.Join(download.WorkspacePath, "release-e")
+	})
+	response := fixture.request(http.MethodGet, "/downloads/"+isolated.Hash, nil, true)
+	requireStatus(t, response, http.StatusOK)
+	body := response.Body.String()
+	requireContains(t, body,
+		"Logical save path", isolated.SavePath,
+		"Task workspace", isolated.WorkspacePath,
+		"Verified content path", isolated.ContentPath,
+		"Verified",
+	)
+	requireAbsent(t, body, isolated.SubmissionURI, "tracker.invalid", "secret-token")
+
+	legacy := fixture.seedDownload("f", domain.StateCompleted, nil)
+	response = fixture.request(http.MethodGet, "/downloads/"+legacy.Hash, nil, true)
+	requireStatus(t, response, http.StatusOK)
+	body = response.Body.String()
+	requireContains(t, body, "Logical save path", legacy.SavePath, "Legacy shared layout (workspace not recorded)")
+	request := httptest.NewRequest(http.MethodGet, "/downloads/"+isolated.Hash, nil)
+	request.AddCookie(&http.Cookie{Name: "SID", Value: fixture.sid})
+	request.AddCookie(&http.Cookie{Name: langCookie, Value: string(LangZH)})
+	chinese := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(chinese, request)
+	requireStatus(t, chinese, http.StatusOK)
+	requireContains(t, chinese.Body.String(), "逻辑保存路径", "任务工作区", "已校验内容路径", "已校验", isolated.WorkspacePath)
+}
+
 func TestActionsUseRealRepositoryAndWake(t *testing.T) {
 	t.Run("start", func(t *testing.T) {
 		fixture := newWebFixture(t)

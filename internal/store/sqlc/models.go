@@ -78,6 +78,7 @@ type Download struct {
 	Tags                 string         `json:"tags"`
 	AutoTmm              int64          `json:"auto_tmm"`
 	NameOverridden       int64          `json:"name_overridden"`
+	WorkspacePath        sql.NullString `json:"workspace_path"`
 }
 
 type DownloadFile struct {

@@ -23,7 +23,7 @@ UPDATE downloads SET auto_tmm = sqlc.arg(auto_tmm), updated_at = sqlc.arg(update
 WHERE hash = sqlc.arg(hash) AND state != 'DELETED';
 
 -- name: UpdateDownloadSavePath :execrows
-UPDATE downloads SET save_path = sqlc.arg(save_path), updated_at = sqlc.arg(updated_at), row_version = row_version + 1
+UPDATE downloads SET save_path = sqlc.arg(save_path), workspace_path = sqlc.narg(workspace_path), updated_at = sqlc.arg(updated_at), row_version = row_version + 1
 WHERE hash = sqlc.arg(hash) AND state IN ('STOPPED', 'ACCEPTED') AND lease_owner IS NULL AND content_path IS NULL AND copy_source_path IS NULL AND cloud_result_path IS NULL AND row_version = sqlc.arg(expected_row_version);
 
 -- name: GetSetting :one

@@ -5,17 +5,17 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/turygo/cd211/internal/domain"
+	"github.com/turygo/cd211/internal/fsafe"
+	"github.com/turygo/cd211/internal/outbox"
+	storedb "github.com/turygo/cd211/internal/store/sqlc"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
-
-	"github.com/turygo/cd211/internal/domain"
-	"github.com/turygo/cd211/internal/outbox"
-	storedb "github.com/turygo/cd211/internal/store/sqlc"
-	"modernc.org/sqlite"
-	sqlite3 "modernc.org/sqlite/lib"
 )
 
 var (
@@ -118,15 +118,16 @@ func (s *Store) CreateSubmission(ctx context.Context, submission domain.Submissi
 			}
 			return download, false, nil
 		}
-		previousState = domain.StateDeleted
+		previousState = download.State
 		if err := queries.ReviveDownload(ctx, reviveDownloadParams(submission.Download)); err != nil {
+			if destinationConstraint(err) {
+				return finish(ErrDestinationConflict)
+			}
 			return finish(fmt.Errorf("revive submission: %w", err))
 		}
 		if err := queries.DeleteDownloadFiles(ctx, submission.Download.Hash); err != nil {
 			return finish(fmt.Errorf("replace submission files: %w", err))
 		}
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return finish(fmt.Errorf("read existing submission: %w", err))
 	} else if insertErr := queries.InsertDownload(ctx, insertDownloadParams(submission.Download)); insertErr != nil {
 		winner, winnerErr := queries.GetDownload(ctx, submission.Download.Hash)
 		if winnerErr == nil {
@@ -140,6 +141,9 @@ func (s *Store) CreateSubmission(ctx context.Context, submission domain.Submissi
 				}
 				return download, false, nil
 			}
+		}
+		if destinationConstraint(insertErr) {
+			return finish(ErrDestinationConflict)
 		}
 		return finish(fmt.Errorf("insert submission: %w", insertErr))
 	}
@@ -197,6 +201,24 @@ func (s *Store) ListDownloads(ctx context.Context, category *string) ([]domain.D
 	downloads := make([]domain.Download, 0, len(rows))
 	for _, row := range rows {
 		download, err := downloadFromDB(row)
+		if err != nil {
+			return nil, err
+		}
+		downloads = append(downloads, download)
+	}
+	return downloads, nil
+}
+
+// ListAllDownloads returns every persisted download, including removed rows,
+// while leaving runtime path validation to the startup preflight.
+func (s *Store) ListAllDownloads(ctx context.Context) ([]domain.Download, error) {
+	rows, err := s.queries.ListAllDownloads(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list all downloads: %w", err)
+	}
+	downloads := make([]domain.Download, 0, len(rows))
+	for _, row := range rows {
+		download, err := downloadRow(row)
 		if err != nil {
 			return nil, err
 		}
@@ -413,7 +435,12 @@ func (s *Store) SetSavePaths(ctx context.Context, hashes []string, savePath stri
 			_ = tx.Rollback()
 			return getErr
 		}
-		updated, updateErr := queries.UpdateDownloadSavePath(ctx, storedb.UpdateDownloadSavePathParams{SavePath: savePath, UpdatedAt: now, Hash: hash, ExpectedRowVersion: row.RowVersion})
+		workspacePath, workspaceErr := fsafe.WorkspacePath(savePath, hash)
+		if workspaceErr != nil {
+			_ = tx.Rollback()
+			return ErrInvalidTransition
+		}
+		updated, updateErr := queries.UpdateDownloadSavePath(ctx, storedb.UpdateDownloadSavePathParams{SavePath: savePath, WorkspacePath: nullableString(workspacePath), UpdatedAt: now, Hash: hash, ExpectedRowVersion: row.RowVersion})
 		if updateErr != nil {
 			_ = tx.Rollback()
 			if destinationConstraint(updateErr) {
@@ -438,7 +465,12 @@ func (s *Store) SetSavePath(ctx context.Context, hash, savePath string, version 
 		return err
 	}
 	queries := s.queries.WithTx(tx)
-	updated, err := queries.UpdateDownloadSavePath(ctx, storedb.UpdateDownloadSavePathParams{SavePath: savePath, UpdatedAt: now, Hash: hash, ExpectedRowVersion: version})
+	workspacePath, workspaceErr := fsafe.WorkspacePath(savePath, hash)
+	if workspaceErr != nil {
+		_ = tx.Rollback()
+		return ErrInvalidTransition
+	}
+	updated, err := queries.UpdateDownloadSavePath(ctx, storedb.UpdateDownloadSavePathParams{SavePath: savePath, WorkspacePath: nullableString(workspacePath), UpdatedAt: now, Hash: hash, ExpectedRowVersion: version})
 	if err != nil {
 		_ = tx.Rollback()
 		if destinationConstraint(err) {
@@ -1000,7 +1032,13 @@ func (s *Store) CommitClaim(ctx context.Context, claim Claim, next domain.Downlo
 	if strings.TrimSpace(claim.Owner) == "" || claim.Version < 0 || claim.Download.Hash == "" || !claim.State.Valid() || claim.Download.State != claim.State {
 		return ErrClaimLost
 	}
-	if !sameClaimIdentity(claim.Download, next) || (next.State != claim.State && !domain.CanTransition(claim.State, next.State)) {
+	if !sameClaimIdentity(claim.Download, next) {
+		return ErrInvalidTransition
+	}
+	if err := validateClaimWorkspace(claim.Download, next); err != nil {
+		return err
+	}
+	if next.State != claim.State && !domain.CanTransition(claim.State, next.State) {
 		return ErrInvalidTransition
 	}
 	next.LeaseOwner = ""
@@ -1120,7 +1158,7 @@ func downloadRow(row storedb.Download) (domain.Download, error) {
 	}
 	download := domain.Download{
 		Hash: row.Hash, Name: row.Name, NameOverridden: row.NameOverridden != 0, SourceKind: sourceKind, SubmissionURI: row.SubmissionUri,
-		Category: row.Category, Tags: row.Tags, AutoTMM: row.AutoTmm != 0, CloudFolder: row.CloudFolder, SavePath: row.SavePath, DestinationName: nullString(row.DestinationName),
+		Category: row.Category, Tags: row.Tags, AutoTMM: row.AutoTmm != 0, CloudFolder: row.CloudFolder, SavePath: row.SavePath, WorkspacePath: nullString(row.WorkspacePath), DestinationName: nullString(row.DestinationName),
 		CloudTaskName: nullString(row.CloudTaskName), CloudResultPath: nullString(row.CloudResultPath), CopySourcePath: nullString(row.CopySourcePath), ContentPath: nullString(row.ContentPath),
 		TotalSize: row.TotalSize, State: state, OfflineProgress: row.OfflineProgress, CopyProgress: row.CopyProgress, QbitProgress: row.QbitProgress,
 		LastUpstreamStatus: nullString(row.LastUpstreamStatus), LastError: nullString(row.LastError), LastErrorCode: nullString(row.LastErrorCode),
@@ -1150,7 +1188,7 @@ func downloadFromDB(row storedb.Download) (domain.Download, error) {
 func insertDownloadParams(download domain.Download) storedb.InsertDownloadParams {
 	return storedb.InsertDownloadParams{
 		Hash: download.Hash, Name: download.Name, SourceKind: string(download.SourceKind), SubmissionUri: download.SubmissionURI,
-		Category: download.Category, Tags: download.Tags, AutoTmm: boolInteger(download.AutoTMM), NameOverridden: boolInteger(download.NameOverridden), CloudFolder: download.CloudFolder, SavePath: download.SavePath, DestinationName: nullableString(download.DestinationName),
+		Category: download.Category, Tags: download.Tags, AutoTmm: boolInteger(download.AutoTMM), NameOverridden: boolInteger(download.NameOverridden), CloudFolder: download.CloudFolder, SavePath: download.SavePath, WorkspacePath: nullableString(download.WorkspacePath), DestinationName: nullableString(download.DestinationName),
 		CloudTaskName: nullableString(download.CloudTaskName), CloudResultPath: nullableString(download.CloudResultPath), CopySourcePath: nullableString(download.CopySourcePath), ContentPath: nullableString(download.ContentPath),
 		IsMultiFile: nullableBool(download.IsMultiFile), TotalSize: download.TotalSize, State: string(download.State),
 		OfflineProgress: download.OfflineProgress, CopyProgress: download.CopyProgress, QbitProgress: download.QbitProgress,
@@ -1165,7 +1203,7 @@ func insertDownloadParams(download domain.Download) storedb.InsertDownloadParams
 func reviveDownloadParams(download domain.Download) storedb.ReviveDownloadParams {
 	return storedb.ReviveDownloadParams{
 		Name: download.Name, SourceKind: string(download.SourceKind), SubmissionUri: download.SubmissionURI, Category: download.Category, Tags: download.Tags,
-		AutoTmm: boolInteger(download.AutoTMM), NameOverridden: boolInteger(download.NameOverridden), CloudFolder: download.CloudFolder, SavePath: download.SavePath,
+		AutoTmm: boolInteger(download.AutoTMM), NameOverridden: boolInteger(download.NameOverridden), CloudFolder: download.CloudFolder, SavePath: download.SavePath, WorkspacePath: nullableString(download.WorkspacePath),
 		DestinationName: nullableString(download.DestinationName), CloudTaskName: nullableString(download.CloudTaskName), CloudResultPath: nullableString(download.CloudResultPath),
 		CopySourcePath: nullableString(download.CopySourcePath), ContentPath: nullableString(download.ContentPath), IsMultiFile: nullableBool(download.IsMultiFile),
 		TotalSize: download.TotalSize, State: string(download.State), OfflineProgress: download.OfflineProgress, CopyProgress: download.CopyProgress, QbitProgress: download.QbitProgress,
@@ -1179,6 +1217,7 @@ func commitClaimParams(claim Claim, download domain.Download) storedb.CommitClai
 		Name:           download.Name,
 		NameOverridden: boolInteger(download.NameOverridden),
 		Tags:           download.Tags, AutoTmm: boolInteger(download.AutoTMM),
+		WorkspacePath:   nullableString(download.WorkspacePath),
 		DestinationName: nullableString(download.DestinationName),
 		CloudTaskName:   nullableString(download.CloudTaskName), CloudResultPath: nullableString(download.CloudResultPath), CopySourcePath: nullableString(download.CopySourcePath), ContentPath: nullableString(download.ContentPath),
 		IsMultiFile: nullableBool(download.IsMultiFile), TotalSize: download.TotalSize, State: string(download.State),
@@ -1191,9 +1230,27 @@ func commitClaimParams(claim Claim, download domain.Download) storedb.CommitClai
 		Hash: claim.Download.Hash, ExpectedState: string(claim.State), LeaseOwner: sql.NullString{String: claim.Owner, Valid: true}, ExpectedRowVersion: claim.Version,
 	}
 }
-
 func sameClaimIdentity(current, next domain.Download) bool {
 	return current.Hash == next.Hash && current.SourceKind == next.SourceKind && current.SubmissionURI == next.SubmissionURI && current.CloudFolder == next.CloudFolder && current.SavePath == next.SavePath && current.CreatedAt.Equal(next.CreatedAt)
+}
+
+func validateClaimWorkspace(current, next domain.Download) error {
+	if current.WorkspacePath == next.WorkspacePath {
+		return nil
+	}
+	if current.WorkspacePath != "" || next.WorkspacePath == "" ||
+		current.State != domain.StateSubmittingCopy ||
+		current.SavePath != next.SavePath || next.ContentPath != "" ||
+		next.LastUpstreamStatus != domain.UpstreamOfflineFinished ||
+		(current.LastUpstreamStatus != domain.UpstreamOfflineFinished &&
+			!strings.HasPrefix(current.LastUpstreamStatus, domain.UpstreamCleanupCancelled+"|copy:")) {
+		return ErrInvalidTransition
+	}
+	expected, err := fsafe.WorkspacePath(next.SavePath, next.Hash)
+	if err != nil || next.WorkspacePath != expected {
+		return ErrInvalidTransition
+	}
+	return nil
 }
 
 func safeCategoryName(value string) bool {

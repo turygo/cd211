@@ -10,6 +10,7 @@ INSERT INTO downloads (
     name_overridden,
     cloud_folder,
     save_path,
+    workspace_path,
     destination_name,
     cloud_task_name,
     cloud_result_path,
@@ -48,6 +49,7 @@ INSERT INTO downloads (
     sqlc.arg(name_overridden),
     sqlc.arg(cloud_folder),
     sqlc.arg(save_path),
+    sqlc.narg(workspace_path),
     sqlc.arg(destination_name),
     sqlc.arg(cloud_task_name),
     sqlc.arg(cloud_result_path),
@@ -114,6 +116,11 @@ FROM downloads
 WHERE removed_at IS NULL OR (state = 'DELETE_REQUESTED' AND last_error IS NOT NULL)
 ORDER BY created_at DESC, hash ASC;
 
+-- name: ListAllDownloads :many
+SELECT *
+FROM downloads
+ORDER BY created_at DESC, hash ASC;
+
 -- name: DeleteDownloadFiles :exec
 DELETE FROM download_files
 WHERE download_hash = sqlc.arg(download_hash);
@@ -130,6 +137,7 @@ SET
     name_overridden = sqlc.arg(name_overridden),
     cloud_folder = sqlc.arg(cloud_folder),
     save_path = sqlc.arg(save_path),
+    workspace_path = sqlc.narg(workspace_path),
     destination_name = sqlc.narg(destination_name),
     cloud_task_name = sqlc.arg(cloud_task_name),
     cloud_result_path = sqlc.arg(cloud_result_path),

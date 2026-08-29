@@ -50,15 +50,73 @@ func TestCreateSubmissionDuplicateAndRevive(t *testing.T) {
 	}
 	revivedSubmission := testSubmission("a", now.Add(3*time.Minute))
 	revivedSubmission.Download.SubmissionURI = "magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	revivedSubmission.Download.CloudFolder = "/cloud/revived"
 	revivedSubmission.Download.CloudTaskName = "cloud-revived"
 	revivedSubmission.Files = []domain.DownloadFile{{DownloadHash: revivedSubmission.Download.Hash, Index: 0, RelativePath: "replacement.mkv", Size: 42}}
 	revived, inserted, err := store.CreateSubmission(ctx, revivedSubmission)
-	if err != nil || !inserted || revived.State != domain.StateAccepted || revived.RowVersion <= created.RowVersion || revived.SubmissionURI != revivedSubmission.Download.SubmissionURI || revived.CloudTaskName != revivedSubmission.Download.CloudTaskName {
+	if err != nil || !inserted || revived.State != domain.StateAccepted || revived.RowVersion <= created.RowVersion || revived.SubmissionURI != revivedSubmission.Download.SubmissionURI || revived.CloudFolder != revivedSubmission.Download.CloudFolder || revived.CloudTaskName != revivedSubmission.Download.CloudTaskName {
 		t.Fatalf("revive CreateSubmission() = (%+v, %t, %v), want revived accepted download", revived, inserted, err)
 	}
 	files, err := store.ListDownloadFiles(ctx, revived.Hash)
 	if err != nil || len(files) != 1 || files[0].RelativePath != "replacement.mkv" {
 		t.Fatalf("ListDownloadFiles() = (%+v, %v), want replaced files", files, err)
+	}
+}
+
+func TestCreateSubmissionRoundTripsWorkspacePath(t *testing.T) {
+	ctx := context.Background()
+	store := testStore(t)
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	submission := testSubmission("a", now)
+	submission.Download.WorkspacePath = "/downloads/.cd211/" + submission.Download.Hash
+	created, inserted, err := store.CreateSubmission(ctx, submission)
+	if err != nil || !inserted || created.WorkspacePath != submission.Download.WorkspacePath {
+		t.Fatalf("CreateSubmission() = (%+v, %t, %v), want workspace path round trip", created, inserted, err)
+	}
+	stored, err := store.GetDownload(ctx, submission.Download.Hash)
+	if err != nil || stored.WorkspacePath != submission.Download.WorkspacePath {
+		t.Fatalf("GetDownload() = (%+v, %v), want workspace path round trip", stored, err)
+	}
+}
+
+func TestCreateSubmissionRejectsWorkspaceNestingButAllowsSharedSaveRoot(t *testing.T) {
+	ctx := context.Background()
+	store := testStore(t)
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+
+	ancestor := testSubmission("a", now)
+	ancestor.Download.WorkspacePath = "/downloads/.cd211/" + ancestor.Download.Hash
+	if _, inserted, err := store.CreateSubmission(ctx, ancestor); err != nil || !inserted {
+		t.Fatalf("CreateSubmission(ancestor): inserted=%t err=%v", inserted, err)
+	}
+
+	nestedSave := testSubmission("b", now.Add(time.Second))
+	nestedSave.Download.SavePath = ancestor.Download.WorkspacePath
+	nestedSave.Download.WorkspacePath = nestedSave.Download.SavePath + "/.cd211/" + nestedSave.Download.Hash
+	if _, inserted, err := store.CreateSubmission(ctx, nestedSave); !errors.Is(err, ErrDestinationConflict) || inserted {
+		t.Fatalf("CreateSubmission(nested save): inserted=%t err=%v, want destination conflict", inserted, err)
+	}
+
+	workspaceOwner := testSubmission("c", now.Add(2*time.Second))
+	workspaceOwner.Download.SavePath = "/downloads/library/owner"
+	workspaceOwner.Download.WorkspacePath = workspaceOwner.Download.SavePath + "/.cd211/" + workspaceOwner.Download.Hash
+	if _, inserted, err := store.CreateSubmission(ctx, workspaceOwner); err != nil || !inserted {
+		t.Fatalf("CreateSubmission(workspace owner): inserted=%t err=%v", inserted, err)
+	}
+
+	nestedWorkspace := testSubmission("d", now.Add(3*time.Second))
+	nestedWorkspace.Download.SavePath = ancestor.Download.WorkspacePath + "/child"
+	nestedWorkspace.Download.WorkspacePath = nestedWorkspace.Download.SavePath + "/.cd211/" + nestedWorkspace.Download.Hash
+	if _, inserted, err := store.CreateSubmission(ctx, nestedWorkspace); !errors.Is(err, ErrDestinationConflict) || inserted {
+		t.Fatalf("CreateSubmission(nested workspace): inserted=%t err=%v, want destination conflict", inserted, err)
+	}
+
+	for _, seed := range []string{"e", "f"} {
+		shared := testSubmission(seed, now.Add(4*time.Second))
+		shared.Download.WorkspacePath = "/downloads/.cd211/" + shared.Download.Hash
+		if _, inserted, err := store.CreateSubmission(ctx, shared); err != nil || !inserted {
+			t.Fatalf("CreateSubmission(shared save root %s): inserted=%t err=%v", seed, inserted, err)
+		}
 	}
 }
 
@@ -124,6 +182,121 @@ func TestRepositoryListsAndIntents(t *testing.T) {
 	all, err = store.ListDownloads(ctx, nil)
 	if err != nil || len(all) != 2 {
 		t.Fatalf("ListDownloads() after delete = (%+v, %v), want request hidden", all, err)
+	}
+}
+
+func TestListAllDownloadsEnumeratesEveryState(t *testing.T) {
+	ctx := context.Background()
+	store := testStore(t)
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	states := []domain.State{
+		domain.StateAccepted,
+		domain.StateStopped,
+		domain.StateSubmittingOffline,
+		domain.StateWaitingOffline,
+		domain.StateSubmittingCopy,
+		domain.StateWaitingCopy,
+		domain.StateVerifyingLocal,
+		domain.StateCompleted,
+		domain.StateFailed,
+		domain.StateCancelRequested,
+		domain.StateCancelled,
+		domain.StateDeleteRequested,
+		domain.StateDeleted,
+	}
+	seeds := "123456789abcd"
+	for index, state := range states {
+		at := now.Add(time.Duration(index) * time.Second)
+		submission := testSubmission(string(seeds[index]), at)
+		submission.Download.Name = "download-" + string(seeds[index])
+		if _, inserted, err := store.CreateSubmission(ctx, submission); err != nil || !inserted {
+			t.Fatalf("CreateSubmission(%s): inserted=%t err=%v", state, inserted, err)
+		}
+
+		var (
+			cloudResultPath any
+			copySourcePath  any
+			contentPath     any
+			completedAt     any
+			removedAt       any
+			nextRunAt       any = at
+		)
+		switch state {
+		case domain.StateSubmittingCopy:
+			cloudResultPath = "/cloud/result"
+		case domain.StateWaitingCopy, domain.StateVerifyingLocal:
+			cloudResultPath = "/cloud/result"
+			copySourcePath = cloudResultPath
+		case domain.StateCompleted:
+			cloudResultPath = "/cloud/result"
+			copySourcePath = cloudResultPath
+			contentPath = "/downloads/content"
+			completedAt = at
+		}
+		if state == domain.StateStopped || state == domain.StateFailed || state == domain.StateCancelled ||
+			state == domain.StateDeleteRequested || state == domain.StateDeleted {
+			nextRunAt = nil
+		}
+		if state == domain.StateDeleteRequested || state == domain.StateDeleted {
+			removedAt = at
+		}
+		if _, err := store.db.ExecContext(ctx, `
+			UPDATE downloads
+			SET state = ?, cloud_result_path = ?, copy_source_path = ?, content_path = ?,
+				completed_at = ?, removed_at = ?, next_run_at = ?
+			WHERE hash = ?`,
+			string(state), cloudResultPath, copySourcePath, contentPath, completedAt, removedAt, nextRunAt, submission.Download.Hash,
+		); err != nil {
+			t.Fatalf("assign %s state: %v", state, err)
+		}
+		if state == domain.StateDeleted {
+			if _, err := store.db.ExecContext(ctx, `UPDATE downloads SET save_path = '' WHERE hash = ?`, submission.Download.Hash); err != nil {
+				t.Fatalf("corrupt ordinary deleted save path: %v", err)
+			}
+		}
+	}
+
+	all, err := store.ListAllDownloads(ctx)
+	if err != nil {
+		t.Fatalf("ListAllDownloads() error = %v", err)
+	}
+	if len(all) != len(states) {
+		t.Fatalf("ListAllDownloads() returned %d rows, want %d", len(all), len(states))
+	}
+	byHash := make(map[string]domain.Download, len(all))
+	for _, download := range all {
+		byHash[download.Hash] = download
+	}
+	for index, state := range states {
+		hash := strings.Repeat(string(seeds[index]), 40)
+		download, ok := byHash[hash]
+		if !ok || download.State != state || download.Name != "download-"+string(seeds[index]) {
+			t.Errorf("ListAllDownloads() missing mapped %s row: ok=%t download=%+v", state, ok, download)
+		}
+	}
+
+	visible, err := store.ListDownloads(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListDownloads() error = %v", err)
+	}
+	if len(visible) != len(states)-2 {
+		t.Fatalf("ListDownloads() returned %d rows, want %d visible rows", len(visible), len(states)-2)
+	}
+}
+
+func TestListAllDownloadsRejectsMalformedRow(t *testing.T) {
+	ctx := context.Background()
+	store := testStore(t)
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	submission := testSubmission("e", now)
+	if _, inserted, err := store.CreateSubmission(ctx, submission); err != nil || !inserted {
+		t.Fatalf("CreateSubmission(): inserted=%t err=%v", inserted, err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE downloads SET delete_files_requested = 2 WHERE hash = ?`, submission.Download.Hash); err != nil {
+		t.Fatalf("corrupt download row: %v", err)
+	}
+	if _, err := store.ListAllDownloads(ctx); err == nil {
+		t.Fatal("ListAllDownloads() error = nil, want malformed row error")
 	}
 }
 
@@ -665,6 +838,82 @@ func TestCategorySaveRootDoesNotEnterRetainedDeletedDestination(t *testing.T) {
 		Enabled: true, CreatedAt: now, UpdatedAt: now.Add(2 * time.Second),
 	}); !errors.Is(err, ErrDestinationConflict) {
 		t.Fatalf("retained destination update error = %v, want ErrDestinationConflict", err)
+	}
+}
+func TestReservedLogicalSavePathGuardsAreSymmetric(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name     string
+		savePath string
+		category bool
+		update   bool
+	}{
+		{name: "download save root insert", savePath: "/downloads/.cd211"},
+		{name: "download quarantine insert", savePath: "/downloads/.cd211/.quarantine"},
+		{name: "download category insert", savePath: "/downloads/.cd211/category"},
+		{name: "download save root update", savePath: "/downloads/.cd211", update: true},
+		{name: "category save root insert", savePath: "/downloads/.cd211", category: true},
+		{name: "category quarantine insert", savePath: "/downloads/.cd211/.quarantine", category: true},
+		{name: "category download insert", savePath: "/downloads/.cd211/download", category: true},
+		{name: "category save root update", savePath: "/downloads/.cd211", category: true, update: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := testStore(t)
+			if test.category {
+				category := domain.Category{Name: "reserved", CloudPath: "/cloud", SavePath: test.savePath, Enabled: true, CreatedAt: now, UpdatedAt: now}
+				if test.update {
+					category.SavePath = "/downloads"
+					if _, err := store.UpsertCategory(ctx, category); err != nil {
+						t.Fatalf("seed category: %v", err)
+					}
+					category.SavePath = test.savePath
+					category.UpdatedAt = now.Add(time.Second)
+				}
+				if _, err := store.UpsertCategory(ctx, category); !errors.Is(err, ErrDestinationConflict) {
+					t.Fatalf("UpsertCategory() error = %v, want ErrDestinationConflict", err)
+				}
+				return
+			}
+
+			submission := testSubmission("7", now)
+			if test.update {
+				if _, inserted, err := store.CreateSubmission(ctx, submission); err != nil || !inserted {
+					t.Fatalf("seed submission: inserted=%t err=%v", inserted, err)
+				}
+				if _, err := store.db.ExecContext(ctx, `UPDATE downloads SET save_path = ? WHERE hash = ?`, test.savePath, submission.Download.Hash); err == nil {
+					t.Fatal("raw save_path update accepted a reserved component")
+				}
+				return
+			}
+			submission.Download.SavePath = test.savePath
+			if _, inserted, err := store.CreateSubmission(ctx, submission); !errors.Is(err, ErrDestinationConflict) || inserted {
+				t.Fatalf("CreateSubmission() = inserted=%t err=%v, want ErrDestinationConflict", inserted, err)
+			}
+		})
+	}
+}
+
+func TestReservedLogicalSavePathGuardsAllowNearNamesAndGeneratedWorkspaces(t *testing.T) {
+	ctx := context.Background()
+	store := testStore(t)
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+
+	submission := testSubmission("8", now)
+	submission.Download.SavePath = "/downloads/.cd211-backup"
+	submission.Download.WorkspacePath = "/downloads/.cd211-backup/.cd211/" + submission.Download.Hash
+	created, inserted, err := store.CreateSubmission(ctx, submission)
+	if err != nil || !inserted || created.WorkspacePath != submission.Download.WorkspacePath {
+		t.Fatalf("CreateSubmission() = (%+v, %t, %v), want near-name logical root with generated workspace", created, inserted, err)
+	}
+
+	category := domain.Category{
+		Name: "near", CloudPath: "/cloud/near", SavePath: "/downloads/.cd211-backup/category",
+		Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if _, err := store.UpsertCategory(ctx, category); err != nil {
+		t.Fatalf("UpsertCategory() near-name path: %v", err)
 	}
 }
 

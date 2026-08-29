@@ -57,7 +57,7 @@ func (h *handler) createCategory(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err = h.repo.UpsertCategory(r.Context(), category); err != nil {
 		if errors.Is(err, store.ErrDestinationConflict) {
-			badRequest(w)
+			conflict(w)
 			return
 		}
 		internalError(w)
@@ -71,7 +71,7 @@ func (h *handler) createCategory(w http.ResponseWriter, r *http.Request) {
 	category.Enabled = true
 	if _, err = h.repo.UpsertCategory(r.Context(), category); err != nil {
 		if errors.Is(err, store.ErrDestinationConflict) {
-			badRequest(w)
+			conflict(w)
 			return
 		}
 		internalError(w)

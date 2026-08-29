@@ -52,6 +52,50 @@ type Filesystem interface {
 	Verify(string, fsafe.ExpectedContent) (fsafe.VerifiedContent, error)
 	VerifyUnknownType(string, string) (fsafe.UnknownContent, error)
 	Delete(string, string) error
+	PrepareWorkspace(string, string) (string, error)
+	DeleteWorkspace(string, string) error
+}
+
+// workspaceRoot centralizes the legacy shared-layout fallback. A non-empty
+// workspace belongs exclusively to this hash; empty is an intentional legacy
+// row whose physical root is SavePath.
+func workspaceRoot(d domain.Download) string {
+	if d.WorkspacePath != "" {
+		return d.WorkspacePath
+	}
+	return d.SavePath
+}
+
+func (s *Scheduler) prepareWorkspace(d *domain.Download) error {
+	if d.WorkspacePath == "" {
+		return nil
+	}
+	expected, err := fsafe.WorkspacePath(d.SavePath, d.Hash)
+	if err != nil || d.WorkspacePath != expected {
+		if err == nil {
+			err = errors.New("workspace path does not match download")
+		}
+		return err
+	}
+	actual, err := s.files.PrepareWorkspace(d.SavePath, d.Hash)
+	if err != nil {
+		return err
+	}
+	if actual != d.WorkspacePath {
+		return fmt.Errorf("prepared workspace path %q does not match %q", actual, d.WorkspacePath)
+	}
+	return nil
+}
+
+func (s *Scheduler) deleteCopyWorkspace(d *domain.Download) error {
+	if d.WorkspacePath != "" {
+		return s.files.DeleteWorkspace(d.SavePath, d.Hash)
+	}
+	if d.DestinationName == "" {
+		return errors.New("copy destination name is missing")
+	}
+	root := workspaceRoot(*d)
+	return s.files.Delete(filepath.Join(root, d.DestinationName), root)
 }
 
 // Config controls leasing, polling, and phase deadlines.
@@ -292,21 +336,19 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 		if d.LastUpstreamStatus == domain.UpstreamCopyCompleted {
 			if d.DestinationName == "" {
 				s.fail(d, domain.ProblemInternalWorkflowError)
-				return "retry_delete_local", nil
+				return "retry_cancel_copy", nil
 			}
-			contentPath := filepath.Join(d.SavePath, d.DestinationName)
-			if err := s.files.Delete(contentPath, d.SavePath); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				s.fail(d, domain.ProblemLocalDeleteFailed)
-				d.AttemptCount++
-				return "retry_delete_local", nil
+			root := workspaceRoot(*d)
+			if err := s.cloud.CancelCopy(ctx, d.CopySourcePath, root); err != nil {
+				return "retry_cancel_copy", s.cloudFailure(d, err, "cancel_copy")
 			}
 			d.CopyProgress, d.QbitProgress = 0, 0.9
-			d.LastUpstreamStatus, d.LastError, d.LastErrorCode, d.AttemptCount = domain.UpstreamOfflineFinished, "", "", 0
-			d.NextRunAt = new(now)
-			return "retry_delete_local", nil
+			markCleanupCancelled(d)
+			d.LastError, d.LastErrorCode, d.AttemptCount = "", "", 0
+			return "retry_cancel_copy", nil
 		}
 		if d.LastUpstreamStatus == domain.UpstreamCopyFailed {
-			if err := s.cloud.CancelCopy(ctx, d.CopySourcePath, d.SavePath); err != nil {
+			if err := s.cloud.CancelCopy(ctx, d.CopySourcePath, workspaceRoot(*d)); err != nil {
 				return "retry_cancel_copy", s.cloudFailure(d, err, "cancel_copy")
 			}
 			d.CopyProgress, d.QbitProgress = 0, 0.9
@@ -315,16 +357,24 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 			d.NextRunAt = new(now)
 			return "retry_cancel_copy", nil
 		}
-		if d.LastUpstreamStatus == cleanupCancelled+"|"+domain.UpstreamCopyFailed {
+		if d.LastUpstreamStatus == cleanupCancelled+"|"+domain.UpstreamCopyFailed ||
+			d.LastUpstreamStatus == cleanupCancelled+"|"+domain.UpstreamCopyCompleted {
 			if d.DestinationName == "" {
 				s.fail(d, domain.ProblemInternalWorkflowError)
 				return "retry_delete_copy", nil
 			}
-			contentPath := filepath.Join(d.SavePath, d.DestinationName)
-			if err := s.files.Delete(contentPath, d.SavePath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			if err := s.deleteCopyWorkspace(d); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				s.fail(d, domain.ProblemLocalDeleteFailed)
 				d.AttemptCount++
 				return "retry_delete_copy", nil
+			}
+			if d.WorkspacePath == "" {
+				workspace, err := fsafe.WorkspacePath(d.SavePath, d.Hash)
+				if err != nil {
+					s.fail(d, domain.ProblemInternalWorkflowError)
+					return "retry_delete_copy", nil
+				}
+				d.WorkspacePath = workspace
 			}
 			d.CopyProgress, d.QbitProgress = 0, 0.9
 			d.LastUpstreamStatus, d.LastError, d.LastErrorCode, d.AttemptCount = domain.UpstreamOfflineFinished, "", "", 0
@@ -332,6 +382,10 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 			return "retry_delete_copy", nil
 		}
 		if d.LastUpstreamStatus != destinationClear {
+			if err := s.prepareWorkspace(d); err != nil {
+				s.fail(d, domain.ProblemLocalVerificationFailed)
+				return "preflight_local", nil
+			}
 			if code := s.preflightDestination(d); code != "" {
 				s.fail(d, code)
 				return "preflight_local", nil
@@ -340,11 +394,16 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 			d.NextRunAt = new(now)
 			return "preflight_local", nil
 		}
-		task, err := s.cloud.EnsureCopy(ctx, clouddrive.CopySpec{SourcePath: d.CopySourcePath, DestinationPath: d.SavePath})
+		root := workspaceRoot(*d)
+		if err := s.prepareWorkspace(d); err != nil {
+			s.fail(d, domain.ProblemLocalVerificationFailed)
+			return "ensure_copy", nil
+		}
+		task, err := s.cloud.EnsureCopy(ctx, clouddrive.CopySpec{SourcePath: d.CopySourcePath, DestinationPath: root})
 		if err != nil {
 			return "ensure_copy", s.cloudFailure(d, err, "ensure_copy")
 		}
-		if err := validateCopyTask(task, d.CopySourcePath, d.SavePath); err != nil {
+		if err := validateCopyTask(task, d.CopySourcePath, root); err != nil {
 			s.fail(d, domain.ProblemCloudResponseInvalid)
 			return "ensure_copy", nil
 		}
@@ -365,7 +424,8 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 			s.fail(d, s.deadlineProblem(d))
 			return "inspect_copy", nil
 		}
-		task, found, err := s.cloud.InspectCopy(ctx, d.CopySourcePath, d.SavePath)
+		root := workspaceRoot(*d)
+		task, found, err := s.cloud.InspectCopy(ctx, d.CopySourcePath, root)
 		if err != nil {
 			return "inspect_copy", s.cloudFailure(d, err, "inspect_copy")
 		}
@@ -386,7 +446,7 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 			s.fail(d, domain.ProblemLocalVerificationFailed)
 			return "verify_local", nil
 		}
-		if err := validateCopyTask(task, d.CopySourcePath, d.SavePath); err != nil {
+		if err := validateCopyTask(task, d.CopySourcePath, root); err != nil {
 			s.fail(d, domain.ProblemCloudResponseInvalid)
 			return "inspect_copy", nil
 		}
@@ -443,7 +503,8 @@ func (s *Scheduler) cancel(ctx context.Context, d *domain.Download, now time.Tim
 	var err error
 	op := "cancel_offline"
 	if d.CopySourcePath != "" {
-		op, err = "cancel_copy", s.cloud.CancelCopy(ctx, d.CopySourcePath, d.SavePath)
+		root := workspaceRoot(*d)
+		op, err = "cancel_copy", s.cloud.CancelCopy(ctx, d.CopySourcePath, root)
 	} else {
 		err = s.cloud.CancelOffline(ctx, d.CloudFolder, d.Hash)
 	}
@@ -469,10 +530,15 @@ func (s *Scheduler) pause(ctx context.Context, d *domain.Download, now time.Time
 		d.State, d.LastError, d.LastErrorCode, d.AttemptCount, d.NextRunAt = domain.StateStopped, "", "", 0, nil
 		return "pause_offline", nil
 	}
-	if err := s.cloud.CancelCopy(ctx, d.CopySourcePath, d.SavePath); err != nil && !notFound(err) {
+	if err := s.cloud.CancelCopy(ctx, d.CopySourcePath, workspaceRoot(*d)); err != nil && !notFound(err) {
 		return "pause_copy", s.cleanupFailure(d, err)
 	}
-	if d.DestinationName == "" {
+	if d.WorkspacePath != "" {
+		if err := s.files.DeleteWorkspace(d.SavePath, d.Hash); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			s.cleanupProblem(d, domain.ProblemLocalDeleteFailed)
+			return "pause_copy", nil
+		}
+	} else if d.DestinationName == "" {
 		if hasCopyEvidence(d.LastUpstreamStatus) {
 			s.fail(d, domain.ProblemInternalWorkflowError)
 			return "pause_copy", nil
@@ -494,7 +560,7 @@ func (s *Scheduler) delete(ctx context.Context, d *domain.Download, now time.Tim
 		var err error
 		op := "cancel_offline"
 		if d.CopySourcePath != "" {
-			op, err = "cancel_copy", s.cloud.CancelCopy(ctx, d.CopySourcePath, d.SavePath)
+			op, err = "cancel_copy", s.cloud.CancelCopy(ctx, d.CopySourcePath, workspaceRoot(*d))
 		} else {
 			err = s.cloud.CancelOffline(ctx, d.CloudFolder, d.Hash)
 		}
@@ -507,18 +573,25 @@ func (s *Scheduler) delete(ctx context.Context, d *domain.Download, now time.Tim
 		return op, nil
 	}
 	if d.DeleteFilesRequested {
-		contentPath := d.ContentPath
-		if contentPath == "" && hasCopyEvidence(d.LastUpstreamStatus) {
-			if d.DestinationName == "" {
-				s.fail(d, domain.ProblemInternalWorkflowError)
-				return "delete_local", nil
-			}
-			contentPath = filepath.Join(d.SavePath, d.DestinationName)
-		}
-		if contentPath != "" {
-			if err := s.files.Delete(contentPath, d.SavePath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if d.WorkspacePath != "" {
+			if err := s.files.DeleteWorkspace(d.SavePath, d.Hash); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				s.cleanupProblem(d, domain.ProblemLocalDeleteFailed)
 				return "delete_local", nil
+			}
+		} else {
+			contentPath := d.ContentPath
+			if contentPath == "" && hasCopyEvidence(d.LastUpstreamStatus) {
+				if d.DestinationName == "" {
+					s.fail(d, domain.ProblemInternalWorkflowError)
+					return "delete_local", nil
+				}
+				contentPath = filepath.Join(d.SavePath, d.DestinationName)
+			}
+			if contentPath != "" {
+				if err := s.files.Delete(contentPath, d.SavePath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+					s.cleanupProblem(d, domain.ProblemLocalDeleteFailed)
+					return "delete_local", nil
+				}
 			}
 		}
 	}
@@ -669,8 +742,9 @@ func hasCopyEvidence(status string) bool {
 // tree decides file-vs-directory, size, and content path; uploaded torrents
 // use their durable manifest.
 func (s *Scheduler) verifyAndRecord(ctx context.Context, d *domain.Download) error {
+	root := workspaceRoot(*d)
 	if d.SourceKind == domain.SourceMagnet || d.IsMultiFile == nil {
-		content, err := s.files.VerifyUnknownType(d.SavePath, d.DestinationName)
+		content, err := s.files.VerifyUnknownType(root, d.DestinationName)
 		if err != nil {
 			return err
 		}
@@ -718,9 +792,9 @@ func (s *Scheduler) verifyAndRecord(ctx context.Context, d *domain.Download) err
 	if planner, ok := s.files.(interface {
 		ApplyFilePlan(string, string, []fsafe.FilePlan) error
 	}); ok && hasOverride {
-		planRoot := d.SavePath
+		planRoot := root
 		if !copiesTorrentAsFile(*d) {
-			planRoot = filepath.Join(d.SavePath, d.DestinationName)
+			planRoot = filepath.Join(root, d.DestinationName)
 		}
 		if err := planner.ApplyFilePlan(planRoot, d.Hash, plans); err != nil {
 			return err
@@ -742,7 +816,7 @@ func (s *Scheduler) verifyAndRecord(ctx context.Context, d *domain.Download) err
 	for _, file := range effectiveFiles {
 		expected.Files = append(expected.Files, fsafe.ExpectedFile{RelativePath: file.RelativePath, Size: file.Size})
 	}
-	content, err := s.files.Verify(d.SavePath, expected)
+	content, err := s.files.Verify(root, expected)
 	if err != nil {
 		return err
 	}
@@ -764,15 +838,16 @@ func expected(d domain.Download) fsafe.ExpectedContent {
 // absent; magnets carry no metadata, so any safe existing regular file or
 // directory at the destination is a collision regardless of type.
 func (s *Scheduler) preflightDestination(d *domain.Download) domain.ProblemCode {
+	root := workspaceRoot(*d)
 	if d.SourceKind == domain.SourceTorrent && d.IsMultiFile != nil {
-		if _, err := s.files.Verify(d.SavePath, expected(*d)); err == nil {
+		if _, err := s.files.Verify(root, expected(*d)); err == nil {
 			return domain.ProblemDestinationCollision
 		} else if !errors.Is(err, fs.ErrNotExist) {
 			return domain.ProblemLocalVerificationFailed
 		}
 		return ""
 	}
-	if _, err := s.files.VerifyUnknownType(d.SavePath, d.DestinationName); err == nil {
+	if _, err := s.files.VerifyUnknownType(root, d.DestinationName); err == nil {
 		return domain.ProblemDestinationCollision
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return domain.ProblemLocalVerificationFailed

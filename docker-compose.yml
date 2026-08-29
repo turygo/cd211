@@ -14,10 +14,13 @@ services:
       # timeouts) happens in the first-run web setup wizard and is stored in
       # SQLite; no CD2_* or CLOUD_ROOT environment variables are read.
       #
-      # Staging directories are created as 2770 PUID:PGID, so CloudDrive2,
-      # Sonarr, and Radarr must all run in the PGID group. CloudDrive2 must also
-      # start with umask 0002, otherwise CD211 cannot delete what it copied; the
-      # official image needs an entrypoint override for that:
+      # CD211 hardens the logical save path to exactly 03770 (sticky+setgid),
+      # the .cd211 namespace to exactly 02750 (setgid, owner-writable, and
+      # group-traversable), and each hash workspace to exactly 02770
+      # (setgid and group-writable), without changing ownership or group.
+      # CloudDrive2, Sonarr, and Radarr must run in the PGID group. CloudDrive2
+      # must also start with umask 0002, otherwise CD211 cannot manage copied
+      # files; the official image needs an entrypoint override:
       #   entrypoint: ["/bin/sh", "-c", "umask 0002; exec /clouddrive/clouddrive"]
       - PUID=${PUID:-99}
       - PGID=${PGID:-100}
@@ -25,9 +28,10 @@ services:
       # SQLite requires a host-local filesystem with POSIX locking; NFS and SMB
       # mounts are unsupported for /data.
       - cd211_data:/data
-      # CloudDrive2 must mount this same host directory at this same container
-      # path, because CD211 hands its own save path to CloudDrive2 as the copy
-      # destination. Sonarr and Radarr also import from this path.
+      # CloudDrive2, CD211, Sonarr, and Radarr must mount the same host staging
+      # directory at this exact path. New workspaces live beneath it at
+      # <logical-save-path>/.cd211/<lowercase-40-char-hash>, so no extra volume
+      # submits that workspace path to CloudDrive2 as the copy destination.
       - ./downloads:/downloads
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]

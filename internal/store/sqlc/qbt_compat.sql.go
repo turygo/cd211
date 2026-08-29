@@ -7,6 +7,7 @@ package storedb
 
 import (
 	"context"
+	"database/sql"
 	"time"
 )
 
@@ -127,20 +128,22 @@ func (q *Queries) UpdateDownloadAutoTMM(ctx context.Context, arg UpdateDownloadA
 }
 
 const updateDownloadSavePath = `-- name: UpdateDownloadSavePath :execrows
-UPDATE downloads SET save_path = ?1, updated_at = ?2, row_version = row_version + 1
-WHERE hash = ?3 AND state IN ('STOPPED', 'ACCEPTED') AND lease_owner IS NULL AND content_path IS NULL AND copy_source_path IS NULL AND cloud_result_path IS NULL AND row_version = ?4
+UPDATE downloads SET save_path = ?1, workspace_path = ?2, updated_at = ?3, row_version = row_version + 1
+WHERE hash = ?4 AND state IN ('STOPPED', 'ACCEPTED') AND lease_owner IS NULL AND content_path IS NULL AND copy_source_path IS NULL AND cloud_result_path IS NULL AND row_version = ?5
 `
 
 type UpdateDownloadSavePathParams struct {
-	SavePath           string    `json:"save_path"`
-	UpdatedAt          time.Time `json:"updated_at"`
-	Hash               string    `json:"hash"`
-	ExpectedRowVersion int64     `json:"expected_row_version"`
+	SavePath           string         `json:"save_path"`
+	WorkspacePath      sql.NullString `json:"workspace_path"`
+	UpdatedAt          time.Time      `json:"updated_at"`
+	Hash               string         `json:"hash"`
+	ExpectedRowVersion int64          `json:"expected_row_version"`
 }
 
 func (q *Queries) UpdateDownloadSavePath(ctx context.Context, arg UpdateDownloadSavePathParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, updateDownloadSavePath,
 		arg.SavePath,
+		arg.WorkspacePath,
 		arg.UpdatedAt,
 		arg.Hash,
 		arg.ExpectedRowVersion,

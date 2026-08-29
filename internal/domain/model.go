@@ -47,16 +47,19 @@ type FileOverride struct {
 
 // Download is the durable state of a submitted download.
 type Download struct {
-	Hash                 string
-	Name                 string
-	NameOverridden       bool
-	SourceKind           SourceKind
-	SubmissionURI        string
-	Category             string
-	Tags                 string
-	AutoTMM              bool
-	CloudFolder          string
-	SavePath             string
+	Hash           string
+	Name           string
+	NameOverridden bool
+	SourceKind     SourceKind
+	SubmissionURI  string
+	Category       string
+	Tags           string
+	AutoTMM        bool
+	CloudFolder    string
+	SavePath       string
+	// WorkspacePath is the isolated physical workspace. Empty means this is
+	// an intentional legacy shared-layout row.
+	WorkspacePath        string
 	DestinationName      string
 	CloudTaskName        string
 	CloudResultPath      string

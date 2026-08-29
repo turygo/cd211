@@ -8,7 +8,7 @@ English | [简体中文](README.md)
 
 ## Bring 115 offline downloads to Sonarr and Radarr
 
-CD211 connects to Sonarr and Radarr through the qBittorrent Web API and hands magnet links or `.torrent` files to CloudDrive2. It waits for the 115 offline download, copies the content to a shared NAS directory, verifies the local files, and only then reports the download as complete.
+CD211 connects to Sonarr and Radarr through the qBittorrent Web API and hands magnet links or `.torrent` files to CloudDrive2. It waits for the 115 offline download, copies the content into an isolated per-hash workspace under the shared NAS staging root, verifies the local files, and only then reports the download as complete.
 
 Keep the media automation workflow you already know. Replace brittle scripts with one Web UI where the whole download, copy, verification, and import handoff is visible and recoverable.
 
@@ -56,6 +56,16 @@ Host staging directory -> CloudDrive2: /downloads
                        -> Sonarr:      /downloads
                        -> Radarr:      /downloads
 ```
+
+CD211 keeps the qBittorrent `save_path` as the logical category root; it is never replaced by the physical workspace. New downloads use an isolated physical workspace at `<save_path>/.cd211/<lowercase-hash>` and report the verified `content_path` inside that workspace. Legacy rows have an empty `WorkspacePath` and retain the historical shared layout. Because `.cd211/<hash>` is nested under the existing staging mount, no extra volume is needed; CloudDrive2, CD211, Sonarr, and Radarr must see it at the same absolute path.
+
+To prevent cross-task deletion, CD211 rejects a workspace that overlaps another task's logical save path, and rejects conflicting workspace paths; multiple tasks may still share the same logical save-path parent.
+
+`.cd211` is a globally reserved exact path component. A configured local root, download logical `save_path`, or category save root is invalid if either its clean absolute path or its fully resolved canonical path contains a component named exactly `.cd211`; internally generated `WorkspacePath` values are exempt. Near-names such as `.cd211-backup` remain valid. Ordinary symlink aliases without the reserved component also remain valid; distinct hashes stay isolated even when different logical roots resolve to the same physical save root. To prevent data loss, this rule intentionally rejects logical roots and symlink targets that may previously have been valid.
+
+The upgrade SQL migration checks only the literal components of persisted paths. It aborts atomically before changing the schema or backfilling data if the exact `.cd211` component occurs in any category save path, or in the logical `save_path` of any download that is not deleted or is still retained; it cannot detect a legacy path whose symlink target resolves into `.cd211`. CD211 therefore runs a filesystem-aware canonical-path preflight before activating a runtime at startup or during a settings hot swap. The preflight checks the configured local root, every category save root, and the logical `save_path` of every download that is not `DELETED`, plus each `DELETED` download whose `content_path` is non-empty and whose file deletion was not requested. A legacy symlink alias that fully resolves through `.cd211` or outside the configured local root makes startup or settings apply fail; a failed hot swap leaves the current runtime active. Rename or repoint the offending symlink, or reconfigure and correct the corresponding local root, category, or stored download save path, then restart or apply Settings again. Deleted downloads that no longer retain local content are exempt only from these preflight checks; a later write to their logical save path is still rejected.
+
+CD211 preserves directory ownership and group, and hardens modes before use: the logical save path is exactly `03770` (sticky and setgid), `.cd211` is exactly `02750` (owner-writable and group-traversable, not group-writable), and each hash workspace is exactly `02770` (setgid and group-writable). Persisted `save_path` and `WorkspacePath` remain the paths fixed at submission; symlinks are resolved only for internal boundary checks, and a later retarget outside the configured root fails closed without rewriting the saved paths.
 
 Use the same `PGID` for CloudDrive2, CD211, Sonarr, and Radarr. When using the official CloudDrive2 image, start it with `umask 0002` so CD211 can manage copied files.
 

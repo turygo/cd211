@@ -223,7 +223,11 @@ func (s *Service) submit(ctx context.Context, result torrentmeta.Result, source 
 		savePath = resolved
 	}
 	now := s.clock.Now().UTC()
-	download := domain.Download{Hash: result.Hash, Name: result.Name, SourceKind: source, SubmissionURI: result.Magnet, Category: category, CloudFolder: cloudFolder, SavePath: savePath, TotalSize: result.TotalSize, State: domain.StateAccepted, PhaseStartedAt: now, NextRunAt: &now, CreatedAt: now, UpdatedAt: now}
+	workspacePath, workspaceErr := fsafe.WorkspacePath(savePath, result.Hash)
+	if workspaceErr != nil {
+		return domain.Download{}, false, fmt.Errorf("derive workspace path: %w", workspaceErr)
+	}
+	download := domain.Download{Hash: result.Hash, Name: result.Name, SourceKind: source, SubmissionURI: result.Magnet, Category: category, CloudFolder: cloudFolder, SavePath: savePath, WorkspacePath: workspacePath, TotalSize: result.TotalSize, State: domain.StateAccepted, PhaseStartedAt: now, NextRunAt: &now, CreatedAt: now, UpdatedAt: now}
 	if options.TagsSet {
 		download.Tags = options.Tags
 	}
@@ -278,7 +282,11 @@ func (s *Service) prepareRetainedContent(ctx context.Context, download *domain.D
 		expected.CandidateName = existing.DestinationName
 	} else {
 		candidate := filepath.Clean(existing.ContentPath)
-		if filepath.Dir(candidate) != filepath.Clean(existing.SavePath) || !safeRetainedName(filepath.Base(candidate)) {
+		root := filepath.Clean(existing.SavePath)
+		if existing.WorkspacePath != "" {
+			root = filepath.Clean(existing.WorkspacePath)
+		}
+		if filepath.Dir(candidate) != root || !safeRetainedName(filepath.Base(candidate)) {
 			return
 		}
 		expected.CandidateName = filepath.Base(candidate)
@@ -314,7 +322,11 @@ func (s *Service) prepareRetainedContent(ctx context.Context, download *domain.D
 	} else {
 		expected.MultiFile = *existing.IsMultiFile
 	}
-	content, err := s.files.Verify(existing.SavePath, expected)
+	root := existing.SavePath
+	if existing.WorkspacePath != "" {
+		root = existing.WorkspacePath
+	}
+	content, err := s.files.Verify(root, expected)
 	if err != nil || filepath.Clean(content.Path) != filepath.Clean(existing.ContentPath) {
 		return
 	}
@@ -327,6 +339,7 @@ func (s *Service) prepareRetainedContent(ctx context.Context, download *domain.D
 	}
 	download.CloudTaskName = existing.CloudTaskName
 	download.CloudResultPath = existing.CloudResultPath
+	download.WorkspacePath = existing.WorkspacePath
 	download.CopySourcePath = existing.CopySourcePath
 	download.ContentPath = content.Path
 	download.State = domain.StateVerifyingLocal
@@ -334,6 +347,7 @@ func (s *Service) prepareRetainedContent(ctx context.Context, download *domain.D
 	download.CopyProgress = 1
 	download.QbitProgress = 0.99
 	download.LastUpstreamStatus = domain.UpstreamRetainedContent
+
 }
 
 // CanonicalCategory applies the shared canonical category rules shared by the
