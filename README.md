@@ -150,6 +150,8 @@ PGID=100
 
 `/api/v2` 提供当前 ANI-RSS 所需的兼容子集：七个读接口同时接受 GET 和 POST；支持 `torrents/add`、`start`、标签、文件优先级、文件重命名、禁用自动管理及保存位置更新。该服务不是完整 qBittorrent，也不实现 BT 传输、做种、限速或 `/torrents/resume` 别名。
 
+兼容基线为 qBittorrent 5.0.0 / WebAPI 2.11.0 的 102 个路由，其中 CD211 实现 24 个。`log`、`rss`、`search`、`sync` 和 `transfer` 整组未实现；已实现路由也只投影 CD211 持有的数据：`app/preferences`、`torrents/info`、`properties` 和 `files` 不返回完整 qBittorrent 字段，`info` 仅处理 `category` 与 `filter`，自动管理只能禁用，保存位置只能在任务开始前改到已配置本地根目录内，`setShareLimits` 与 `topPrio` 是空操作。
+
 ### 原生 API
 
 在 Web 界面的**设置**页面生成以 `cd211_api_` 开头的全局自动化 API 令牌，然后使用 `Authorization: Bearer <cd211_api-token>` 调用 `/api/v1`：

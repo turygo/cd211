@@ -9,6 +9,11 @@ CD211 的所有重要变更均记录在此文件中。
 
 ### Changed
 
+### Fixed
+
+- 修复 qBittorrent `torrents/add` 只能处理单个来源的问题；现在兼容换行分隔的多个 URL、重复的 `torrents` 文件字段、同请求混合 URL 与文件，并接受 AutoBangumi 使用的编号文件字段。
+- 修复 qBittorrent 分类大小写导致 `torrents/info` 查不到任务、`filter=completed` 未生效、`app/setPreferences` 拒绝无关合法字段，以及重复创建分类未返回冲突的问题。
+
 ## [0.4.10] - 2026-08-30
 ### Added
 

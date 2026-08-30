@@ -39,51 +39,7 @@ func (h *handler) setPreferences(w http.ResponseWriter, r *http.Request) {
 		badRequest(w)
 		return
 	}
-	current := preferences{SavePath: h.config.LocalRoot, DHT: true, QueueingEnabled: false, MaxRatioEnabled: false, MaxRatio: -1, MaxSeedingTimeEnabled: false, MaxSeedingTime: -1, MaxInactiveSeedingTimeEnabled: false, MaxInactiveSeedingTime: -1, MaxRatioAct: 0}
-	settings, err := h.repo.ListSettings(r.Context())
-	if err != nil {
-		internalError(w)
-		return
-	}
-	current.AddTrackers, current.AddTrackersEnabled = settings["qbt.add_trackers"], settings["qbt.add_trackers_enabled"] == "true"
-	known := map[string]bool{"save_path": true, "dht": true, "queueing_enabled": true, "max_ratio_enabled": true, "max_ratio": true, "max_seeding_time_enabled": true, "max_seeding_time": true, "max_inactive_seeding_time_enabled": true, "max_inactive_seeding_time": true, "max_ratio_act": true, "add_trackers": true, "add_trackers_enabled": true}
-	for key, value := range submitted {
-		if !known[key] {
-			badRequest(w)
-			return
-		}
-		if key == "add_trackers" || key == "add_trackers_enabled" {
-			continue
-		}
-		var expected any
-		switch key {
-		case "save_path":
-			expected = current.SavePath
-		case "dht":
-			expected = current.DHT
-		case "queueing_enabled":
-			expected = current.QueueingEnabled
-		case "max_ratio_enabled":
-			expected = current.MaxRatioEnabled
-		case "max_ratio":
-			expected = current.MaxRatio
-		case "max_seeding_time_enabled":
-			expected = current.MaxSeedingTimeEnabled
-		case "max_seeding_time":
-			expected = current.MaxSeedingTime
-		case "max_inactive_seeding_time_enabled":
-			expected = current.MaxInactiveSeedingTimeEnabled
-		case "max_inactive_seeding_time":
-			expected = current.MaxInactiveSeedingTime
-		case "max_ratio_act":
-			expected = current.MaxRatioAct
-		}
-		encoded, _ := json.Marshal(expected)
-		if string(encoded) != string(value) {
-			conflict(w)
-			return
-		}
-	}
+
 	var trackersValue *string
 	var enabledValue *bool
 	if value, exists := submitted["add_trackers"]; exists {

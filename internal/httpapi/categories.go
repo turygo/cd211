@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"path"
 	"path/filepath"
+	"strings"
 
 	"github.com/turygo/cd211/internal/domain"
 	"github.com/turygo/cd211/internal/store"
@@ -30,9 +31,20 @@ func (h *handler) createCategory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rawName, present := exactlyOne(form["category"])
-	name, valid := submission.CanonicalCategory(rawName, false)
-	if !present || !valid {
+	if !present || strings.TrimSpace(rawName) == "" {
 		badRequest(w)
+		return
+	}
+	name, valid := submission.CanonicalCategory(rawName, false)
+	if !valid {
+		conflict(w)
+		return
+	}
+	if _, err := h.repo.GetCategory(r.Context(), name); err == nil {
+		conflict(w)
+		return
+	} else if !errors.Is(err, store.ErrNotFound) {
+		internalError(w)
 		return
 	}
 

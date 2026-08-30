@@ -74,12 +74,26 @@ func (h *handler) addTorrent(w http.ResponseWriter, r *http.Request) {
 	}
 	logging.Enrich(r, map[string]any{"category": category})
 
-	urls := r.PostForm["urls"]
-	var files map[string][]*multipart.FileHeader
-	if r.MultipartForm != nil {
-		files = r.MultipartForm.File
+	urlValues := r.PostForm["urls"]
+	if len(urlValues) > 1 {
+		fail(http.StatusBadRequest, "Bad Request", "invalid_request")
+		return
 	}
-	if len(r.PostForm["torrents"]) != 0 || (len(urls) > 0 && len(files["torrents"]) > 0) {
+	var urls []string
+	if len(urlValues) == 1 {
+		for line := range strings.SplitSeq(urlValues[0], "\n") {
+			if line = strings.TrimSpace(line); line != "" {
+				urls = append(urls, line)
+			}
+		}
+	}
+	var torrentFiles []*multipart.FileHeader
+	if r.MultipartForm != nil {
+		for _, headers := range r.MultipartForm.File {
+			torrentFiles = append(torrentFiles, headers...)
+		}
+	}
+	if len(r.PostForm["torrents"]) != 0 {
 		fail(http.StatusBadRequest, "Bad Request", "invalid_request")
 		return
 	}
@@ -130,93 +144,100 @@ func (h *handler) addTorrent(w http.ResponseWriter, r *http.Request) {
 		options.SavePathSet, options.SavePath = true, values[0]
 	}
 
-	var download domain.Download
-	var inserted bool
-	var remoteSource bool
-	switch {
-	case len(urls) > 0:
-		if len(urls) != 1 {
+	var cookie string
+	if values, present := r.PostForm["cookie"]; present {
+		if len(values) != 1 {
 			fail(http.StatusBadRequest, "Bad Request", "invalid_request")
 			return
 		}
-		source, parseErr := url.ParseRequestURI(urls[0])
+		cookie = values[0]
+	}
+
+	successCount := 0
+	failureCount := 0
+	addedIDs := make([]string, 0, len(urls)+len(torrentFiles))
+	record := func(download domain.Download, inserted bool, submitErr error, filename string) bool {
+		if submitErr == nil {
+			if inserted {
+				successCount++
+				addedIDs = append(addedIDs, download.Hash)
+			} else {
+				failureCount++
+			}
+			return true
+		}
+		if errors.Is(submitErr, submission.ErrCategoryInvalid) {
+			fail(http.StatusConflict, "Conflict", "category_unavailable")
+		} else if errors.Is(submitErr, submission.ErrInvalidOptions) {
+			reason := "invalid_options"
+			if options.SavePathSet {
+				reason = "invalid_save_path"
+			}
+			fail(http.StatusConflict, "Conflict", reason)
+		} else if errors.Is(submitErr, submission.ErrInvalidSource) {
+			if filename == "" {
+				failureCount++
+				return true
+			}
+			fail(http.StatusUnsupportedMediaType, "Error: '"+logging.SanitizeFilename(filename)+"' is not a valid torrent file.", "invalid_torrent")
+		} else {
+			logging.Enrich(r, map[string]any{"error": submitErr.Error()})
+			fail(http.StatusInternalServerError, "Internal Server Error", "internal_error")
+		}
+		return false
+	}
+
+	for _, rawURL := range urls {
+		source, parseErr := url.ParseRequestURI(rawURL)
 		if parseErr != nil {
-			fail(http.StatusBadRequest, "Bad Request", "invalid_request")
-			return
+			failureCount++
+			continue
 		}
+		var download domain.Download
+		var inserted bool
+		var submitErr error
 		switch strings.ToLower(source.Scheme) {
 		case "magnet":
-			logging.Enrich(r, logging.SanitizeMagnet(urls[0]))
-			download, inserted, err = h.service.SubmitMagnetWithOptions(r.Context(), urls[0], category, stopped, options)
+			logging.Enrich(r, logging.SanitizeMagnet(rawURL))
+			download, inserted, submitErr = h.service.SubmitMagnetWithOptions(r.Context(), rawURL, category, stopped, options)
 		case "http", "https":
-			remoteSource = true
-			logging.Enrich(r, logging.SanitizeURL(urls[0]))
-			var cookie string
-			if values, present := r.PostForm["cookie"]; present {
-				if len(values) != 1 {
-					fail(http.StatusBadRequest, "Bad Request", "invalid_request")
-					return
-				}
-				cookie = values[0]
-			}
+			logging.Enrich(r, logging.SanitizeURL(rawURL))
 			data, fetchErr := fetchTorrent(r.Context(), source, cookie, h.config.TorrentLimits.MaxInputBytes)
 			if fetchErr != nil {
-				fail(http.StatusConflict, "Conflict", "torrent_fetch_failed")
-				return
+				failureCount++
+				continue
 			}
-			download, inserted, err = h.service.SubmitTorrentWithOptions(r.Context(), data, category, stopped, options)
+			download, inserted, submitErr = h.service.SubmitTorrentWithOptions(r.Context(), data, category, stopped, options)
 		default:
-			fail(http.StatusBadRequest, "Bad Request", "invalid_request")
+			failureCount++
+			continue
+		}
+		if !record(download, inserted, submitErr, "") {
 			return
 		}
-	case len(files["torrents"]) > 0:
-		if mediaType != "multipart/form-data" || len(files["torrents"]) != 1 {
-			fail(http.StatusBadRequest, "Bad Request", "invalid_request")
-			return
-		}
-		header := files["torrents"][0]
+	}
+
+	for _, header := range torrentFiles {
 		logging.Enrich(r, map[string]any{"source_kind": "torrent", "filename": logging.SanitizeFilename(header.Filename), "size": header.Size})
 		data, readErr := readUpload(header)
 		if readErr != nil {
 			fail(http.StatusBadRequest, "Bad Request", "request_too_large")
 			return
 		}
-		download, inserted, err = h.service.SubmitTorrentWithOptions(r.Context(), data, category, stopped, options)
-	default:
-		fail(http.StatusBadRequest, "Bad Request", "invalid_request")
-		return
-	}
-	if err != nil {
-		if errors.Is(err, submission.ErrCategoryInvalid) {
-			fail(http.StatusConflict, "Conflict", "category_unavailable")
-		} else if errors.Is(err, submission.ErrInvalidOptions) {
-			reason := "invalid_options"
-			if options.SavePathSet {
-				reason = "invalid_save_path"
-			}
-			fail(http.StatusConflict, "Conflict", reason)
-		} else if errors.Is(err, submission.ErrInvalidSource) {
-			if len(files["torrents"]) > 0 {
-				fail(http.StatusUnsupportedMediaType, "Error: '"+logging.SanitizeFilename(files["torrents"][0].Filename)+"' is not a valid torrent file.", "invalid_torrent")
-			} else if remoteSource {
-				fail(http.StatusConflict, "Conflict", "torrent_fetch_failed")
-			} else {
-				fail(http.StatusConflict, "Conflict", "invalid_magnet")
-			}
-		} else {
-			logging.Enrich(r, map[string]any{"error": err.Error()})
-			fail(http.StatusInternalServerError, "Internal Server Error", "internal_error")
+		download, inserted, submitErr := h.service.SubmitTorrentWithOptions(r.Context(), data, category, stopped, options)
+		if !record(download, inserted, submitErr, header.Filename) {
+			return
 		}
+	}
+
+	if successCount == 0 {
+		fail(http.StatusConflict, "Conflict", "duplicate_or_failed")
 		return
 	}
-	logging.Enrich(r, map[string]any{"infohash": download.Hash, "name": download.Name, "resolved_savepath": download.SavePath})
-	if !inserted {
-		fail(http.StatusConflict, "Conflict", "duplicate")
-		return
-	}
+	logging.Enrich(r, map[string]any{"success_count": successCount, "failure_count": failureCount})
 	logging.SetReason(r, "accepted")
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"success_count": 1, "failure_count": 0, "pending_count": 0, "added_torrent_ids": []string{download.Hash}})
+	_ = json.NewEncoder(w).Encode(map[string]any{"success_count": successCount, "failure_count": failureCount, "pending_count": 0, "added_torrent_ids": addedIDs})
 }
 
 func readUpload(header *multipart.FileHeader) ([]byte, error) {
@@ -297,17 +318,26 @@ func optionalBool(values []string) (bool, bool) {
 func (h *handler) info(w http.ResponseWriter, r *http.Request) {
 	var category *string
 	values, parseOK := readRequestValues(r, "category")
-	if !parseOK {
+	if !parseOK || len(values) > 1 {
 		badRequest(w)
 		return
 	}
-	if len(values) > 0 {
-		if len(values) != 1 {
+	if len(values) == 1 {
+		value, valid := submission.CanonicalCategory(values[0], true)
+		if !valid {
 			badRequest(w)
 			return
 		}
-		value := values[0]
 		category = &value
+	}
+	values, parseOK = readRequestValues(r, "filter")
+	if !parseOK || len(values) > 1 {
+		badRequest(w)
+		return
+	}
+	filter := ""
+	if len(values) == 1 {
+		filter = values[0]
 	}
 	downloads, err := h.repo.ListDownloads(r.Context(), category)
 	if err != nil {
@@ -321,9 +351,35 @@ func (h *handler) info(w http.ResponseWriter, r *http.Request) {
 			internalError(w)
 			return
 		}
+		if !matchesTorrentFilter(projected, filter) {
+			continue
+		}
 		result = append(result, torrentInfo{Hash: projected.Hash, Name: projected.Name, Size: projected.Size, Completed: projected.Completed, Progress: projected.Progress, ETA: projected.ETA, State: projected.State, Category: projected.Category, Tags: projected.Tags, SavePath: projected.SavePath, ContentPath: projected.ContentPath, Ratio: projected.Ratio, RatioLimit: projected.RatioLimit, SeedingTime: projected.SeedingTime, SeedingTimeLimit: projected.SeedingTimeLimit, InactiveSeedingTimeLimit: projected.InactiveSeedingTimeLimit, LastActivity: projected.LastActivity})
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func matchesTorrentFilter(projected domain.Projection, filter string) bool {
+	switch filter {
+	case "", "all":
+		return true
+	case "downloading", "running", "active":
+		return projected.State == "queuedDL" || projected.State == "metaDL" || projected.State == "downloading" || projected.State == "moving"
+	case "completed":
+		return projected.Progress == 1
+	case "stopped":
+		return projected.State == "stoppedDL" || projected.State == "stoppedUP"
+	case "inactive":
+		return projected.State == "stoppedDL" || projected.State == "stoppedUP" || projected.State == "error"
+	case "moving":
+		return projected.State == "moving"
+	case "errored":
+		return projected.State == "error"
+	case "seeding", "stalled", "stalled_uploading", "stalled_downloading", "checking":
+		return false
+	default:
+		return true
+	}
 }
 
 func (h *handler) properties(w http.ResponseWriter, r *http.Request) {

@@ -697,6 +697,84 @@ func TestBase32MagnetDuplicateAndRedactionContract(t *testing.T) {
 	}
 }
 
+func TestBatchAddURLsAndTorrentFilesContract(t *testing.T) {
+	t.Parallel()
+	harness := newContractHarness(t)
+	cookie := harness.login(t)
+	magnets := []string{
+		"magnet:?xt=urn:btih:1111111111111111111111111111111111111111&dn=one",
+		"magnet:?xt=urn:btih:2222222222222222222222222222222222222222&dn=two",
+	}
+	uploads := []struct {
+		field    string
+		filename string
+		data     []byte
+	}{
+		{"torrents", "three.torrent", []byte("d4:infod6:lengthi3e4:name5:three12:piece lengthi16384e6:pieces20:31234567890123456789ee")},
+		{"torrents", "four.torrent", []byte("d4:infod6:lengthi4e4:name4:four12:piece lengthi16384e6:pieces20:41234567890123456789ee")},
+		{"torrents_0", "five.torrent", []byte("d4:infod6:lengthi5e4:name4:five12:piece lengthi16384e6:pieces20:51234567890123456789ee")},
+	}
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("urls", strings.Join(magnets, "\n")); err != nil {
+		t.Fatal(err)
+	}
+	for _, upload := range uploads {
+		part, err := writer.CreateFormFile(upload.field, upload.filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := part.Write(upload.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v2/torrents/add", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	harness.api.ServeHTTP(response, request)
+	var result struct {
+		SuccessCount int      `json:"success_count"`
+		FailureCount int      `json:"failure_count"`
+		PendingCount int      `json:"pending_count"`
+		IDs          []string `json:"added_torrent_ids"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || response.Code != http.StatusOK ||
+		result.SuccessCount != 5 || result.FailureCount != 0 || result.PendingCount != 0 ||
+		len(result.IDs) != 5 || harness.waker.wakes != 5 {
+		t.Fatalf("batch add = %d %q wakes=%d", response.Code, response.Body.String(), harness.waker.wakes)
+	}
+	seen := make(map[string]struct{}, len(result.IDs))
+	for _, id := range result.IDs {
+		seen[id] = struct{}{}
+	}
+	if len(seen) != 5 {
+		t.Fatalf("batch ids = %#v", result.IDs)
+	}
+}
+
+func TestBatchAddPartialFailureCountsContract(t *testing.T) {
+	t.Parallel()
+	harness := newContractHarness(t)
+	cookie := harness.login(t)
+	magnet := "magnet:?xt=urn:btih:3333333333333333333333333333333333333333&dn=duplicate"
+	response := doForm(t, harness.api, http.MethodPost, "/api/v2/torrents/add", url.Values{"urls": {magnet + "\n" + magnet}}, cookie)
+	var result struct {
+		SuccessCount int      `json:"success_count"`
+		FailureCount int      `json:"failure_count"`
+		PendingCount int      `json:"pending_count"`
+		IDs          []string `json:"added_torrent_ids"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || response.Code != http.StatusOK ||
+		result.SuccessCount != 1 || result.FailureCount != 1 || result.PendingCount != 0 ||
+		len(result.IDs) != 1 || harness.waker.wakes != 1 {
+		t.Fatalf("partial batch add = %d %q wakes=%d", response.Code, response.Body.String(), harness.waker.wakes)
+	}
+}
+
 func addContractTorrent(t *testing.T, harness *contractHarness, cookie *http.Cookie, torrent []byte) torrentmeta.Result {
 	t.Helper()
 	metadata, err := torrentmeta.ParseTorrent(torrent, harness.limits)
@@ -855,6 +933,49 @@ func advanceToCompletedAtWorkspace(t *testing.T, repository *store.Store, now ti
 		if err := repository.CommitClaim(context.Background(), *claim, next); err != nil {
 			t.Fatalf("commit %s: %v", state, err)
 		}
+	}
+}
+
+func TestQBTProfileCompatibilitySemantics(t *testing.T) {
+	t.Parallel()
+	harness := newContractHarness(t)
+	cookie := harness.login(t)
+
+	if response := doForm(t, harness.api, http.MethodPost, "/api/v2/app/setPreferences", url.Values{
+		"json": {`{"locale":"zh","save_path":"/ignored","add_trackers_enabled":true}`},
+	}, cookie); response.Code != http.StatusOK {
+		t.Fatalf("set preferences = %d %q", response.Code, response.Body.String())
+	}
+	preferencesResponse := doRequest(t, harness.api, http.MethodGet, "/api/v2/app/preferences", nil, cookie)
+	var settings preferences
+	if preferencesResponse.Code != http.StatusOK || json.Unmarshal(preferencesResponse.Body.Bytes(), &settings) != nil || !settings.AddTrackersEnabled {
+		t.Fatalf("preferences = %d %q", preferencesResponse.Code, preferencesResponse.Body.String())
+	}
+
+	if response := doForm(t, harness.api, http.MethodPost, "/api/v2/torrents/createCategory", url.Values{"category": {"TV"}}, cookie); response.Code != http.StatusOK {
+		t.Fatalf("create category = %d %q", response.Code, response.Body.String())
+	}
+	if response := doForm(t, harness.api, http.MethodPost, "/api/v2/torrents/createCategory", url.Values{"category": {"tv"}}, cookie); response.Code != http.StatusConflict {
+		t.Fatalf("duplicate category = %d %q", response.Code, response.Body.String())
+	}
+
+	completedHash := "2222222222222222222222222222222222222222"
+	if response := doForm(t, harness.api, http.MethodPost, "/api/v2/torrents/add", url.Values{
+		"urls": {"magnet:?xt=urn:btih:" + completedHash + "&dn=Logical"}, "category": {"tv"},
+	}, cookie); response.Code != http.StatusOK {
+		t.Fatalf("add completed fixture = %d %q", response.Code, response.Body.String())
+	}
+	advanceToCompletedAtWorkspace(t, harness.repository, harness.clock.now, completedHash)
+
+	activeHash := "3333333333333333333333333333333333333333"
+	if response := doForm(t, harness.api, http.MethodPost, "/api/v2/torrents/add", url.Values{
+		"urls": {"magnet:?xt=urn:btih:" + activeHash + "&dn=Active"}, "category": {"tv"},
+	}, cookie); response.Code != http.StatusOK {
+		t.Fatalf("add active fixture = %d %q", response.Code, response.Body.String())
+	}
+	info := doRequest(t, harness.api, http.MethodGet, "/api/v2/torrents/info?category=TV&filter=completed", nil, cookie)
+	if info.Code != http.StatusOK || !strings.Contains(info.Body.String(), completedHash) || strings.Contains(info.Body.String(), activeHash) {
+		t.Fatalf("completed category filter = %d %q", info.Code, info.Body.String())
 	}
 }
 

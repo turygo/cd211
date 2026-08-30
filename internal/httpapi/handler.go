@@ -30,6 +30,7 @@ const (
 type repository interface {
 	UpsertCategory(context.Context, domain.Category) (domain.Category, error)
 	ListCategories(context.Context) ([]domain.Category, error)
+	GetCategory(context.Context, string) (domain.Category, error)
 	GetDownload(context.Context, string) (domain.Download, error)
 	ListDownloads(context.Context, *string) ([]domain.Download, error)
 	ListDownloadFiles(context.Context, string) ([]domain.DownloadFile, error)
