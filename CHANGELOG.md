@@ -7,6 +7,11 @@ CD211 的所有重要变更均记录在此文件中。
 ## [Unreleased]
 ### Added
 
+### Changed
+
+## [0.4.10] - 2026-08-30
+### Added
+
 - qBittorrent `torrents/add` 现在返回现代计数与哈希 JSON，按失败类型提供上游风格状态和纯文本；新增 stderr 与按 UTC 日期轮换的脱敏 JSONL 双写日志，以及需认证、可筛选的“日志”页面，摘要按浏览器本地时间显示并以颜色区分级别和状态。
 
 ### Changed
