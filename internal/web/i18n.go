@@ -403,6 +403,23 @@ type Strings struct {
 	DeliveryDelivering string
 	DeliverySucceeded  string
 	DeliveryDead       string
+	// Logs
+	NavLogs           string
+	TitleLogs         string
+	LogsLede          string
+	LogFrom           string
+	LogTo             string
+	LogLevel          string
+	LogDebug          string
+	LogInfo           string
+	LogWarning        string
+	LogError          string
+	LogLevelSeparator string
+	LogSearch         string
+	LogApply          string
+	LogEmpty          string
+	LogInvalid        string
+	LogDetails        string
 }
 
 var stringsEN = Strings{
@@ -798,6 +815,22 @@ var stringsEN = Strings{
 	DeliveryDelivering: "Delivering",
 	DeliverySucceeded:  "Succeeded",
 	DeliveryDead:       "Dead letter",
+	NavLogs:            "Logs",
+	TitleLogs:          "Logs",
+	LogsLede:           "Application and HTTP request history.",
+	LogFrom:            "From",
+	LogTo:              "To",
+	LogLevel:           "Level",
+	LogDebug:           "Debug",
+	LogInfo:            "Info",
+	LogWarning:         "Warning",
+	LogError:           "Error",
+	LogLevelSeparator:  ", ",
+	LogSearch:          "Search",
+	LogApply:           "Apply filters",
+	LogEmpty:           "No matching log records.",
+	LogInvalid:         "Log filters are invalid.",
+	LogDetails:         "Details",
 }
 
 var stringsZH = Strings{
@@ -1191,6 +1224,22 @@ var stringsZH = Strings{
 	DeliveryDelivering: "投递中",
 	DeliverySucceeded:  "已投递",
 	DeliveryDead:       "死信",
+	NavLogs:            "日志",
+	TitleLogs:          "日志",
+	LogsLede:           "应用与 HTTP 请求历史",
+	LogFrom:            "开始日期",
+	LogTo:              "结束日期",
+	LogLevel:           "级别",
+	LogDebug:           "调试",
+	LogInfo:            "信息",
+	LogWarning:         "警告",
+	LogError:           "错误",
+	LogLevelSeparator:  "、",
+	LogSearch:          "搜索",
+	LogApply:           "应用筛选",
+	LogEmpty:           "没有匹配的日志记录。",
+	LogInvalid:         "日志筛选条件无效。",
+	LogDetails:         "详情",
 }
 
 // tr returns the string table for lang, defaulting to English.

@@ -15,6 +15,7 @@ import (
 	"github.com/turygo/cd211/internal/domain"
 	"github.com/turygo/cd211/internal/fsafe"
 	"github.com/turygo/cd211/internal/httpapi"
+	"github.com/turygo/cd211/internal/logging"
 	"github.com/turygo/cd211/internal/nativeapi"
 	"github.com/turygo/cd211/internal/reconcile"
 	"github.com/turygo/cd211/internal/server"
@@ -87,6 +88,7 @@ type manager struct {
 	sessions     *session.Store
 	clock        reconcile.Clock
 	logger       *slog.Logger
+	logReader    *logging.Reader
 	current      *runtime
 	shuttingDown bool
 }
@@ -247,12 +249,17 @@ func (m *manager) build(ctx context.Context, cfg settings.Config) (*runtime, err
 		TorrentLimits:   limits,
 		Shutdown:        generationContext.Done(),
 	}, service, m.store, m.store.EventSignal())
+	uiConfig := web.Config{
+		CloudRoot: cfg.CloudRoot,
+		LocalRoot: cfg.LocalRoot,
+	}
 	if err != nil {
 		return nil, fmt.Errorf("nativeapi: %w", err)
 	}
-	ui, err := web.New(web.Config{
-		CloudRoot: cfg.CloudRoot, LocalRoot: cfg.LocalRoot,
-	}, credentials, m.store, m.sessions, m.clock, coord, cloud, files, web.SettingsDeps{
+	if m.logReader != nil {
+		uiConfig.LogReader = *m.logReader
+	}
+	ui, err := web.New(uiConfig, credentials, m.store, m.sessions, m.clock, coord, cloud, files, web.SettingsDeps{
 		Store:   m.store,
 		Tokens:  m.store,
 		QBTKeys: m.store,

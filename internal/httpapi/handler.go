@@ -211,6 +211,11 @@ func plain(w http.ResponseWriter, status int, body string) {
 	w.WriteHeader(status)
 	_, _ = w.Write([]byte(body))
 }
+func plainExact(w http.ResponseWriter, status int, body string) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(body))
+}
 
 func badRequest(w http.ResponseWriter) { plain(w, http.StatusBadRequest, "Bad Request\n") }
 func forbidden(w http.ResponseWriter)  { plain(w, http.StatusForbidden, "Forbidden\n") }

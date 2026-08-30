@@ -30,6 +30,7 @@ import (
 	"github.com/turygo/cd211/internal/creds"
 	"github.com/turygo/cd211/internal/domain"
 	"github.com/turygo/cd211/internal/fsafe"
+	"github.com/turygo/cd211/internal/logging"
 	"github.com/turygo/cd211/internal/outbox"
 	"github.com/turygo/cd211/internal/qbtkey"
 	"github.com/turygo/cd211/internal/session"
@@ -84,10 +85,11 @@ type Filesystem interface {
 	PrepareSaveRoot(string) (string, error)
 }
 
-// Config contains the fixed path boundaries.
+// Config contains the fixed path boundaries and the process-owned log reader.
 type Config struct {
 	CloudRoot string
 	LocalRoot string
+	LogReader logging.Reader
 }
 
 // Credentials verifies operator credentials and applies password changes.
@@ -142,7 +144,6 @@ type SettingsDeps struct {
 // webhookRepo is the canonical outbox.EndpointRepository consumed by the
 // management UI; *store.Store satisfies it. Ordinary reads never expose
 // secrets, and Create/Rotate return the endpoint with HMACSecret populated
-// exactly once for the one-time reveal page.
 type handler struct {
 	config      Config
 	creds       Credentials
@@ -154,6 +155,7 @@ type handler struct {
 	filesystem  Filesystem
 	settings    SettingsDeps
 	webhookRepo outbox.EndpointRepository
+	logReader   logging.Reader
 	templates   *template.Template
 }
 
@@ -170,6 +172,7 @@ func templateFunctions() template.FuncMap {
 		"localTime":       localTime,
 		"localTimeFormat": localTimeFormat,
 		"previewPath":     previewPath,
+		"logFieldsJSON":   logFieldsJSON,
 	}
 }
 
@@ -216,6 +219,7 @@ func New(config Config, credentials Credentials, repo Repository, sessions *sess
 		filesystem:  filesystem,
 		settings:    settings,
 		webhookRepo: webhooks,
+		logReader:   config.LogReader,
 		templates:   templates,
 	}
 	mux := http.NewServeMux()
@@ -236,6 +240,7 @@ func New(config Config, credentials Credentials, repo Repository, sessions *sess
 	mux.Handle("GET /downloads/{hash}/updates", h.auth(h.detailUpdates, false))
 	mux.Handle("GET /categories", h.auth(h.categories, false))
 	mux.Handle("GET /settings", h.auth(h.settingsPage, false))
+	mux.Handle("GET /logs", h.auth(h.logs, false))
 	mux.Handle("GET /password", h.auth(h.passwordPage, false))
 	mux.Handle("POST /password", h.auth(h.changePassword, true))
 	mux.Handle("POST /logout", h.auth(h.logout, true))
@@ -292,7 +297,7 @@ func routeMethod(requestPath, requestMethod string) (string, bool) {
 			return http.MethodPost, true
 		}
 		return http.MethodGet, true
-	case "/", "/categories", "/settings", "/lang", "/static/app.css", "/static/app.js", "/static/motion.js", "/static/actions-motion.js", "/static/downloads-live.js", "/static/setup-motion.js", "/static/theme-init.js", "/static/vendor/motion-mini.js":
+	case "/", "/categories", "/settings", "/logs", "/lang", "/static/app.css", "/static/app.js", "/static/motion.js", "/static/actions-motion.js", "/static/downloads-live.js", "/static/setup-motion.js", "/static/theme-init.js", "/static/vendor/motion-mini.js":
 		return http.MethodGet, true
 	case "/logout", "/categories/save", "/settings/test", "/settings/save":
 		return http.MethodPost, true

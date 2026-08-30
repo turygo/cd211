@@ -131,7 +131,8 @@ func TestRealStoreSubmissionChain(t *testing.T) {
 	hash := "0123456789abcdef0123456789abcdef01234567"
 	magnet := "magnet:?xt=urn:btih:" + hash + "&dn=Example"
 	added := doForm(t, api, http.MethodPost, "/api/v2/torrents/add", url.Values{"urls": {magnet}, "category": {"tv"}}, cookie)
-	if added.Code != http.StatusOK || added.Body.Len() != 0 || waker.wakes != 1 {
+	var addResult map[string]any
+	if err := json.Unmarshal(added.Body.Bytes(), &addResult); err != nil || added.Code != http.StatusOK || addResult["success_count"] != float64(1) || waker.wakes != 1 {
 		t.Fatalf("add = %d %q wakes=%d", added.Code, added.Body.String(), waker.wakes)
 	}
 	properties := doRequest(t, api, http.MethodGet, "/api/v2/torrents/properties?hash="+hash, nil, cookie)
@@ -673,11 +674,17 @@ func TestBase32MagnetDuplicateAndRedactionContract(t *testing.T) {
 	base32Hash := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(hashBytes)
 	magnet := "magnet:?xt=urn:btih:" + base32Hash + "&dn=Base32&tr=https%3A%2F%2Ftracker.invalid%2Fannounce%3Fpasskey%3Dsecret"
 	added := doForm(t, harness.api, http.MethodPost, "/api/v2/torrents/add", url.Values{"urls": {magnet}}, cookie)
-	if added.Code != http.StatusOK || harness.waker.wakes != 1 {
+	var addedBody struct {
+		SuccessCount int      `json:"success_count"`
+		FailureCount int      `json:"failure_count"`
+		PendingCount int      `json:"pending_count"`
+		IDs          []string `json:"added_torrent_ids"`
+	}
+	if err := json.Unmarshal(added.Body.Bytes(), &addedBody); err != nil || added.Code != http.StatusOK || addedBody.SuccessCount != 1 || addedBody.FailureCount != 0 || addedBody.PendingCount != 0 || len(addedBody.IDs) != 1 || harness.waker.wakes != 1 {
 		t.Fatalf("base32 add = %d %q wakes=%d", added.Code, added.Body.String(), harness.waker.wakes)
 	}
 	duplicate := doForm(t, harness.api, http.MethodPost, "/api/v2/torrents/add", url.Values{"urls": {magnet}}, cookie)
-	if duplicate.Code != http.StatusOK || harness.waker.wakes != 1 {
+	if duplicate.Code != http.StatusConflict || duplicate.Body.String() != "Conflict" || harness.waker.wakes != 1 {
 		t.Fatalf("duplicate add = %d %q wakes=%d", duplicate.Code, duplicate.Body.String(), harness.waker.wakes)
 	}
 	for _, response := range []*httptest.ResponseRecorder{
@@ -936,20 +943,28 @@ func TestRejectedInputsAndCompatibilityContract(t *testing.T) {
 	t.Parallel()
 	harness := newContractHarness(t)
 	cookie := harness.login(t)
-	for _, values := range []url.Values{
-		{"urls": {"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567", "magnet:?xt=urn:btih:1111111111111111111111111111111111111111"}},
-		{"urls": {"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"}, "category": {"missing"}},
-		{"urls": {strings.Repeat("x", (1<<20)+(64<<10))}},
-	} {
-		if response := doForm(t, harness.api, http.MethodPost, "/api/v2/torrents/add", values, cookie); response.Code != http.StatusBadRequest || response.Body.String() != "Bad Request\n" {
-			t.Fatalf("rejected add = %d %q", response.Code, response.Body.String())
+	rejected := []struct {
+		values url.Values
+		status int
+		body   string
+	}{
+		{url.Values{"urls": {"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567", "magnet:?xt=urn:btih:1111111111111111111111111111111111111111"}}, http.StatusBadRequest, "Bad Request"},
+		{url.Values{"urls": {"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"}, "category": {"missing"}}, http.StatusConflict, "Conflict"},
+		{url.Values{"urls": {strings.Repeat("x", (1<<20)+(64<<10))}}, http.StatusBadRequest, "Bad Request"},
+		{url.Values{"urls": {"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"}, "category": {"bad/category"}}, http.StatusBadRequest, "Bad Request"},
+		{url.Values{"urls": {"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"}, "savepath": {"relative"}}, http.StatusConflict, "Conflict"},
+		{url.Values{"urls": {"magnet:?xt=urn:btih:invalid-passkey"}}, http.StatusConflict, "Conflict"},
+	}
+	for _, test := range rejected {
+		if response := doForm(t, harness.api, http.MethodPost, "/api/v2/torrents/add", test.values, cookie); response.Code != test.status || response.Body.String() != test.body {
+			t.Fatalf("rejected add = %d %q, want %d %q", response.Code, response.Body.String(), test.status, test.body)
 		}
 	}
 	now := harness.clock.now
 	if _, err := harness.repository.UpsertCategory(context.Background(), domain.Category{Name: "disabled", CloudPath: "/cloud/DISABLED", SavePath: "/local/disabled", Enabled: false, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	if response := doForm(t, harness.api, http.MethodPost, "/api/v2/torrents/add", url.Values{"urls": {"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"}, "category": {"disabled"}}, cookie); response.Code != http.StatusBadRequest {
+	if response := doForm(t, harness.api, http.MethodPost, "/api/v2/torrents/add", url.Values{"urls": {"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"}, "category": {"disabled"}}, cookie); response.Code != http.StatusConflict || response.Body.String() != "Conflict" {
 		t.Fatalf("disabled category = %d %q", response.Code, response.Body.String())
 	}
 	for _, target := range []string{"/api/v2/torrents/setShareLimits", "/api/v2/torrents/topPrio"} {

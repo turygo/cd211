@@ -5,6 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/turygo/cd211/internal/creds"
+	"github.com/turygo/cd211/internal/domain"
+	"github.com/turygo/cd211/internal/fsafe"
+	"github.com/turygo/cd211/internal/logging"
+	"github.com/turygo/cd211/internal/outbox"
+	"github.com/turygo/cd211/internal/session"
+	"github.com/turygo/cd211/internal/store"
 	"io"
 	"io/fs"
 	"net/http"
@@ -16,13 +23,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/turygo/cd211/internal/creds"
-	"github.com/turygo/cd211/internal/domain"
-	"github.com/turygo/cd211/internal/fsafe"
-	"github.com/turygo/cd211/internal/outbox"
-	"github.com/turygo/cd211/internal/session"
-	"github.com/turygo/cd211/internal/store"
 )
 
 type fixedClock struct{ now time.Time }
@@ -186,7 +186,15 @@ func newWebFixtureAt(t *testing.T, dbPath string, settingsDeps SettingsDeps) *we
 		settingsDeps.QBTKeys = database
 	}
 	webhooks := newFakeWebhookStore()
-	handler, err := New(Config{CloudRoot: "/cloud", LocalRoot: localRoot}, credentials, repo, sessions, clock, waker, cloud, filesystem, settingsDeps, webhooks)
+	logDir := filepath.Join(t.TempDir(), "logs")
+	if err := os.MkdirAll(logDir, 0750); err != nil {
+		t.Fatalf("MkdirAll(logs): %v", err)
+	}
+	logLine := `{"time":"2026-08-06T11:59:00Z","level":"WARN","msg":"http request","method":"POST","path":"/api/v2/torrents/add","status":409,"internal_reason":"duplicate","request":{"category":"movies","authorization":"Bearer viewer-auth-secret","cookie":"viewer-cookie-secret","token":"viewer-token-secret","password":"viewer-password-secret"},"response":{"preview":"Conflict"}}` + "\n"
+	if err := os.WriteFile(filepath.Join(logDir, "cd211-2026-08-06.jsonl"), []byte(logLine), 0640); err != nil {
+		t.Fatalf("WriteFile(logs): %v", err)
+	}
+	handler, err := New(Config{CloudRoot: "/cloud", LocalRoot: localRoot, LogReader: logging.Reader{Dir: logDir}}, credentials, repo, sessions, clock, waker, cloud, filesystem, settingsDeps, webhooks)
 	if err != nil {
 		t.Fatalf("New(): %v", err)
 	}
@@ -651,11 +659,11 @@ func TestSecurityHeadersAndStaticAssets(t *testing.T) {
 
 	body := login.Body.String()
 	themeInit := strings.Index(body, `<script src="/static/theme-init.js?v=2"></script>`)
-	stylesheet := strings.Index(body, `<link rel="stylesheet" href="/static/app.css?v=18">`)
+	stylesheet := strings.Index(body, `<link rel="stylesheet" href="/static/app.css?v=23">`)
 	if themeInit < 0 || stylesheet < 0 || themeInit > stylesheet {
 		t.Errorf("theme initializer must load before stylesheet: theme=%d stylesheet=%d", themeInit, stylesheet)
 	}
-	moduleScript := strings.Index(body, `<script type="module" src="/static/app.js?v=10"></script>`)
+	moduleScript := strings.Index(body, `<script type="module" src="/static/app.js?v=11"></script>`)
 	if moduleScript < 0 || moduleScript < stylesheet {
 		t.Errorf("app module script must load after stylesheet: module=%d stylesheet=%d", moduleScript, stylesheet)
 	}

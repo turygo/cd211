@@ -10,11 +10,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/turygo/cd211/internal/config"
+	"github.com/turygo/cd211/internal/logging"
 	"github.com/turygo/cd211/internal/outbox"
 	"github.com/turygo/cd211/internal/reconcile"
 	"github.com/turygo/cd211/internal/server"
@@ -54,7 +56,17 @@ func run() (result error) {
 		return err
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	logProcess, err := logging.NewProcess(filepath.Join(filepath.Dir(cfg.DatabasePath), "logs"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "runtime logging startup failed:", err)
+		return err
+	}
+	defer func() {
+		if err := logProcess.Close(); err != nil && result == nil {
+			result = err
+		}
+	}()
+	logger := logProcess.Logger
 	defer func() {
 		if result == nil {
 			logger.Info("runtime shut down")
@@ -105,6 +117,8 @@ func run() (result error) {
 
 	root := &switchHandler{}
 	runtimeManager := newManager(root, st, sessions, clock, logger)
+	logReader := logging.Reader{Dir: logProcess.Writer.Dir()}
+	runtimeManager.logReader = &logReader
 
 	settingsConfig, completed, err := settings.Load(rootContext, st)
 	if err != nil {
@@ -123,7 +137,6 @@ func run() (result error) {
 			Store:    st,
 			Sessions: sessions,
 			Clock:    clock,
-			Dial:     nil,
 			Complete: runtimeManager.Apply,
 		})
 		if err != nil {
@@ -134,7 +147,7 @@ func run() (result error) {
 		logger.Info("setup mode active; waiting for the setup wizard")
 	}
 
-	httpServer := server.NewHTTPServer(cfg.HTTPAddress, root)
+	httpServer := server.NewHTTPServer(cfg.HTTPAddress, logging.Middleware(logger, root))
 	serveResult := make(chan error, 1)
 	go func() {
 		serveResult <- httpServer.ListenAndServe()

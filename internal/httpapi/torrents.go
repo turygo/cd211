@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"mime"
@@ -14,29 +15,41 @@ import (
 	"time"
 
 	"github.com/turygo/cd211/internal/domain"
+	"github.com/turygo/cd211/internal/logging"
 	"github.com/turygo/cd211/internal/store"
 	"github.com/turygo/cd211/internal/submission"
 )
 
 // addTorrent decodes the qBittorrent WebAPI add form and delegates the whole
-// submission pipeline (metadata parsing, category lookup, destination paths,
-// retained-content revival, persistence, wake-up) to the shared
-// submission.Service. The response contract is unchanged: 200 with an empty
-// body for accepted submissions, Bad Request for any invalid input.
+// submission pipeline to the shared submission.Service.
 func (h *handler) addTorrent(w http.ResponseWriter, r *http.Request) {
+	fail := func(status int, body, reason string) {
+		logging.SetReason(r, reason)
+		plainExact(w, status, body)
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, h.config.MaxRequestBytes)
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || (mediaType != "application/x-www-form-urlencoded" && mediaType != "multipart/form-data") {
-		badRequest(w)
+		fail(http.StatusBadRequest, "Bad Request", "invalid_request")
 		return
 	}
 	if mediaType == "application/x-www-form-urlencoded" {
 		if err := r.ParseForm(); err != nil {
-			badRequest(w)
+			reason := "invalid_request"
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				reason = "request_too_large"
+			}
+			fail(http.StatusBadRequest, "Bad Request", reason)
 			return
 		}
 	} else if err := r.ParseMultipartForm(int64(h.config.TorrentLimits.MaxInputBytes)); err != nil {
-		badRequest(w)
+		reason := "invalid_request"
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			reason = "request_too_large"
+		}
+		fail(http.StatusBadRequest, "Bad Request", reason)
 		return
 	} else {
 		defer r.MultipartForm.RemoveAll()
@@ -44,138 +57,166 @@ func (h *handler) addTorrent(w http.ResponseWriter, r *http.Request) {
 
 	stopped, valid := stoppedSubmission(r.PostForm)
 	if !valid {
-		badRequest(w)
+		fail(http.StatusBadRequest, "Bad Request", "invalid_request")
 		return
 	}
 	category, valid := addCategory(r.PostForm)
 	if !valid {
-		badRequest(w)
+		fail(http.StatusBadRequest, "Bad Request", "invalid_category")
 		return
 	}
+	rawCategory := category
+	logging.Enrich(r, map[string]any{"raw_category": rawCategory})
+	category, valid = submission.CanonicalCategory(category, true)
+	if !valid {
+		fail(http.StatusBadRequest, "Bad Request", "invalid_category")
+		return
+	}
+	logging.Enrich(r, map[string]any{"category": category})
 
 	urls := r.PostForm["urls"]
 	var files map[string][]*multipart.FileHeader
 	if r.MultipartForm != nil {
 		files = r.MultipartForm.File
 	}
-	if len(r.PostForm["torrents"]) != 0 {
-		badRequest(w)
-		return
-	}
-	if len(urls) > 0 && len(files["torrents"]) > 0 {
-		badRequest(w)
+	if len(r.PostForm["torrents"]) != 0 || (len(urls) > 0 && len(files["torrents"]) > 0) {
+		fail(http.StatusBadRequest, "Bad Request", "invalid_request")
 		return
 	}
 	if values, present := r.PostForm["rename"]; present {
 		if len(values) != 1 || strings.TrimSpace(values[0]) == "" || strings.ContainsAny(values[0], "/\\\x00") {
-			badRequest(w)
+			fail(http.StatusBadRequest, "Bad Request", "invalid_request")
 			return
 		}
 	}
 	if values, present := r.PostForm["tags"]; present {
 		if len(values) != 1 {
-			badRequest(w)
+			fail(http.StatusBadRequest, "Bad Request", "invalid_request")
 			return
 		}
 		if _, valid := normalizeTags(values[0], false); !valid {
-			badRequest(w)
+			fail(http.StatusBadRequest, "Bad Request", "invalid_request")
 			return
 		}
 	}
 	if values, present := r.PostForm["autoTMM"]; present {
 		if len(values) != 1 {
-			badRequest(w)
+			fail(http.StatusBadRequest, "Bad Request", "invalid_request")
 			return
 		}
 		if _, valid := requiredBool(r.PostForm, "autoTMM"); !valid {
-			badRequest(w)
+			fail(http.StatusBadRequest, "Bad Request", "invalid_request")
 			return
 		}
 	}
 	if values, present := r.PostForm["savepath"]; present {
-		if len(values) != 1 || !filepath.IsAbs(values[0]) || filepath.Clean(values[0]) != values[0] {
-			badRequest(w)
+		if len(values) != 1 {
+			fail(http.StatusBadRequest, "Bad Request", "invalid_request")
 			return
 		}
 	}
 	options := submission.Options{}
 	if values, present := r.PostForm["rename"]; present {
-		options.RenameSet = true
-		options.Rename = values[0]
+		options.RenameSet, options.Rename = true, values[0]
 	}
 	if values, present := r.PostForm["tags"]; present {
-		options.TagsSet = true
-		options.Tags = values[0]
+		options.TagsSet, options.Tags = true, values[0]
 	}
 	if _, present := r.PostForm["autoTMM"]; present {
 		enabled, _ := requiredBool(r.PostForm, "autoTMM")
-		if enabled {
-			conflict(w)
-			return
-		}
-		options.AutoTMMSet = true
+		options.AutoTMMSet, options.AutoTMM = true, enabled
 	}
 	if values, present := r.PostForm["savepath"]; present {
-		options.SavePathSet = true
-		options.SavePath = values[0]
+		options.SavePathSet, options.SavePath = true, values[0]
 	}
+
+	var download domain.Download
+	var inserted bool
+	var remoteSource bool
 	switch {
 	case len(urls) > 0:
 		if len(urls) != 1 {
-			badRequest(w)
+			fail(http.StatusBadRequest, "Bad Request", "invalid_request")
 			return
 		}
 		source, parseErr := url.ParseRequestURI(urls[0])
 		if parseErr != nil {
-			badRequest(w)
+			fail(http.StatusBadRequest, "Bad Request", "invalid_request")
 			return
 		}
 		switch strings.ToLower(source.Scheme) {
 		case "magnet":
-			_, _, err = h.service.SubmitMagnetWithOptions(r.Context(), urls[0], category, stopped, options)
+			logging.Enrich(r, logging.SanitizeMagnet(urls[0]))
+			download, inserted, err = h.service.SubmitMagnetWithOptions(r.Context(), urls[0], category, stopped, options)
 		case "http", "https":
+			remoteSource = true
+			logging.Enrich(r, logging.SanitizeURL(urls[0]))
 			var cookie string
 			if values, present := r.PostForm["cookie"]; present {
 				if len(values) != 1 {
-					badRequest(w)
+					fail(http.StatusBadRequest, "Bad Request", "invalid_request")
 					return
 				}
 				cookie = values[0]
 			}
 			data, fetchErr := fetchTorrent(r.Context(), source, cookie, h.config.TorrentLimits.MaxInputBytes)
 			if fetchErr != nil {
-				badRequest(w)
+				fail(http.StatusConflict, "Conflict", "torrent_fetch_failed")
 				return
 			}
-			_, _, err = h.service.SubmitTorrentWithOptions(r.Context(), data, category, stopped, options)
+			download, inserted, err = h.service.SubmitTorrentWithOptions(r.Context(), data, category, stopped, options)
 		default:
-			badRequest(w)
+			fail(http.StatusBadRequest, "Bad Request", "invalid_request")
 			return
 		}
 	case len(files["torrents"]) > 0:
 		if mediaType != "multipart/form-data" || len(files["torrents"]) != 1 {
-			badRequest(w)
+			fail(http.StatusBadRequest, "Bad Request", "invalid_request")
 			return
 		}
-		data, readErr := readUpload(files["torrents"][0])
+		header := files["torrents"][0]
+		logging.Enrich(r, map[string]any{"source_kind": "torrent", "filename": logging.SanitizeFilename(header.Filename), "size": header.Size})
+		data, readErr := readUpload(header)
 		if readErr != nil {
-			badRequest(w)
+			fail(http.StatusBadRequest, "Bad Request", "request_too_large")
 			return
 		}
-		_, _, err = h.service.SubmitTorrentWithOptions(r.Context(), data, category, stopped, options)
+		download, inserted, err = h.service.SubmitTorrentWithOptions(r.Context(), data, category, stopped, options)
 	default:
-		badRequest(w)
+		fail(http.StatusBadRequest, "Bad Request", "invalid_request")
 		return
 	}
 	if err != nil {
-		if errors.Is(err, submission.ErrInvalidSource) || errors.Is(err, submission.ErrCategoryInvalid) || errors.Is(err, submission.ErrInvalidOptions) {
-			badRequest(w)
-			return
+		if errors.Is(err, submission.ErrCategoryInvalid) {
+			fail(http.StatusConflict, "Conflict", "category_unavailable")
+		} else if errors.Is(err, submission.ErrInvalidOptions) {
+			reason := "invalid_options"
+			if options.SavePathSet {
+				reason = "invalid_save_path"
+			}
+			fail(http.StatusConflict, "Conflict", reason)
+		} else if errors.Is(err, submission.ErrInvalidSource) {
+			if len(files["torrents"]) > 0 {
+				fail(http.StatusUnsupportedMediaType, "Error: '"+logging.SanitizeFilename(files["torrents"][0].Filename)+"' is not a valid torrent file.", "invalid_torrent")
+			} else if remoteSource {
+				fail(http.StatusConflict, "Conflict", "torrent_fetch_failed")
+			} else {
+				fail(http.StatusConflict, "Conflict", "invalid_magnet")
+			}
+		} else {
+			logging.Enrich(r, map[string]any{"error": err.Error()})
+			fail(http.StatusInternalServerError, "Internal Server Error", "internal_error")
 		}
-		internalError(w)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
+	logging.Enrich(r, map[string]any{"infohash": download.Hash, "name": download.Name, "resolved_savepath": download.SavePath})
+	if !inserted {
+		fail(http.StatusConflict, "Conflict", "duplicate")
+		return
+	}
+	logging.SetReason(r, "accepted")
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"success_count": 1, "failure_count": 0, "pending_count": 0, "added_torrent_ids": []string{download.Hash}})
 }
 
 func readUpload(header *multipart.FileHeader) ([]byte, error) {

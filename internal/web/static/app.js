@@ -1,8 +1,17 @@
 import { animateElement, motionTiming, staggerDelay } from "/static/motion.js?v=1";
-const localDateTimeFormatter = new Intl.DateTimeFormat(undefined, {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
+let localDateTimeFormatter;
+try {
+  localDateTimeFormatter = new Intl.DateTimeFormat(document.documentElement.lang || undefined, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+} catch {
+  localDateTimeFormatter = null;
+}
 
 // Server-rendered timestamps carry an ISO value for machine-readable
 // semantics; the browser renders them in the operator's local timezone and
@@ -17,15 +26,16 @@ function formatLocalTimes(root = document) {
   }
   for (const element of elements) {
     const value = element.getAttribute("datetime");
-    if (!value || element.dataset.localTimeValue === value) continue;
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) {
+    if (!value || element.dataset.localTimeValue === value || !localDateTimeFormatter) continue;
+    try {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) continue;
+      element.textContent = localDateTimeFormatter.format(date);
+      element.dataset.localTimeValue = value;
       element.classList.add("is-localized");
-      continue;
+    } catch {
+      // Keep the server fallback when date or Intl formatting is unavailable.
     }
-    element.textContent = localDateTimeFormatter.format(date);
-    element.dataset.localTimeValue = value;
-    element.classList.add("is-localized");
   }
 }
 

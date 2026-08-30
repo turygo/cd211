@@ -1,0 +1,55 @@
+{{define "logs"}}
+<!doctype html>
+<html lang="{{.Lang}}">
+{{template "head" .}}
+<body>
+<div class="app-shell">
+{{template "sidebar" .}}
+<main class="content" id="main-content">
+  <header class="page-header">
+    <div class="page-title">
+      <h1>{{.Str.TitleLogs}}</h1>
+    </div>
+  </header>
+  <p class="page-lede">{{.Str.LogsLede}}</p>
+  <form class="filter-bar log-filters" method="get" action="/logs">
+    <label class="filter-field"><span>{{.Str.LogFrom}}</span><input type="date" name="from" value="{{.From}}"></label>
+    <label class="filter-field"><span>{{.Str.LogTo}}</span><input type="date" name="to" value="{{.To}}"></label>
+    <div class="filter-field log-level-field">
+      <span>{{.Str.LogLevel}}</span>
+      <details class="log-level-menu">
+        <summary aria-label="{{.Str.LogLevel}}: {{.LevelSummary}}">{{.LevelSummary}}</summary>
+        <div class="log-level-options">
+          <input type="hidden" name="level_set" value="1">
+          {{range .Levels}}<label class="log-level-option"><input type="checkbox" name="level" value="{{.Value}}" {{if .Selected}}checked{{end}}><span>{{.Label}}</span></label>{{end}}
+        </div>
+      </details>
+    </div>
+    <label class="filter-field search-field"><span>{{.Str.LogSearch}}</span><input type="search" name="q" value="{{.Search}}"></label>
+    <button class="button" type="submit">{{.Str.LogApply}}</button>
+  </form>
+  {{if .Invalid}}<p class="notice notice-error" role="alert">{{.Str.LogInvalid}}</p>{{end}}
+  {{if .Rows}}
+  <section class="panel log-list" aria-label="{{.Str.TitleLogs}}">
+  {{range .Rows}}
+    <details class="log-row">
+      <summary class="log-summary">
+        <time class="log-time" datetime="{{.Datetime}}" data-local-time>{{.TimeFallback}}</time>
+        <span class="log-level-badge log-level-{{.LevelClass}}">{{.Level}}</span>
+        <span class="log-subject" title="{{.Subject}}">{{.Subject}}</span>
+        {{if .HasStatus}}<span class="log-status-badge log-status-{{.StatusClass}}">{{.Status}}</span>{{end}}
+      </summary>
+      <div class="log-details">
+        <p>{{$.Str.LogDetails}}</p>
+        <p class="log-detail-message">{{.Message}}</p>
+        <pre>{{logFieldsJSON .Fields}}</pre>
+      </div>
+    </details>
+  {{end}}
+  </section>
+  {{else if not .Invalid}}<p class="empty-state">{{.Str.LogEmpty}}</p>{{end}}
+</main>
+</div>
+</body>
+</html>
+{{end}}

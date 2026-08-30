@@ -103,6 +103,12 @@ These invariants are correctness requirements:
 19. A webhook receiver URL must be an absolute HTTP/HTTPS URL without userinfo or fragment. Query strings are allowed and delivered to the receiver, but raw query values are redacted from ordinary Web UI reads and edit forms. Redirects are never followed.
 
 ## 7. Architecture
+### 7.1 Process logging and operator history
+
+The process logger is created only after CLI configuration is valid. A single standard-library `slog` handler writes the same redacted JSON record to stderr and to the process-owned `logs/cd211-YYYY-MM-DD.jsonl` file beside SQLite. Files append across restart, rotate at the UTC day boundary, and retain 30 days; startup cannot continue if the initial directory or file cannot be opened, while a later rotation failure keeps the prior file open so stderr/Dozzle output is not lost.
+
+The root HTTP handler is wrapped once, above setup mode and every runtime generation. It emits exactly one completion record per request with status, bytes, duration, client and endpoint metadata, using DEBUG for successful reads, INFO for successful mutations, WARN for client failures/cancellation, and ERROR for server failures. Request handlers add bounded safe business details; the centralized sanitizer removes credentials, cookies, tracker/passkey material, and URL paths/query strings before either sink or the authenticated `/logs` page reads owned files. `/logs` defaults to today's UTC WARN/ERROR records, bounds date ranges to seven days and results to 200, and never tails or accepts a filesystem path.
+
 
 ```mermaid
 flowchart LR
