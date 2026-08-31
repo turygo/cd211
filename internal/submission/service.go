@@ -227,7 +227,7 @@ func (s *Service) submit(ctx context.Context, result torrentmeta.Result, source 
 	if workspaceErr != nil {
 		return domain.Download{}, false, fmt.Errorf("derive workspace path: %w", workspaceErr)
 	}
-	download := domain.Download{Hash: result.Hash, Name: result.Name, SourceKind: source, SubmissionURI: result.Magnet, Category: category, CloudFolder: cloudFolder, SavePath: savePath, WorkspacePath: workspacePath, TotalSize: result.TotalSize, State: domain.StateAccepted, PhaseStartedAt: now, NextRunAt: &now, CreatedAt: now, UpdatedAt: now}
+	download := domain.Download{Hash: result.Hash, Name: result.Name, SourceKind: source, SubmissionURI: result.Magnet, Category: category, CloudFolder: cloudFolder, SavePath: savePath, WorkspacePath: workspacePath, Private: result.Private, TotalSize: result.TotalSize, State: domain.StateAccepted, PhaseStartedAt: now, NextRunAt: &now, CreatedAt: now, UpdatedAt: now}
 	if options.TagsSet {
 		download.Tags = options.Tags
 	}

@@ -26,7 +26,7 @@ WHERE hash = (
     ORDER BY candidate.next_run_at ASC, candidate.created_at ASC, candidate.hash ASC
     LIMIT 1
 )
-RETURNING hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_result_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version, pause_requested, last_error_code, offline_started_at, copy_completed_at, copy_source_path, tags, auto_tmm, name_overridden, workspace_path
+RETURNING hash, name, source_kind, submission_uri, category, cloud_folder, save_path, destination_name, cloud_task_name, cloud_result_path, content_path, is_multi_file, total_size, state, offline_progress, copy_progress, qbit_progress, last_upstream_status, last_error, phase_started_at, next_run_at, lease_until, lease_owner, attempt_count, delete_files_requested, created_at, updated_at, completed_at, removed_at, row_version, pause_requested, last_error_code, offline_started_at, copy_completed_at, copy_source_path, tags, auto_tmm, name_overridden, workspace_path, private
 `
 
 type ClaimDueParams struct {
@@ -78,6 +78,7 @@ func (q *Queries) ClaimDue(ctx context.Context, arg ClaimDueParams) (Download, e
 		&i.AutoTmm,
 		&i.NameOverridden,
 		&i.WorkspacePath,
+		&i.Private,
 	)
 	return i, err
 }

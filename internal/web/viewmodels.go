@@ -332,9 +332,9 @@ func buildDownloadRow(download domain.Download, projection domain.Projection, no
 		ErrorIsWarning:   warning,
 		CloudResultPath:  displayPath(download.CloudResultPath, str),
 		CopySourcePath:   displayPath(download.CopySourcePath, str),
-		CanPause:         canPause(download),
+		CanPause:         domain.CanPause(download),
 		CanResume:        download.State == domain.StateStopped,
-		CanRetry:         canRetry(download),
+		CanRetry:         domain.CanRetry(download),
 		CanRemove:        download.State.Visible(),
 		RowVersion:       download.RowVersion,
 		Terminal:         download.State.Terminal(),
@@ -378,8 +378,8 @@ func buildDetailView(download domain.Download, files []domain.DownloadFile, csrf
 		ErrorIsWarning:   warning,
 		Route:            buildRoute(download, str),
 		CanStart:         download.State == domain.StateStopped,
-		CanRetry:         canRetry(download),
-		CanPause:         canPause(download),
+		CanRetry:         domain.CanRetry(download),
+		CanPause:         domain.CanPause(download),
 		CanRemove:        download.State.Visible(),
 		RowVersion:       download.RowVersion,
 		Terminal:         download.State.Terminal(),
@@ -560,53 +560,6 @@ func downloadMatchesView(download domain.Download, view string) bool {
 }
 func cleanupFailed(download domain.Download) bool {
 	return (download.State == domain.StateCancelRequested || download.State == domain.StateDeleteRequested) && download.LastError != ""
-}
-
-func canRetry(download domain.Download) bool {
-	return download.State == domain.StateFailed || cleanupFailed(download)
-}
-
-func retryTarget(download domain.Download) domain.State {
-	status := strings.TrimPrefix(download.LastUpstreamStatus, domain.UpstreamCleanupCancelled+"|")
-	switch {
-	case download.State == domain.StateCancelRequested || download.State == domain.StateDeleteRequested:
-		return download.State
-	case download.State == domain.StateFailed && download.LastErrorCode == string(domain.ProblemDestinationConflict):
-		return domain.StateSubmittingCopy
-	case download.State == domain.StateFailed &&
-		(download.LastErrorCode == string(domain.ProblemLocalVerificationFailed) ||
-			download.LastErrorCode == string(domain.ProblemLocalDeleteFailed)):
-		return domain.StateSubmittingCopy
-	case download.ContentPath != "" || status == domain.UpstreamCopyCompleted:
-		return domain.StateVerifyingLocal
-	case status == domain.UpstreamCopyPending ||
-		status == domain.UpstreamCopyScanning ||
-		status == domain.UpstreamCopyScanned:
-		return domain.StateWaitingCopy
-	case status == domain.UpstreamOfflineError:
-		return domain.StateSubmittingOffline
-	case strings.HasPrefix(status, "copy:"):
-		return domain.StateSubmittingCopy
-	case status == domain.UpstreamOfflineFinished || download.CloudResultPath != "":
-		return domain.StateSubmittingCopy
-	case strings.HasPrefix(status, "offline:"):
-		return domain.StateWaitingOffline
-	default:
-		return domain.StateSubmittingOffline
-	}
-}
-
-func canPause(download domain.Download) bool {
-	if download.PauseRequested {
-		return false
-	}
-	switch download.State {
-	case domain.StateAccepted, domain.StateSubmittingOffline, domain.StateWaitingOffline,
-		domain.StateSubmittingCopy, domain.StateWaitingCopy, domain.StateVerifyingLocal:
-		return true
-	default:
-		return false
-	}
 }
 
 func canCancel(state domain.State) bool {

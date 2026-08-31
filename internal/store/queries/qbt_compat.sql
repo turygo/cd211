@@ -34,5 +34,41 @@ UPDATE downloads SET updated_at = sqlc.arg(updated_at), row_version = row_versio
 WHERE hash = sqlc.arg(hash) AND state != 'DELETED';
 
 -- name: SetDownloadName :execrows
-UPDATE downloads SET name = sqlc.arg(name), updated_at = sqlc.arg(updated_at), row_version = row_version + 1
+UPDATE downloads SET name = sqlc.arg(name), name_overridden = 1, updated_at = sqlc.arg(updated_at), row_version = row_version + 1
 WHERE hash = sqlc.arg(hash) AND state != 'DELETED';
+-- name: ListQbtTags :many
+SELECT name FROM qbt_tags ORDER BY name ASC;
+
+-- name: InsertQbtTag :execrows
+INSERT INTO qbt_tags (name) VALUES (sqlc.arg(name))
+ON CONFLICT(name) DO NOTHING;
+
+-- name: DeleteQbtTag :execrows
+DELETE FROM qbt_tags WHERE name = sqlc.arg(name);
+
+-- name: DeleteQbtCategories :execrows
+DELETE FROM categories
+WHERE name IN (sqlc.slice(names));
+
+-- name: ClearDownloadCategories :execrows
+UPDATE downloads
+SET category = '', updated_at = sqlc.arg(updated_at), row_version = row_version + 1
+WHERE category IN (sqlc.slice(names))
+  AND state != 'DELETED';
+
+-- name: ReverifyDownload :execrows
+UPDATE downloads
+SET
+    state = 'VERIFYING_LOCAL',
+    last_error = NULL,
+    last_error_code = NULL,
+    attempt_count = 0,
+    phase_started_at = sqlc.arg(now),
+    next_run_at = sqlc.arg(now),
+    lease_until = NULL,
+    lease_owner = NULL,
+    completed_at = NULL,
+    updated_at = sqlc.arg(now),
+    row_version = row_version + 1
+WHERE hash = sqlc.arg(hash)
+  AND state = 'COMPLETED';

@@ -59,7 +59,7 @@ func TestQBTBearerAuthenticationContract(t *testing.T) {
 		body   string
 	}{
 		{name: "GET", method: http.MethodGet, target: "/api/v2/app/version"},
-		{name: "POST", method: http.MethodPost, target: "/api/v2/torrents/setShareLimits", body: url.Values{}.Encode()},
+		{name: "POST", method: http.MethodPost, target: "/api/v2/torrents/setShareLimits", body: url.Values{"hashes": {""}, "ratioLimit": {"-2"}, "seedingTimeLimit": {"-2"}, "inactiveSeedingTimeLimit": {"-2"}}.Encode()},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -134,7 +134,8 @@ func TestQBTBearerOriginLoginAndLogoutContract(t *testing.T) {
 	setQBTTestKey(t, harness, secret)
 	header := []string{"Bearer " + string(secret)}
 
-	crossOrigin := doAuthorization(t, harness.api, http.MethodPost, "/api/v2/torrents/setShareLimits", url.Values{}.Encode(), nil, header, "https://evil.example")
+	shareLimits := url.Values{"hashes": {""}, "ratioLimit": {"-2"}, "seedingTimeLimit": {"-2"}, "inactiveSeedingTimeLimit": {"-2"}}.Encode()
+	crossOrigin := doAuthorization(t, harness.api, http.MethodPost, "/api/v2/torrents/setShareLimits", shareLimits, nil, header, "https://evil.example")
 	if crossOrigin.Code != http.StatusForbidden {
 		t.Fatalf("cross-origin Bearer mutation = %d, want 403", crossOrigin.Code)
 	}

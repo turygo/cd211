@@ -1,5 +1,7 @@
 package domain
 
+import "strings"
+
 // State is the persisted lifecycle state of a download.
 type State string
 
@@ -96,7 +98,7 @@ func CanTransition(from, to State) bool {
 	case StateVerifyingLocal:
 		return to == StateCompleted || activeExit(to)
 	case StateCompleted, StateCancelled:
-		return to == StateDeleteRequested
+		return to == StateDeleteRequested || (from == StateCompleted && to == StateVerifyingLocal)
 	case StateFailed:
 		switch to {
 		case StateDeleteRequested, StateAccepted, StateSubmittingOffline, StateWaitingOffline,
@@ -118,4 +120,55 @@ func CanTransition(from, to State) bool {
 
 func activeExit(to State) bool {
 	return to == StateFailed || to == StateCancelRequested || to == StateDeleteRequested
+}
+
+// CanPause reports whether an active workflow can be paused.
+func CanPause(download Download) bool {
+	if download.PauseRequested {
+		return false
+	}
+	switch download.State {
+	case StateAccepted, StateSubmittingOffline, StateWaitingOffline,
+		StateSubmittingCopy, StateWaitingCopy, StateVerifyingLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// CanRetry reports whether a failed workflow or failed cleanup can be retried.
+func CanRetry(download Download) bool {
+	return download.State == StateFailed ||
+		((download.State == StateCancelRequested || download.State == StateDeleteRequested) && download.LastError != "")
+}
+
+// RetryTarget selects the first durable phase to retry for a failed workflow.
+func RetryTarget(download Download) State {
+	status := strings.TrimPrefix(download.LastUpstreamStatus, UpstreamCleanupCancelled+"|")
+	switch {
+	case download.State == StateCancelRequested || download.State == StateDeleteRequested:
+		return download.State
+	case download.State == StateFailed && download.LastErrorCode == string(ProblemDestinationConflict):
+		return StateSubmittingCopy
+	case download.State == StateFailed &&
+		(download.LastErrorCode == string(ProblemLocalVerificationFailed) ||
+			download.LastErrorCode == string(ProblemLocalDeleteFailed)):
+		return StateSubmittingCopy
+	case download.ContentPath != "" || status == UpstreamCopyCompleted:
+		return StateVerifyingLocal
+	case status == UpstreamCopyPending ||
+		status == UpstreamCopyScanning ||
+		status == UpstreamCopyScanned:
+		return StateWaitingCopy
+	case status == UpstreamOfflineError:
+		return StateSubmittingOffline
+	case strings.HasPrefix(status, "copy:"):
+		return StateSubmittingCopy
+	case status == UpstreamOfflineFinished || download.CloudResultPath != "":
+		return StateSubmittingCopy
+	case strings.HasPrefix(status, "offline:"):
+		return StateWaitingOffline
+	default:
+		return StateSubmittingOffline
+	}
 }

@@ -59,13 +59,15 @@ type Download struct {
 	SavePath       string
 	// WorkspacePath is the isolated physical workspace. Empty means this is
 	// an intentional legacy shared-layout row.
-	WorkspacePath        string
-	DestinationName      string
-	CloudTaskName        string
-	CloudResultPath      string
-	CopySourcePath       string
-	ContentPath          string
-	IsMultiFile          *bool
+	WorkspacePath   string
+	DestinationName string
+	CloudTaskName   string
+	CloudResultPath string
+	CopySourcePath  string
+	ContentPath     string
+	IsMultiFile     *bool
+	// Private is known for parsed torrent metainfo and nil for magnets.
+	Private              *bool
 	TotalSize            int64
 	State                State
 	OfflineProgress      float64

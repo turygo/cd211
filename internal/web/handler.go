@@ -1565,7 +1565,7 @@ func (h *handler) start(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) pause(w http.ResponseWriter, r *http.Request) {
 	h.mutateDownload(w, r, func(download domain.Download, now time.Time) error {
-		if !canPause(download) {
+		if !domain.CanPause(download) {
 			return store.ErrInvalidTransition
 		}
 		return h.repo.Pause(r.Context(), download.Hash, now)
@@ -1574,10 +1574,10 @@ func (h *handler) pause(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) retry(w http.ResponseWriter, r *http.Request) {
 	h.mutateDownload(w, r, func(download domain.Download, now time.Time) error {
-		if !canRetry(download) {
+		if !domain.CanRetry(download) {
 			return store.ErrInvalidTransition
 		}
-		return h.repo.Retry(r.Context(), download.Hash, retryTarget(download), now)
+		return h.repo.Retry(r.Context(), download.Hash, domain.RetryTarget(download), now)
 	}, false)
 }
 

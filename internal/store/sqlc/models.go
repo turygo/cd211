@@ -79,6 +79,7 @@ type Download struct {
 	AutoTmm              int64          `json:"auto_tmm"`
 	NameOverridden       int64          `json:"name_overridden"`
 	WorkspacePath        sql.NullString `json:"workspace_path"`
+	Private              sql.NullInt64  `json:"private"`
 }
 
 type DownloadFile struct {
@@ -110,6 +111,10 @@ type QbtApiKey struct {
 	Active     int64     `json:"active"`
 	RowVersion int64     `json:"row_version"`
 	KeySecret  string    `json:"key_secret"`
+}
+
+type QbtTag struct {
+	Name string `json:"name"`
 }
 
 type Session struct {

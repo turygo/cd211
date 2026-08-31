@@ -8,7 +8,9 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"syscall"
 	"unicode"
 	"unicode/utf8"
 )
@@ -72,6 +74,132 @@ func New(localRoot string) (*Verifier, error) {
 // LocalRoot returns the evaluated root used for every durable save path.
 func (v *Verifier) LocalRoot() string {
 	return v.localRoot
+}
+
+// ErrUnsafePath reports a directory path that is not safely confined to LocalRoot.
+var ErrUnsafePath = errors.New("fsafe: unsafe path")
+
+// ErrInvalidVisibility reports a visibility filter other than all, dirs, or files.
+var ErrInvalidVisibility = errors.New("fsafe: invalid visibility")
+
+// ListDirectory returns safe absolute child paths beneath absolutePath.
+//
+// The requested path must be a clean absolute path whose resolved target is
+// within LocalRoot. Child symlinks are resolved only for classification; the
+// returned path retains the requested path's spelling.
+func (v *Verifier) ListDirectory(absolutePath, visibility string) ([]string, error) {
+	switch visibility {
+	case "all", "dirs", "files":
+	default:
+		return nil, fmt.Errorf("%w: %q", ErrInvalidVisibility, visibility)
+	}
+
+	if !filepath.IsAbs(absolutePath) || filepath.Clean(absolutePath) != absolutePath {
+		return nil, fmt.Errorf("%w: %q", ErrUnsafePath, absolutePath)
+	}
+
+	// EvalSymlinks is used only to preserve the historical unsafe-path
+	// sentinel. The descriptor-rooted operations below are authoritative.
+	evaluatedPath, err := filepath.EvalSymlinks(absolutePath)
+	if err != nil {
+		return nil, fmt.Errorf("fsafe: resolve directory %q: %w", absolutePath, err)
+	}
+	evaluatedPath = filepath.Clean(evaluatedPath)
+	if !withinOrEqual(v.localRoot, evaluatedPath) {
+		return nil, fmt.Errorf("%w: %q", ErrUnsafePath, absolutePath)
+	}
+
+	root, err := os.OpenRoot(v.localRoot)
+	if err != nil {
+		return nil, fmt.Errorf("fsafe: open local root: %w", err)
+	}
+	defer root.Close()
+	relative, err := filepath.Rel(v.localRoot, evaluatedPath)
+	if err != nil || outsideRoot(relative) {
+		return nil, fmt.Errorf("%w: %q", ErrUnsafePath, absolutePath)
+	}
+	requested, err := root.OpenFile(relative, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, fmt.Errorf("fsafe: resolve directory %q: %w", absolutePath, err)
+	}
+	requestedInfo, statErr := requested.Stat()
+	closeErr := requested.Close()
+	if statErr != nil {
+		return nil, fmt.Errorf("fsafe: resolve directory %q: %w", absolutePath, statErr)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("fsafe: resolve directory %q: %w", absolutePath, closeErr)
+	}
+	if !requestedInfo.IsDir() {
+		return nil, fmt.Errorf("fsafe: resolve directory %q: %w", absolutePath, syscall.ENOTDIR)
+	}
+	directory, err := root.OpenRoot(relative)
+	if err != nil {
+		return nil, fmt.Errorf("fsafe: resolve directory %q: %w", absolutePath, err)
+	}
+	defer directory.Close()
+	handle, err := directory.Open(".")
+	if err != nil {
+		return nil, fmt.Errorf("fsafe: open directory %q: %w", absolutePath, err)
+	}
+	defer handle.Close()
+	entries, err := handle.ReadDir(-1)
+	if err != nil {
+		return nil, fmt.Errorf("fsafe: read directory %q: %w", absolutePath, err)
+	}
+
+	result := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		childPath := filepath.Join(absolutePath, name)
+		childInfo, err := directory.Lstat(name)
+		if err != nil {
+			// A child may disappear while the directory is being listed.
+			continue
+		}
+		if childInfo.Mode()&os.ModeSymlink != 0 {
+			evaluatedTarget, err := filepath.EvalSymlinks(childPath)
+			if err != nil {
+				// Broken and disappearing links are not visible.
+				continue
+			}
+			evaluatedTarget = filepath.Clean(evaluatedTarget)
+			if !withinOrEqual(v.localRoot, evaluatedTarget) {
+				// Links whose targets escape LocalRoot are not visible.
+				continue
+			}
+			targetRelative, err := filepath.Rel(v.localRoot, evaluatedTarget)
+			if err != nil || outsideRoot(targetRelative) {
+				continue
+			}
+			target, err := root.OpenFile(targetRelative, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+			if err != nil {
+				continue
+			}
+			targetInfo, statErr := target.Stat()
+			closeErr := target.Close()
+			if statErr != nil || closeErr != nil {
+				continue
+			}
+			childInfo = targetInfo
+		}
+
+		isDir := childInfo.IsDir()
+		isFile := childInfo.Mode().IsRegular()
+		if !isDir && !isFile {
+			continue
+		}
+		if visibility == "dirs" && !isDir {
+			continue
+		}
+		if visibility == "files" && !isFile {
+			continue
+		}
+		result = append(result, childPath)
+	}
+
+	sort.Strings(result)
+	return result, nil
 }
 
 // ValidatePersistedRoot validates a configured save root without changing the filesystem.

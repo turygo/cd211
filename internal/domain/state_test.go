@@ -103,6 +103,7 @@ func TestCanTransitionExhaustive(t *testing.T) {
 		},
 		StateCompleted: {
 			StateDeleteRequested: true,
+			StateVerifyingLocal:  true,
 		},
 		StateFailed: {
 			StateDeleteRequested:   true,
@@ -140,5 +141,22 @@ func TestCanTransitionExhaustive(t *testing.T) {
 	}
 	if CanTransition(State("UNKNOWN"), StateAccepted) || CanTransition(StateAccepted, State("UNKNOWN")) {
 		t.Error("unknown states must not be transitionable")
+	}
+}
+func TestQBTOperationPolicy(t *testing.T) {
+	active := Download{State: StateWaitingCopy}
+	if !CanPause(active) || CanPause(Download{State: StateWaitingCopy, PauseRequested: true}) {
+		t.Fatal("pause policy does not match active/pending states")
+	}
+	failed := Download{State: StateFailed, LastUpstreamStatus: UpstreamCopyCompleted}
+	if !CanRetry(failed) || RetryTarget(failed) != StateVerifyingLocal {
+		t.Fatalf("retry policy = (%t, %q)", CanRetry(failed), RetryTarget(failed))
+	}
+	completed := Download{State: StateCompleted}
+	if CanRetry(completed) || CanPause(completed) {
+		t.Fatal("terminal policy incorrectly permits retry/pause")
+	}
+	if !CanTransition(StateCompleted, StateVerifyingLocal) {
+		t.Fatal("completed download cannot be reverified")
 	}
 }

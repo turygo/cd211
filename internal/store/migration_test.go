@@ -146,6 +146,61 @@ func TestLastErrorCodeMigrationBackfillsLegacy(t *testing.T) {
 		t.Fatalf("clean row = (%+v, %v), want no problem code", cleanRow, err)
 	}
 }
+
+func TestPrivateMigrationBackfillsTorrentRows(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "legacy-private.sqlite")
+	db := openDatabaseAtMigration(t, databasePath, 15)
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	torrentHash := strings.Repeat("a", 40)
+	magnetHash := strings.Repeat("b", 40)
+
+	for _, fixture := range []struct {
+		hash   string
+		name   string
+		source domain.SourceKind
+		uri    string
+	}{
+		{hash: torrentHash, name: "legacy torrent", source: domain.SourceTorrent, uri: "fixture.torrent"},
+		{hash: magnetHash, name: "legacy magnet", source: domain.SourceMagnet, uri: "magnet:?xt=urn:btih:" + magnetHash},
+	} {
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO downloads (
+				hash, name, source_kind, submission_uri, category, cloud_folder, save_path,
+				total_size, state, offline_progress, copy_progress, qbit_progress,
+				phase_started_at, created_at, updated_at
+			) VALUES (?, ?, ?, ?, '', '/cloud', '/downloads', 0, 'ACCEPTED', 0, 0, 0, ?, ?, ?)
+		`, fixture.hash, fixture.name, string(fixture.source), fixture.uri, now, now, now); err != nil {
+			t.Fatalf("insert legacy %s fixture: %v", fixture.source, err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy private fixture: %v", err)
+	}
+
+	store, err := Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("Open(legacy private database) error = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	torrent, err := store.GetDownload(ctx, torrentHash)
+	if err != nil {
+		t.Fatalf("GetDownload(legacy torrent) error = %v", err)
+	}
+	if torrent.Private == nil || *torrent.Private {
+		t.Fatalf("legacy torrent private = %#v, want known false", torrent.Private)
+	}
+
+	magnet, err := store.GetDownload(ctx, magnetHash)
+	if err != nil {
+		t.Fatalf("GetDownload(legacy magnet) error = %v", err)
+	}
+	if magnet.Private != nil {
+		t.Fatalf("legacy magnet private = %#v, want nil", magnet.Private)
+	}
+}
+
 func TestCloudContentResolutionMigrationPreservesHistoricalCopyIdentity(t *testing.T) {
 	ctx := context.Background()
 	databasePath := filepath.Join(t.TempDir(), "legacy-cloud-content.sqlite")

@@ -42,7 +42,9 @@ type Result struct {
 	Magnet    string
 	TotalSize int64
 	MultiFile bool
-	Files     []File
+	// Private is known for parsed torrent metainfo and nil for magnets.
+	Private *bool
+	Files   []File
 }
 
 var (
@@ -137,6 +139,11 @@ func ParseTorrent(data []byte, limits Limits) (Result, error) {
 	if info.PieceLength < 0 {
 		return Result{}, errInvalidContents
 	}
+	private := info.Private
+	if private == nil {
+		public := false
+		private = &public
+	}
 
 	name := info.BestName()
 	if err := validateName(name, limits); err != nil {
@@ -161,6 +168,7 @@ func ParseTorrent(data []byte, limits Limits) (Result, error) {
 			Magnet:    canonicalMagnet(mi.HashInfoBytes().HexString(), name, trackers),
 			TotalSize: total,
 			MultiFile: false,
+			Private:   private,
 			Files:     []File{file},
 		}, nil
 	}
@@ -176,6 +184,7 @@ func ParseTorrent(data []byte, limits Limits) (Result, error) {
 		Magnet:    canonicalMagnet(hash, name, trackers),
 		TotalSize: total,
 		MultiFile: true,
+		Private:   private,
 		Files:     files,
 	}, nil
 }

@@ -184,12 +184,17 @@ func TestSubmitTorrentPersistsFiles(t *testing.T) {
 		t.Fatalf("SubmitTorrent() = (%+v, %t, %v)", created, inserted, err)
 	}
 	if created.Hash != metadata.Hash || created.SourceKind != domain.SourceTorrent ||
-		created.IsMultiFile == nil || *created.IsMultiFile || created.TotalSize != metadata.TotalSize {
+		created.IsMultiFile == nil || *created.IsMultiFile || created.Private == nil || *created.Private ||
+		created.TotalSize != metadata.TotalSize {
 		t.Fatalf("torrent download = %+v", created)
 	}
 	files, err := harness.repository.ListDownloadFiles(context.Background(), created.Hash)
 	if err != nil || len(files) != 1 || files[0].RelativePath != "demo" || files[0].Size != 3 {
 		t.Fatalf("torrent files = %+v, %v", files, err)
+	}
+	stored, err := harness.repository.GetDownload(context.Background(), created.Hash)
+	if err != nil || stored.Private == nil || *stored.Private {
+		t.Fatalf("stored torrent private = (%+v, %v), want known public", stored.Private, err)
 	}
 	if harness.waker.wakes != 1 {
 		t.Fatalf("wakes = %d, want 1", harness.waker.wakes)

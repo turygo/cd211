@@ -20,7 +20,10 @@ func (h *handler) categories(w http.ResponseWriter, r *http.Request) {
 	}
 	result := make(map[string]categoryView, len(rows))
 	for _, category := range rows {
-		result[category.Name] = categoryView{Name: category.Name, SavePath: category.SavePath}
+		result[category.Name] = categoryView{
+			Name: category.Name, SavePath: category.SavePath,
+			DownloadPath: "", DownloadPathEnabled: false,
+		}
 	}
 	writeJSON(w, http.StatusOK, result)
 }

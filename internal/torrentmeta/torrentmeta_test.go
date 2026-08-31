@@ -83,6 +83,32 @@ func TestParseTorrentHashesCapturedRawInfoBytes(t *testing.T) {
 		t.Fatalf("Files = %#v", result.Files)
 	}
 }
+func TestParseTorrentCapturesPrivateFlag(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{name: "private", raw: singleInfo("private", 1, "7:privatei1e"), want: true},
+		{name: "public", raw: singleInfo("public", 1, "7:privatei0e"), want: false},
+		{name: "default public", raw: singleInfo("default-public", 1, ""), want: false},
+	} {
+		result, err := ParseTorrent(torrent(test.raw, ""), testLimits())
+		if err != nil {
+			t.Fatalf("%s ParseTorrent: %v", test.name, err)
+		}
+		if result.Private == nil || *result.Private != test.want {
+			t.Fatalf("%s private = %#v, want %t", test.name, result.Private, test.want)
+		}
+	}
+	magnet, err := ParseMagnet("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567", testLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if magnet.Private != nil {
+		t.Fatalf("magnet private = %#v, want nil", magnet.Private)
+	}
+}
 
 func TestParseTorrentAcceptsHybridAndRejectsV2Only(t *testing.T) {
 	hybridInfo := singleInfo("hybrid", 1, "12:meta versioni2e")

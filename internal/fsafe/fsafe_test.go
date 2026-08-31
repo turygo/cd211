@@ -31,6 +31,205 @@ func TestNewRejectsReservedLocalRootComponent(t *testing.T) {
 	}
 }
 
+func TestListDirectoryRootNestedModesAndSorting(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	nested := mkdir(t, filepath.Join(root, "nested"))
+	writeFile(t, filepath.Join(root, "z-file"), "z")
+	writeFile(t, filepath.Join(root, "a-file"), "a")
+	mkdir(t, filepath.Join(root, "m-dir"))
+	writeFile(t, filepath.Join(nested, "child"), "child")
+
+	for _, test := range []struct {
+		name       string
+		path       string
+		visibility string
+		want       []string
+	}{
+		{
+			name:       "root all",
+			path:       root,
+			visibility: "all",
+			want: []string{
+				filepath.Join(root, "a-file"),
+				filepath.Join(root, "m-dir"),
+				filepath.Join(root, "nested"),
+				filepath.Join(root, "z-file"),
+			},
+		},
+		{
+			name:       "nested files",
+			path:       nested,
+			visibility: "files",
+			want:       []string{filepath.Join(nested, "child")},
+		},
+		{
+			name:       "root dirs",
+			path:       root,
+			visibility: "dirs",
+			want: []string{
+				filepath.Join(root, "m-dir"),
+				filepath.Join(root, "nested"),
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := verifier.ListDirectory(test.path, test.visibility)
+			if err != nil {
+				t.Fatalf("ListDirectory() error = %v", err)
+			}
+			if len(got) != len(test.want) {
+				t.Fatalf("ListDirectory() = %#v, want %#v", got, test.want)
+			}
+			for index := range test.want {
+				if got[index] != test.want[index] {
+					t.Fatalf("ListDirectory() = %#v, want %#v", got, test.want)
+				}
+			}
+		})
+	}
+}
+
+func TestListDirectoryRejectsInvalidVisibilityAndUnsafePaths(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+
+	for _, test := range []struct {
+		name string
+		path string
+		err  error
+	}{
+		{name: "relative", path: "relative", err: ErrUnsafePath},
+		{name: "parent escape", path: filepath.Join(root, ".."), err: ErrUnsafePath},
+		{name: "outside root", path: t.TempDir(), err: ErrUnsafePath},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := verifier.ListDirectory(test.path, "all"); !errors.Is(err, test.err) {
+				t.Fatalf("ListDirectory(%q) error = %v, want %v", test.path, err, test.err)
+			}
+		})
+	}
+
+	if _, err := verifier.ListDirectory(root, "unknown"); !errors.Is(err, ErrInvalidVisibility) {
+		t.Fatalf("ListDirectory() invalid visibility error = %v", err)
+	}
+}
+
+func TestListDirectoryHandlesSymlinksAndNonDirectories(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	targetFile := writeFile(t, filepath.Join(root, "target-file"), "content")
+	targetDir := mkdir(t, filepath.Join(root, "target-dir"))
+	writeFile(t, filepath.Join(targetDir, "inside"), "inside")
+	mustSymlink(t, targetFile, filepath.Join(root, "file-link"))
+	mustSymlink(t, targetDir, filepath.Join(root, "dir-link"))
+	mustSymlink(t, "target-file", filepath.Join(root, "relative-file-link"))
+	mustSymlink(t, "target-dir", filepath.Join(root, "relative-dir-link"))
+	outside := writeFile(t, filepath.Join(t.TempDir(), "outside"), "outside")
+	mustSymlink(t, outside, filepath.Join(root, "escape-link"))
+	mustSymlink(t, "missing", filepath.Join(root, "broken-link"))
+
+	got, err := verifier.ListDirectory(root, "all")
+	if err != nil {
+		t.Fatalf("ListDirectory() error = %v", err)
+	}
+	for _, path := range []string{
+		filepath.Join(root, "file-link"),
+		filepath.Join(root, "dir-link"),
+		filepath.Join(root, "relative-file-link"),
+		filepath.Join(root, "relative-dir-link"),
+		filepath.Join(root, "target-file"),
+		filepath.Join(root, "target-dir"),
+	} {
+		if !containsPath(got, path) {
+			t.Fatalf("ListDirectory() = %#v, missing in-root link/path %q", got, path)
+		}
+	}
+	if containsPath(got, filepath.Join(root, "escape-link")) ||
+		containsPath(got, filepath.Join(root, "broken-link")) {
+		t.Fatalf("ListDirectory() returned escaping or broken link: %#v", got)
+	}
+
+	files, err := verifier.ListDirectory(root, "files")
+	if err != nil {
+		t.Fatalf("ListDirectory(files) error = %v", err)
+	}
+	if !containsPath(files, filepath.Join(root, "file-link")) ||
+		containsPath(files, filepath.Join(root, "dir-link")) {
+		t.Fatalf("ListDirectory(files) = %#v, want file-link but not dir-link", files)
+	}
+	dirs, err := verifier.ListDirectory(root, "dirs")
+	if err != nil {
+		t.Fatalf("ListDirectory(dirs) error = %v", err)
+	}
+	if !containsPath(dirs, filepath.Join(root, "dir-link")) ||
+		containsPath(dirs, filepath.Join(root, "file-link")) {
+		t.Fatalf("ListDirectory(dirs) = %#v, want dir-link but not file-link", dirs)
+	}
+
+	symlinkDir := filepath.Join(root, "dir-link")
+	nested, err := verifier.ListDirectory(symlinkDir, "all")
+	if err != nil {
+		t.Fatalf("ListDirectory(in-root symlink) error = %v", err)
+	}
+	if want := filepath.Join(symlinkDir, "inside"); len(nested) != 1 || nested[0] != want {
+		t.Fatalf("ListDirectory(in-root symlink) = %#v, want [%q]", nested, want)
+	}
+
+	if _, err := verifier.ListDirectory(filepath.Join(root, "file-link"), "all"); !errors.Is(err, syscall.ENOTDIR) {
+		t.Fatalf("ListDirectory(file) error = %v, want ENOTDIR", err)
+	}
+	if _, err := verifier.ListDirectory(filepath.Join(root, "escape-link"), "all"); !errors.Is(err, ErrUnsafePath) {
+		t.Fatalf("ListDirectory(escaping link) error = %v, want ErrUnsafePath", err)
+	}
+}
+
+func TestListDirectoryWrapsMissingAndPermissionErrors(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	missing := filepath.Join(root, "missing")
+	if _, err := verifier.ListDirectory(missing, "all"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("ListDirectory(missing) error = %v, want not-exist", err)
+	}
+
+	restricted := mkdir(t, filepath.Join(root, "restricted"))
+	if err := os.Chmod(restricted, 0); err != nil {
+		t.Fatalf("Chmod(%q): %v", restricted, err)
+	}
+	defer os.Chmod(restricted, 0o755)
+	_, err := verifier.ListDirectory(restricted, "all")
+	if err == nil {
+		t.Skip("permission checks are unavailable to the current user")
+	}
+	if !errors.Is(err, fs.ErrPermission) && !errors.Is(err, syscall.EACCES) {
+		t.Fatalf("ListDirectory(permission) error = %v, want permission denied", err)
+	}
+}
+
+func TestListDirectorySkipsSpecialChildren(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	fifo := filepath.Join(root, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skipf("special files unavailable: %v", err)
+	}
+	fifoLink := filepath.Join(root, "fifo-link")
+	mustSymlink(t, fifo, fifoLink)
+	writeFile(t, filepath.Join(root, "regular"), "regular")
+
+	got, err := verifier.ListDirectory(root, "all")
+	if err != nil {
+		t.Fatalf("ListDirectory() error = %v", err)
+	}
+	if containsPath(got, fifo) || containsPath(got, fifoLink) {
+		t.Fatalf("ListDirectory() returned special child %q", fifo)
+	}
+}
+
+func containsPath(paths []string, want string) bool {
+	for _, path := range paths {
+		if path == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestVerifySingleFile(t *testing.T) {
 	verifier, root := newTestVerifier(t)
 	save := mkdir(t, filepath.Join(root, "save"))

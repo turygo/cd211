@@ -68,14 +68,17 @@ func TestCreateSubmissionRoundTripsWorkspacePath(t *testing.T) {
 	store := testStore(t)
 	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
 	submission := testSubmission("a", now)
+	submission.Download.SourceKind = domain.SourceTorrent
+	private := false
+	submission.Download.Private = &private
 	submission.Download.WorkspacePath = "/downloads/.cd211/" + submission.Download.Hash
 	created, inserted, err := store.CreateSubmission(ctx, submission)
-	if err != nil || !inserted || created.WorkspacePath != submission.Download.WorkspacePath {
-		t.Fatalf("CreateSubmission() = (%+v, %t, %v), want workspace path round trip", created, inserted, err)
+	if err != nil || !inserted || created.WorkspacePath != submission.Download.WorkspacePath || created.Private == nil || *created.Private {
+		t.Fatalf("CreateSubmission() = (%+v, %t, %v), want workspace path and known public private", created, inserted, err)
 	}
 	stored, err := store.GetDownload(ctx, submission.Download.Hash)
-	if err != nil || stored.WorkspacePath != submission.Download.WorkspacePath {
-		t.Fatalf("GetDownload() = (%+v, %v), want workspace path round trip", stored, err)
+	if err != nil || stored.WorkspacePath != submission.Download.WorkspacePath || stored.Private == nil || *stored.Private {
+		t.Fatalf("GetDownload() = (%+v, %v), want workspace path and known public private", stored, err)
 	}
 }
 

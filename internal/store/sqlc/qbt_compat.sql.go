@@ -8,8 +8,40 @@ package storedb
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 )
+
+const clearDownloadCategories = `-- name: ClearDownloadCategories :execrows
+UPDATE downloads
+SET category = '', updated_at = ?1, row_version = row_version + 1
+WHERE category IN (/*SLICE:names*/?)
+  AND state != 'DELETED'
+`
+
+type ClearDownloadCategoriesParams struct {
+	UpdatedAt time.Time `json:"updated_at"`
+	Names     []string  `json:"names"`
+}
+
+func (q *Queries) ClearDownloadCategories(ctx context.Context, arg ClearDownloadCategoriesParams) (int64, error) {
+	query := clearDownloadCategories
+	var queryParams []interface{}
+	queryParams = append(queryParams, arg.UpdatedAt)
+	if len(arg.Names) > 0 {
+		for _, v := range arg.Names {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:names*/?", strings.Repeat(",?", len(arg.Names))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:names*/?", "NULL", 1)
+	}
+	result, err := q.db.ExecContext(ctx, query, queryParams...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
 
 const deleteDownloadFileOverride = `-- name: DeleteDownloadFileOverride :exec
 DELETE FROM download_file_overrides
@@ -26,6 +58,41 @@ func (q *Queries) DeleteDownloadFileOverride(ctx context.Context, arg DeleteDown
 	return err
 }
 
+const deleteQbtCategories = `-- name: DeleteQbtCategories :execrows
+DELETE FROM categories
+WHERE name IN (/*SLICE:names*/?)
+`
+
+func (q *Queries) DeleteQbtCategories(ctx context.Context, names []string) (int64, error) {
+	query := deleteQbtCategories
+	var queryParams []interface{}
+	if len(names) > 0 {
+		for _, v := range names {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:names*/?", strings.Repeat(",?", len(names))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:names*/?", "NULL", 1)
+	}
+	result, err := q.db.ExecContext(ctx, query, queryParams...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteQbtTag = `-- name: DeleteQbtTag :execrows
+DELETE FROM qbt_tags WHERE name = ?1
+`
+
+func (q *Queries) DeleteQbtTag(ctx context.Context, name string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteQbtTag, name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getSetting = `-- name: GetSetting :one
 SELECT "key", value, updated_at FROM settings WHERE key = ?1
 `
@@ -35,6 +102,19 @@ func (q *Queries) GetSetting(ctx context.Context, key string) (Setting, error) {
 	var i Setting
 	err := row.Scan(&i.Key, &i.Value, &i.UpdatedAt)
 	return i, err
+}
+
+const insertQbtTag = `-- name: InsertQbtTag :execrows
+INSERT INTO qbt_tags (name) VALUES (?1)
+ON CONFLICT(name) DO NOTHING
+`
+
+func (q *Queries) InsertQbtTag(ctx context.Context, name string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertQbtTag, name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const listDownloadFileOverrides = `-- name: ListDownloadFileOverrides :many
@@ -71,8 +151,66 @@ func (q *Queries) ListDownloadFileOverrides(ctx context.Context, downloadHash st
 	return items, nil
 }
 
+const listQbtTags = `-- name: ListQbtTags :many
+SELECT name FROM qbt_tags ORDER BY name ASC
+`
+
+func (q *Queries) ListQbtTags(ctx context.Context) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listQbtTags)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		items = append(items, name)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const reverifyDownload = `-- name: ReverifyDownload :execrows
+UPDATE downloads
+SET
+    state = 'VERIFYING_LOCAL',
+    last_error = NULL,
+    last_error_code = NULL,
+    attempt_count = 0,
+    phase_started_at = ?1,
+    next_run_at = ?1,
+    lease_until = NULL,
+    lease_owner = NULL,
+    completed_at = NULL,
+    updated_at = ?1,
+    row_version = row_version + 1
+WHERE hash = ?2
+  AND state = 'COMPLETED'
+`
+
+type ReverifyDownloadParams struct {
+	Now  time.Time `json:"now"`
+	Hash string    `json:"hash"`
+}
+
+func (q *Queries) ReverifyDownload(ctx context.Context, arg ReverifyDownloadParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, reverifyDownload, arg.Now, arg.Hash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const setDownloadName = `-- name: SetDownloadName :execrows
-UPDATE downloads SET name = ?1, updated_at = ?2, row_version = row_version + 1
+UPDATE downloads SET name = ?1, name_overridden = 1, updated_at = ?2, row_version = row_version + 1
 WHERE hash = ?3 AND state != 'DELETED'
 `
 

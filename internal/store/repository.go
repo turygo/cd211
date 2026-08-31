@@ -1146,10 +1146,11 @@ func categoryFromDB(row storedb.Category) (domain.Category, error) {
 // Callers that need the full domain invariants must use downloadFromDB.
 func downloadRow(row storedb.Download) (domain.Download, error) {
 	if row.IsMultiFile.Valid && row.IsMultiFile.Int64 != 0 && row.IsMultiFile.Int64 != 1 ||
+		row.Private.Valid && row.Private.Int64 != 0 && row.Private.Int64 != 1 ||
 		row.DeleteFilesRequested != 0 && row.DeleteFilesRequested != 1 ||
 		row.PauseRequested != 0 && row.PauseRequested != 1 ||
 		row.NameOverridden != 0 && row.NameOverridden != 1 {
-		return domain.Download{}, errors.New("stored download boolean is invalid")
+		return domain.Download{}, errors.New("stored download is invalid")
 	}
 	sourceKind := domain.SourceKind(row.SourceKind)
 	state := domain.State(row.State)
@@ -1160,6 +1161,7 @@ func downloadRow(row storedb.Download) (domain.Download, error) {
 		Hash: row.Hash, Name: row.Name, NameOverridden: row.NameOverridden != 0, SourceKind: sourceKind, SubmissionURI: row.SubmissionUri,
 		Category: row.Category, Tags: row.Tags, AutoTMM: row.AutoTmm != 0, CloudFolder: row.CloudFolder, SavePath: row.SavePath, WorkspacePath: nullString(row.WorkspacePath), DestinationName: nullString(row.DestinationName),
 		CloudTaskName: nullString(row.CloudTaskName), CloudResultPath: nullString(row.CloudResultPath), CopySourcePath: nullString(row.CopySourcePath), ContentPath: nullString(row.ContentPath),
+		Private:   nullableBoolValue(row.Private),
 		TotalSize: row.TotalSize, State: state, OfflineProgress: row.OfflineProgress, CopyProgress: row.CopyProgress, QbitProgress: row.QbitProgress,
 		LastUpstreamStatus: nullString(row.LastUpstreamStatus), LastError: nullString(row.LastError), LastErrorCode: nullString(row.LastErrorCode),
 		PhaseStartedAt: row.PhaseStartedAt, OfflineStartedAt: nullTime(row.OfflineStartedAt), CopyCompletedAt: nullTime(row.CopyCompletedAt),
@@ -1190,7 +1192,7 @@ func insertDownloadParams(download domain.Download) storedb.InsertDownloadParams
 		Hash: download.Hash, Name: download.Name, SourceKind: string(download.SourceKind), SubmissionUri: download.SubmissionURI,
 		Category: download.Category, Tags: download.Tags, AutoTmm: boolInteger(download.AutoTMM), NameOverridden: boolInteger(download.NameOverridden), CloudFolder: download.CloudFolder, SavePath: download.SavePath, WorkspacePath: nullableString(download.WorkspacePath), DestinationName: nullableString(download.DestinationName),
 		CloudTaskName: nullableString(download.CloudTaskName), CloudResultPath: nullableString(download.CloudResultPath), CopySourcePath: nullableString(download.CopySourcePath), ContentPath: nullableString(download.ContentPath),
-		IsMultiFile: nullableBool(download.IsMultiFile), TotalSize: download.TotalSize, State: string(download.State),
+		IsMultiFile: nullableBool(download.IsMultiFile), Private: nullableBool(download.Private), TotalSize: download.TotalSize, State: string(download.State),
 		OfflineProgress: download.OfflineProgress, CopyProgress: download.CopyProgress, QbitProgress: download.QbitProgress,
 		LastUpstreamStatus: nullableString(download.LastUpstreamStatus), LastError: nullableString(download.LastError), LastErrorCode: nullableString(download.LastErrorCode),
 		PhaseStartedAt: download.PhaseStartedAt, OfflineStartedAt: nullableTime(download.OfflineStartedAt), CopyCompletedAt: nullableTime(download.CopyCompletedAt),
@@ -1205,7 +1207,7 @@ func reviveDownloadParams(download domain.Download) storedb.ReviveDownloadParams
 		Name: download.Name, SourceKind: string(download.SourceKind), SubmissionUri: download.SubmissionURI, Category: download.Category, Tags: download.Tags,
 		AutoTmm: boolInteger(download.AutoTMM), NameOverridden: boolInteger(download.NameOverridden), CloudFolder: download.CloudFolder, SavePath: download.SavePath, WorkspacePath: nullableString(download.WorkspacePath),
 		DestinationName: nullableString(download.DestinationName), CloudTaskName: nullableString(download.CloudTaskName), CloudResultPath: nullableString(download.CloudResultPath),
-		CopySourcePath: nullableString(download.CopySourcePath), ContentPath: nullableString(download.ContentPath), IsMultiFile: nullableBool(download.IsMultiFile),
+		CopySourcePath: nullableString(download.CopySourcePath), ContentPath: nullableString(download.ContentPath), IsMultiFile: nullableBool(download.IsMultiFile), Private: nullableBool(download.Private),
 		TotalSize: download.TotalSize, State: string(download.State), OfflineProgress: download.OfflineProgress, CopyProgress: download.CopyProgress, QbitProgress: download.QbitProgress,
 		LastUpstreamStatus: nullableString(download.LastUpstreamStatus), PhaseStartedAt: download.PhaseStartedAt, OfflineStartedAt: nullableTime(download.OfflineStartedAt),
 		CopyCompletedAt: nullableTime(download.CopyCompletedAt), NextRunAt: nullableTime(download.NextRunAt), CreatedAt: download.CreatedAt, UpdatedAt: download.UpdatedAt, Hash: download.Hash,
@@ -1313,6 +1315,14 @@ func nullableBool(value *bool) sql.NullInt64 {
 		return sql.NullInt64{}
 	}
 	return sql.NullInt64{Int64: boolInteger(*value), Valid: true}
+}
+
+func nullableBoolValue(value sql.NullInt64) *bool {
+	if !value.Valid {
+		return nil
+	}
+	result := value.Int64 != 0
+	return &result
 }
 
 func boolInteger(value bool) int64 {
