@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -232,6 +233,42 @@ func newContractHarnessAt(t *testing.T, dbPath string) *contractHarness {
 		t.Fatal(err)
 	}
 	return &contractHarness{api: api, loginHandler: api.LoginHandler(), repository: repository, qbtkeys: qbtkeys, sessions: sessions, clock: clock, waker: waker, filesystem: filesystem, limits: limits}
+}
+
+func newRealFilesystemContractHarness(t *testing.T) *contractHarness {
+	t.Helper()
+	localRoot := t.TempDir()
+	repository, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "api.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repository.Close() })
+	clock := &contractClock{now: time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)}
+	sessions, err := session.New(repository, clock, bytes.NewReader(bytes.Repeat([]byte{3}, 128)), time.Hour, 30*time.Minute, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := torrentmeta.Limits{MaxInputBytes: 1 << 20, MaxInfoBytes: 1 << 18, MaxFiles: 16, MaxNameBytes: 255, MaxPathBytes: 1024, MaxComponentBytes: 255, MaxTrackerCount: 16, MaxTrackerBytes: 1024, MaxTotalSize: 1 << 30}
+	waker := &contractWaker{}
+	filesystem, err := fsafe.New(localRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := submission.New(submission.Config{
+		CloudRoot: "/cloud", LocalRoot: localRoot, TorrentLimits: limits,
+	}, repository, clock, waker, filesystem)
+	if err != nil {
+		t.Fatal(err)
+	}
+	qbtkeys := &contractQBTAPIKeyRepository{}
+	api, err := New(Config{
+		CloudRoot: "/cloud", LocalRoot: localRoot,
+		TorrentLimits: limits, MaxRequestBytes: int64(limits.MaxInputBytes) + (64 << 10),
+	}, stubCredentials{username: "user", password: "password"}, repository, sessions, clock, waker, filesystem, service, qbtkeys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &contractHarness{api: api, loginHandler: api.LoginHandler(), repository: repository, qbtkeys: qbtkeys, sessions: sessions, clock: clock, waker: waker, limits: limits}
 }
 
 type stubCredentials struct {
@@ -943,6 +980,82 @@ func TestQBTProjectionKeepsLogicalSavePathAndWorkspaceContentPath(t *testing.T) 
 		t.Fatalf("properties paths = %d %q", properties.Code, properties.Body.String())
 	}
 }
+func TestQBTCompletedFileRenameMovesContent(t *testing.T) {
+	t.Parallel()
+	harness := newRealFilesystemContractHarness(t)
+	cookie := harness.login(t)
+	torrent := []byte("d4:infod6:lengthi4e4:name7:old.mkv12:piece lengthi16384e6:pieces20:01234567890123456789ee")
+	metadata := addContractTorrent(t, harness, cookie, torrent)
+	advanceToCompletedAtWorkspace(t, harness.repository, harness.clock.now, metadata.Hash)
+	download, err := harness.repository.GetDownload(context.Background(), metadata.Hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contentPath := filepath.Join(download.WorkspacePath, "old.mkv")
+	if err := os.MkdirAll(download.WorkspacePath, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(contentPath, []byte("data"), 0o660); err != nil {
+		t.Fatal(err)
+	}
+
+	rename := doForm(t, harness.api, http.MethodPost, "/api/v2/torrents/renameFile", url.Values{
+		"hash": {metadata.Hash}, "oldPath": {"old.mkv"}, "newPath": {"new.mkv"},
+	}, cookie)
+	if rename.Code != http.StatusOK {
+		t.Fatalf("completed rename = %d %q", rename.Code, rename.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(download.WorkspacePath, "new.mkv")); err != nil {
+		t.Fatalf("renamed file missing: %v", err)
+	}
+	if _, err := os.Stat(contentPath); !os.IsNotExist(err) {
+		t.Fatalf("old file still exists: %v", err)
+	}
+	files := doRequest(t, harness.api, http.MethodGet, "/api/v2/torrents/files?hash="+metadata.Hash, nil, cookie)
+	if files.Code != http.StatusOK || !strings.Contains(files.Body.String(), `"name":"new.mkv"`) {
+		t.Fatalf("renamed files = %d %q", files.Code, files.Body.String())
+	}
+	download, err = harness.repository.GetDownload(context.Background(), metadata.Hash)
+	if err != nil || download.ContentPath != filepath.Join(download.WorkspacePath, "new.mkv") {
+		t.Fatalf("content path after rename = %q, %v", download.ContentPath, err)
+	}
+}
+
+func TestQBTCompletedFileRenameRejectsCollision(t *testing.T) {
+	t.Parallel()
+	harness := newRealFilesystemContractHarness(t)
+	cookie := harness.login(t)
+	torrent := []byte("d4:infod6:lengthi4e4:name8:old2.mkv12:piece lengthi16384e6:pieces20:11234567890123456789ee")
+	metadata := addContractTorrent(t, harness, cookie, torrent)
+	advanceToCompletedAtWorkspace(t, harness.repository, harness.clock.now, metadata.Hash)
+	download, err := harness.repository.GetDownload(context.Background(), metadata.Hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(download.WorkspacePath, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(download.WorkspacePath, "old2.mkv")
+	target := filepath.Join(download.WorkspacePath, "occupied.mkv")
+	if err := os.WriteFile(source, []byte("data"), 0o660); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("keep"), 0o660); err != nil {
+		t.Fatal(err)
+	}
+	response := doForm(t, harness.api, http.MethodPost, "/api/v2/torrents/renameFile", url.Values{
+		"hash": {metadata.Hash}, "oldPath": {"old2.mkv"}, "newPath": {"occupied.mkv"},
+	}, cookie)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("collision rename = %d %q, want 409", response.Code, response.Body.String())
+	}
+	if content, err := os.ReadFile(source); err != nil || string(content) != "data" {
+		t.Fatalf("source after collision = %q, %v", content, err)
+	}
+	if content, err := os.ReadFile(target); err != nil || string(content) != "keep" {
+		t.Fatalf("target after collision = %q, %v", content, err)
+	}
+}
 
 func advanceToCompletedAtWorkspace(t *testing.T, repository *store.Store, now time.Time, hash string) {
 	t.Helper()
@@ -962,8 +1075,16 @@ func advanceToCompletedAtWorkspace(t *testing.T, repository *store.Store, now ti
 			next.CopySourcePath = "/cloud/Logical"
 		}
 		if state == domain.StateVerifyingLocal || state == domain.StateCompleted {
-			next.DestinationName = "Logical"
-			next.ContentPath = next.WorkspacePath + "/Logical"
+			destination := "Logical"
+			files, filesErr := repository.ListDownloadFiles(context.Background(), hash)
+			if filesErr != nil {
+				t.Fatalf("list files for %s: %v", state, filesErr)
+			}
+			if len(files) == 1 {
+				destination = files[0].RelativePath
+			}
+			next.DestinationName = destination
+			next.ContentPath = filepath.Join(next.WorkspacePath, filepath.FromSlash(destination))
 		}
 		if state == domain.StateCompleted {
 			next.NextRunAt = nil

@@ -31,6 +31,9 @@ func TestApplyFilePlanRenameAndExclude(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(candidate, "drop.txt")); !os.IsNotExist(err) {
 		t.Fatalf("excluded file still exists: %v", err)
 	}
+	if err := verifier.ApplyFilePlan(candidate, "0123456789abcdef0123456789abcdef01234567", []FilePlan{{Index: 0, OriginalPath: "old.txt", EffectivePath: "new.txt", Priority: 1, Size: 4}}); err != nil {
+		t.Fatalf("published plan recovery: %v", err)
+	}
 }
 func TestApplyFilePlanSupportsSwapAndRejectsCollision(t *testing.T) {
 	root := t.TempDir()

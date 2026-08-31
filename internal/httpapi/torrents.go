@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"mime"
 	"mime/multipart"
 	"net"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/turygo/cd211/internal/domain"
+	"github.com/turygo/cd211/internal/fsafe"
 	"github.com/turygo/cd211/internal/logging"
 	"github.com/turygo/cd211/internal/store"
 	"github.com/turygo/cd211/internal/submission"
@@ -1133,6 +1135,11 @@ func (h *handler) renameFile(w http.ResponseWriter, r *http.Request) {
 		badRequest(w)
 		return
 	}
+	download, err := h.repo.GetDownload(r.Context(), hash)
+	if err != nil {
+		repositoryError(w, err)
+		return
+	}
 	files, err := h.repo.ListDownloadFiles(r.Context(), hash)
 	if err != nil {
 		repositoryError(w, err)
@@ -1143,11 +1150,13 @@ func (h *handler) renameFile(w http.ResponseWriter, r *http.Request) {
 		repositoryError(w, err)
 		return
 	}
-	effective := make(map[int64]string)
-	priorities := make(map[int64]int64)
+	effective := make(map[int64]string, len(files))
+	priorities := make(map[int64]int64, len(files))
+	sizes := make(map[int64]int64, len(files))
 	for _, file := range files {
 		effective[file.Index] = file.RelativePath
 		priorities[file.Index] = 1
+		sizes[file.Index] = file.Size
 	}
 	for _, override := range overrides {
 		effective[override.FileIndex] = override.RelativePath
@@ -1173,11 +1182,52 @@ func (h *handler) renameFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if download.State == domain.StateCompleted && oldPath != newPath {
+		if err := h.applyCompletedFilePlan(download, oldPath, newPath, sizes[target]); err != nil {
+			renamePlanError(w, err)
+			return
+		}
+	}
 	if err := h.repo.SetFileOverride(r.Context(), hash, target, newPath, priorities[target], h.now()); err != nil {
 		repositoryError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func (h *handler) applyCompletedFilePlan(download domain.Download, oldPath, newPath string, size int64) error {
+	planner, ok := h.filesystem.(interface {
+		ApplyFilePlan(string, string, []fsafe.FilePlan) error
+	})
+	if !ok {
+		return errors.New("completed rename requires file planner")
+	}
+	return planner.ApplyFilePlan(completedPlanRoot(download), download.Hash, []fsafe.FilePlan{{
+		Index: 0, OriginalPath: oldPath, EffectivePath: newPath, Priority: 1, Size: size,
+	}})
+}
+
+func completedPlanRoot(download domain.Download) string {
+	root := download.WorkspacePath
+	if root == "" {
+		root = download.SavePath
+	}
+	if download.SourceKind == domain.SourceTorrent && download.IsMultiFile != nil && *download.IsMultiFile &&
+		download.CopySourcePath == download.CloudResultPath {
+		root = filepath.Join(root, download.DestinationName)
+	}
+	return filepath.Clean(root)
+}
+
+func renamePlanError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		notFound(w)
+	case errors.Is(err, fsafe.ErrFilePlanConflict):
+		conflict(w)
+	default:
+		internalError(w)
+	}
 }
 
 func first(values []string) string {
@@ -1650,11 +1700,68 @@ func (h *handler) renameFolder(w http.ResponseWriter, r *http.Request) {
 		badRequest(w)
 		return
 	}
+	download, err := h.repo.GetDownload(r.Context(), hash)
+	if err != nil {
+		repositoryError(w, err)
+		return
+	}
+	if download.State == domain.StateCompleted {
+		files, filesErr := h.repo.ListDownloadFiles(r.Context(), hash)
+		if filesErr != nil {
+			repositoryError(w, filesErr)
+			return
+		}
+		overrides, overridesErr := h.repo.ListDownloadFileOverrides(r.Context(), hash)
+		if overridesErr != nil {
+			repositoryError(w, overridesErr)
+			return
+		}
+		plans := completedFolderPlans(files, overrides, oldPath, newPath)
+		if len(plans) > 0 {
+			planner, plannerOK := h.filesystem.(interface {
+				ApplyFilePlan(string, string, []fsafe.FilePlan) error
+			})
+			if !plannerOK {
+				internalError(w)
+				return
+			}
+			if err := planner.ApplyFilePlan(completedPlanRoot(download), download.Hash, plans); err != nil {
+				renamePlanError(w, err)
+				return
+			}
+		}
+	}
 	if err := h.repo.RenameFolder(r.Context(), hash, oldPath, newPath, h.now()); err != nil {
 		repositoryError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func completedFolderPlans(files []domain.DownloadFile, overrides []domain.FileOverride, oldPath, newPath string) []fsafe.FilePlan {
+	overrideByIndex := make(map[int64]domain.FileOverride, len(overrides))
+	for _, override := range overrides {
+		overrideByIndex[override.FileIndex] = override
+	}
+	plans := make([]fsafe.FilePlan, 0)
+	for _, file := range files {
+		current, priority := file.RelativePath, int64(1)
+		if override, exists := overrideByIndex[file.Index]; exists {
+			current, priority = override.RelativePath, override.Priority
+		}
+		effective := current
+		if current == oldPath {
+			effective = newPath
+		} else if strings.HasPrefix(current, oldPath+"/") {
+			effective = newPath + current[len(oldPath):]
+		}
+		if effective != current && priority != 0 {
+			plans = append(plans, fsafe.FilePlan{
+				Index: file.Index, OriginalPath: current, EffectivePath: effective, Priority: 1, Size: file.Size,
+			})
+		}
+	}
+	return plans
 }
 
 func (h *handler) editCategory(w http.ResponseWriter, r *http.Request) {

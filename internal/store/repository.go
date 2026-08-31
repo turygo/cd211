@@ -503,7 +503,10 @@ func (s *Store) SetFileOverride(ctx context.Context, hash string, index int64, r
 		_ = tx.Rollback()
 		return err
 	}
-	if (row.State != string(domain.StateStopped) && row.State != string(domain.StateAccepted)) || row.LeaseOwner.Valid || row.ContentPath.Valid || row.CopySourcePath.Valid || row.CloudResultPath.Valid {
+	preStart := (row.State == string(domain.StateStopped) || row.State == string(domain.StateAccepted)) &&
+		!row.LeaseOwner.Valid && !row.ContentPath.Valid && !row.CopySourcePath.Valid && !row.CloudResultPath.Valid
+	completed := row.State == string(domain.StateCompleted) && !row.LeaseOwner.Valid && row.ContentPath.Valid
+	if !preStart && !completed {
 		_ = tx.Rollback()
 		return ErrInvalidTransition
 	}
@@ -516,6 +519,19 @@ func (s *Store) SetFileOverride(ctx context.Context, hash string, index int64, r
 	if overrideErr != nil {
 		_ = tx.Rollback()
 		return overrideErr
+	}
+	oldRelative := ""
+	for _, file := range manifest {
+		if file.FileIndex == index {
+			oldRelative = file.RelativePath
+			break
+		}
+	}
+	for _, override := range overrides {
+		if override.FileIndex == index {
+			oldRelative = override.RelativePath
+			break
+		}
 	}
 	for _, file := range manifest {
 		if file.FileIndex == index {
@@ -533,14 +549,39 @@ func (s *Store) SetFileOverride(ctx context.Context, hash string, index int64, r
 			return ErrDestinationConflict
 		}
 	}
+	contentPath := ""
+	if completed && oldRelative != "" {
+		root := row.SavePath
+		if row.WorkspacePath.Valid {
+			root = row.WorkspacePath.String
+		}
+		if row.SourceKind == string(domain.SourceTorrent) && row.IsMultiFile.Valid && row.IsMultiFile.Int64 != 0 &&
+			row.CopySourcePath.Valid && row.CloudResultPath.Valid && row.CopySourcePath.String == row.CloudResultPath.String &&
+			row.DestinationName.Valid {
+			root = filepath.Join(root, row.DestinationName.String)
+		}
+		oldPath := filepath.Join(root, filepath.FromSlash(oldRelative))
+		if filepath.Clean(row.ContentPath.String) == filepath.Clean(oldPath) {
+			contentPath = filepath.Join(root, filepath.FromSlash(relative))
+		}
+	}
 	if err := queries.UpsertDownloadFileOverride(ctx, storedb.UpsertDownloadFileOverrideParams{DownloadHash: hash, FileIndex: index, RelativePath: relative, Priority: priority}); err != nil {
 		_ = tx.Rollback()
 		return err
 	}
-	if updated, err := queries.TouchDownload(ctx, storedb.TouchDownloadParams{UpdatedAt: now, Hash: hash}); err != nil || updated != 1 {
+	if contentPath != "" {
+		updated, updateErr := queries.UpdateCompletedDownloadContentPath(ctx, storedb.UpdateCompletedDownloadContentPathParams{ContentPath: sql.NullString{String: contentPath, Valid: true}, UpdatedAt: now, Hash: hash})
+		if updateErr != nil || updated != 1 {
+			_ = tx.Rollback()
+			if updateErr != nil {
+				return updateErr
+			}
+			return ErrInvalidTransition
+		}
+	} else if updated, touchErr := queries.TouchDownload(ctx, storedb.TouchDownloadParams{UpdatedAt: now, Hash: hash}); touchErr != nil || updated != 1 {
 		_ = tx.Rollback()
-		if err != nil {
-			return err
+		if touchErr != nil {
+			return touchErr
 		}
 		return ErrInvalidTransition
 	}

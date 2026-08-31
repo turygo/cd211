@@ -25,6 +25,10 @@ WHERE hash = sqlc.arg(hash) AND state != 'DELETED';
 -- name: UpdateDownloadSavePath :execrows
 UPDATE downloads SET save_path = sqlc.arg(save_path), workspace_path = sqlc.narg(workspace_path), updated_at = sqlc.arg(updated_at), row_version = row_version + 1
 WHERE hash = sqlc.arg(hash) AND state IN ('STOPPED', 'ACCEPTED') AND lease_owner IS NULL AND content_path IS NULL AND copy_source_path IS NULL AND cloud_result_path IS NULL AND row_version = sqlc.arg(expected_row_version);
+-- name: UpdateCompletedDownloadContentPath :execrows
+UPDATE downloads SET content_path = sqlc.arg(content_path), updated_at = sqlc.arg(updated_at), row_version = row_version + 1
+WHERE hash = sqlc.arg(hash) AND state = 'COMPLETED';
+
 
 -- name: GetSetting :one
 SELECT * FROM settings WHERE key = sqlc.arg(key);

@@ -289,7 +289,7 @@ func (s *Store) RenameDownload(ctx context.Context, hash, name string, now time.
 	return s.commitMutationTx(tx, true)
 }
 
-// RenameFolder rewrites only matching file overrides for one pre-start torrent.
+// RenameFolder rewrites matching file overrides for one torrent.
 func (s *Store) RenameFolder(ctx context.Context, hash, oldPath, newPath string, now time.Time) error {
 	if hash == "" || !safeRelativePrefix(oldPath) || !safeRelativePrefix(newPath) || now.IsZero() {
 		return ErrInvalidTransition
@@ -308,7 +308,10 @@ func (s *Store) RenameFolder(ctx context.Context, hash, oldPath, newPath string,
 		_ = tx.Rollback()
 		return fmt.Errorf("read folder rename download: %w", err)
 	}
-	if row.State != string(domain.StateStopped) && row.State != string(domain.StateAccepted) || row.LeaseOwner.Valid || row.ContentPath.Valid || row.CopySourcePath.Valid || row.CloudResultPath.Valid {
+	preStart := (row.State == string(domain.StateStopped) || row.State == string(domain.StateAccepted)) &&
+		!row.LeaseOwner.Valid && !row.ContentPath.Valid && !row.CopySourcePath.Valid && !row.CloudResultPath.Valid
+	completed := row.State == string(domain.StateCompleted) && !row.LeaseOwner.Valid && row.ContentPath.Valid
+	if !preStart && !completed {
 		_ = tx.Rollback()
 		return ErrInvalidTransition
 	}

@@ -1,10 +1,14 @@
 package fsafe
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 )
+
+// ErrFilePlanConflict reports an unsafe or occupied path in a file plan.
+var ErrFilePlanConflict = errors.New("fsafe: file plan conflict")
 
 // FilePlan describes one effective manifest operation inside a verified torrent root.
 type FilePlan struct {
@@ -49,7 +53,7 @@ func (v *Verifier) ApplyFilePlan(root, hash string, plans []FilePlan) error {
 		}
 		source := filepath.Join(evaluated, filepath.FromSlash(plan.OriginalPath))
 		if _, exists := moving[source]; exists {
-			return fmt.Errorf("fsafe: duplicate file plan source")
+			return fmt.Errorf("%w: duplicate file plan source", ErrFilePlanConflict)
 		}
 		moving[source] = plan
 		temps[source] = filepath.Join(evaluated, fmt.Sprintf(".cd211-plan-%s-%d", hash, plan.Index))
@@ -69,7 +73,7 @@ func (v *Verifier) ApplyFilePlan(root, hash string, plans []FilePlan) error {
 					continue
 				}
 			}
-			return fmt.Errorf("fsafe: source and temporary both exist")
+			return fmt.Errorf("%w: source and temporary both exist", ErrFilePlanConflict)
 		}
 		if sourceErr != nil && !os.IsNotExist(sourceErr) {
 			return sourceErr
@@ -84,31 +88,31 @@ func (v *Verifier) ApplyFilePlan(root, hash string, plans []FilePlan) error {
 					completed[source] = true
 					continue
 				}
-				return fmt.Errorf("fsafe: target collision")
+				return fmt.Errorf("%w: target collision", ErrFilePlanConflict)
 			}
 			if targetErr != nil && !os.IsNotExist(targetErr) {
 				return targetErr
 			}
 			if targetErr == nil {
-				return fmt.Errorf("fsafe: target collision")
+				return fmt.Errorf("%w: target collision", ErrFilePlanConflict)
 			}
 		}
 		if sourceErr == nil {
 			if sourceInfo.Mode()&os.ModeSymlink != 0 || !sourceInfo.Mode().IsRegular() || sourceInfo.Size() != plan.Size {
-				return fmt.Errorf("fsafe: source content mismatch")
+				return fmt.Errorf("%w: source content mismatch", ErrFilePlanConflict)
 			}
 		}
 		if tempErr == nil {
 			if tempInfo.Mode()&os.ModeSymlink != 0 || !tempInfo.Mode().IsRegular() || tempInfo.Size() != plan.Size {
-				return fmt.Errorf("fsafe: temporary content mismatch")
+				return fmt.Errorf("%w: temporary content mismatch", ErrFilePlanConflict)
 			}
 		}
 		if targetInfo, targetErr := os.Lstat(target); targetErr == nil {
 			if targetInfo.Mode()&os.ModeSymlink != 0 {
-				return fmt.Errorf("fsafe: target is symlink")
+				return fmt.Errorf("%w: target is symlink", ErrFilePlanConflict)
 			}
 			if _, targetIsMovingSource := moving[target]; !targetIsMovingSource {
-				return fmt.Errorf("fsafe: target collision")
+				return fmt.Errorf("%w: target collision", ErrFilePlanConflict)
 			}
 		} else if !os.IsNotExist(targetErr) {
 			return targetErr
@@ -135,7 +139,7 @@ func (v *Verifier) ApplyFilePlan(root, hash string, plans []FilePlan) error {
 				if _, expectedFinal := targetSources[target]; expectedFinal {
 					continue
 				}
-				return fmt.Errorf("fsafe: target collision")
+				return fmt.Errorf("%w: target collision", ErrFilePlanConflict)
 			}
 			return err
 		} else if err != nil {
@@ -149,10 +153,10 @@ func (v *Verifier) ApplyFilePlan(root, hash string, plans []FilePlan) error {
 		}
 		if targetInfo, targetErr := os.Lstat(target); targetErr == nil {
 			if targetInfo.Mode()&os.ModeSymlink != 0 {
-				return fmt.Errorf("fsafe: target is symlink")
+				return fmt.Errorf("%w: target is symlink", ErrFilePlanConflict)
 			}
 			if _, sourceTarget := moving[target]; !sourceTarget {
-				return fmt.Errorf("fsafe: target collision")
+				return fmt.Errorf("%w: target collision", ErrFilePlanConflict)
 			}
 		} else if !os.IsNotExist(targetErr) {
 			return targetErr
@@ -177,7 +181,7 @@ func (v *Verifier) ApplyFilePlan(root, hash string, plans []FilePlan) error {
 			return err
 		}
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() != plan.Size {
-			return fmt.Errorf("fsafe: exclusion content mismatch")
+			return fmt.Errorf("%w: exclusion content mismatch", ErrFilePlanConflict)
 		}
 		if err := os.Remove(candidate); err != nil && !os.IsNotExist(err) {
 			return err

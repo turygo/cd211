@@ -246,6 +246,25 @@ func (q *Queries) TouchDownload(ctx context.Context, arg TouchDownloadParams) (i
 	return result.RowsAffected()
 }
 
+const updateCompletedDownloadContentPath = `-- name: UpdateCompletedDownloadContentPath :execrows
+UPDATE downloads SET content_path = ?1, updated_at = ?2, row_version = row_version + 1
+WHERE hash = ?3 AND state = 'COMPLETED'
+`
+
+type UpdateCompletedDownloadContentPathParams struct {
+	ContentPath sql.NullString `json:"content_path"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	Hash        string         `json:"hash"`
+}
+
+func (q *Queries) UpdateCompletedDownloadContentPath(ctx context.Context, arg UpdateCompletedDownloadContentPathParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateCompletedDownloadContentPath, arg.ContentPath, arg.UpdatedAt, arg.Hash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const updateDownloadAutoTMM = `-- name: UpdateDownloadAutoTMM :execrows
 UPDATE downloads SET auto_tmm = ?1, updated_at = ?2, row_version = row_version + 1
 WHERE hash = ?3 AND state != 'DELETED'
