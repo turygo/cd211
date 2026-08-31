@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/turygo/cd211/internal/authn"
 	"io"
 	"log/slog"
 	"net"
@@ -174,8 +175,18 @@ func (p *Process) Close() error {
 	return p.Writer.Close()
 }
 
-var safeNames = map[string]bool{"method": true, "path": true, "status": true, "duration_ms": true, "response_bytes": true, "client_ip": true, "user_agent": true, "content_type": true, "content_length": true, "host": true, "auth_mode": true, "reason": true, "internal_reason": true, "error": true, "msg": true, "source_kind": true, "infohash": true, "name": true, "filename": true, "size": true, "category": true, "raw_category": true, "savepath": true, "resolved_savepath": true, "stopped": true, "paused": true, "autoTMM": true, "url_fingerprint": true, "url_host": true, "preview": true, "request": true, "response": true, "details": true, "truncated": true}
-var sensitiveNames = map[string]bool{"authorization": true, "cookie": true, "sid": true, "password": true, "passwd": true, "token": true, "secret": true, "api_key": true, "apikey": true, "passkey": true, "hmac": true, "private_key": true, "bearer": true}
+var safeNames = map[string]bool{"method": true, "path": true, "status": true, "duration_ms": true, "response_bytes": true, "client_ip": true, "user_agent": true, "content_type": true, "content_length": true, "host": true, "auth_mode": true, "auth_surface": true, "auth_attempt": true, "auth_principal": true, "reason": true, "internal_reason": true, "error": true, "msg": true, "source_kind": true, "infohash": true, "name": true, "filename": true, "size": true, "category": true, "raw_category": true, "savepath": true, "resolved_savepath": true, "stopped": true, "paused": true, "autoTMM": true, "url_fingerprint": true, "url_host": true, "preview": true, "request": true, "response": true, "details": true, "truncated": true}
+
+var sensitiveNames = map[string]bool{
+	"authorization": true,
+	"cookie":        true,
+	"password":      true,
+	"token":         true,
+	"secret":        true,
+	"csrf":          true,
+	"sid":           true,
+	"api_key":       true,
+}
 
 func cleanString(s string, bound int) string {
 	if !utf8.ValidString(s) {
@@ -272,20 +283,54 @@ func (h *safeHandler) Handle(ctx context.Context, r slog.Record) error {
 // Endpoint details are installed once by HTTP middleware and enriched by handlers.
 type requestContextKey struct{}
 type RequestContext struct {
-	mu      sync.Mutex
-	Details map[string]any
-	Reason  string
+	mu            sync.Mutex
+	Details       map[string]any
+	Reason        string
+	AuthSurface   string
+	AuthAttempt   string
+	AuthPrincipal string
+	AuthMode      string
 }
 
 func WithRequestContext(r *http.Request) *http.Request {
-	return r.WithContext(context.WithValue(r.Context(), requestContextKey{}, &RequestContext{Details: map[string]any{}}))
+	return r.WithContext(context.WithValue(r.Context(), requestContextKey{}, &RequestContext{
+		Details:       map[string]any{},
+		AuthSurface:   "none",
+		AuthAttempt:   "none",
+		AuthPrincipal: "anonymous",
+		AuthMode:      "none",
+	}))
 }
+
 func RequestLogContext(r *http.Request) *RequestContext {
 	if r == nil {
 		return nil
 	}
 	c, _ := r.Context().Value(requestContextKey{}).(*RequestContext)
 	return c
+}
+func SetAuthAttempt(r *http.Request, surface, attempt string) {
+	c := RequestLogContext(r)
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.AuthSurface = surface
+	c.AuthAttempt = attempt
+	c.AuthPrincipal = "anonymous"
+	c.AuthMode = "none"
+	c.mu.Unlock()
+}
+
+func SetAuthSuccess(r *http.Request, principal authn.Principal) {
+	c := RequestLogContext(r)
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.AuthPrincipal = string(principal.Kind)
+	c.AuthMode = string(principal.Method)
+	c.mu.Unlock()
 }
 func Enrich(r *http.Request, fields map[string]any) {
 	c := RequestLogContext(r)
@@ -501,9 +546,9 @@ func Middleware(logger *slog.Logger, next http.Handler) http.Handler {
 				rw.status = http.StatusInternalServerError
 			}
 			details := requestDetails(r)
-			c := RequestLogContext(r)
 			reason := ""
-			if c != nil {
+			authSurface, authAttempt, authPrincipal, authMode := "none", "none", "anonymous", "none"
+			if c := RequestLogContext(r); c != nil {
 				c.mu.Lock()
 				for key, value := range c.Details {
 					if !addDetail(details, key, value) {
@@ -511,6 +556,7 @@ func Middleware(logger *slog.Logger, next http.Handler) http.Handler {
 					}
 				}
 				reason = c.Reason
+				authSurface, authAttempt, authPrincipal, authMode = c.AuthSurface, c.AuthAttempt, c.AuthPrincipal, c.AuthMode
 				c.mu.Unlock()
 			}
 			level := slog.LevelDebug
@@ -521,7 +567,7 @@ func Middleware(logger *slog.Logger, next http.Handler) http.Handler {
 			} else if r.Method != http.MethodGet && r.Method != http.MethodHead {
 				level = slog.LevelInfo
 			}
-			attrs := []any{"method", r.Method, "path", cleanString(r.URL.EscapedPath(), maxPathString), "status", rw.status, "duration_ms", time.Since(started).Seconds() * 1000, "response_bytes", rw.bytes, "client_ip", clientIP(r), "user_agent", cleanString(r.UserAgent(), maxPathString), "content_type", cleanString(rw.ResponseWriter.Header().Get("Content-Type"), maxString), "content_length", r.Header.Get("Content-Length"), "host", cleanString(r.Host, maxString), "auth_mode", authMode(r), "request", details}
+			attrs := []any{"method", r.Method, "path", cleanString(r.URL.EscapedPath(), maxPathString), "status", rw.status, "duration_ms", time.Since(started).Seconds() * 1000, "response_bytes", rw.bytes, "client_ip", clientIP(r), "user_agent", cleanString(r.UserAgent(), maxPathString), "content_type", cleanString(rw.ResponseWriter.Header().Get("Content-Type"), maxString), "content_length", r.Header.Get("Content-Length"), "host", cleanString(r.Host, maxString), "auth_surface", authSurface, "auth_attempt", authAttempt, "auth_principal", authPrincipal, "auth_mode", authMode, "request", details}
 			if reason != "" {
 				attrs = append(attrs, "internal_reason", reason)
 			}
@@ -542,22 +588,6 @@ func Middleware(logger *slog.Logger, next http.Handler) http.Handler {
 		}()
 		next.ServeHTTP(rw, r)
 	})
-}
-func authMode(r *http.Request) string {
-	if r.Header.Get("Authorization") == "" {
-		if _, err := r.Cookie("SID"); err == nil {
-			return "session"
-		}
-		return "none"
-	}
-	path := r.URL.Path
-	if path == "/api/v1" || strings.HasPrefix(path, "/api/v1/") {
-		return "api_token"
-	}
-	if path == "/api/v2" || strings.HasPrefix(path, "/api/v2/") {
-		return "qbt_api_key"
-	}
-	return "bearer"
 }
 func isPreviewPath(path string) bool {
 	switch path {

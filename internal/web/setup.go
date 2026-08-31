@@ -274,7 +274,7 @@ func (h *setupHandler) setupPage(w http.ResponseWriter, r *http.Request) {
 // as errors so callers surface them as 500 rather than treating the session
 // as expired.
 func (h *setupHandler) wizardSession(w http.ResponseWriter, r *http.Request) (session.Session, error) {
-	cookie, err := r.Cookie("SID")
+	cookie, err := r.Cookie("CD211_SESSION")
 	if err != nil || cookie.Value == "" {
 		return session.Session{}, session.ErrNotFound
 	}
@@ -284,12 +284,12 @@ func (h *setupHandler) wizardSession(w http.ResponseWriter, r *http.Request) (se
 	if cookie.Value != sid {
 		return session.Session{}, session.ErrNotFound
 	}
-	current, renewed, err := h.sessions.Get(r.Context(), cookie.Value)
+	current, renewed, err := h.sessions.Get(r.Context(), cookie.Value, session.AudienceWeb)
 	if err != nil {
 		return session.Session{}, err
 	}
 	if renewed {
-		http.SetCookie(w, sidCookie(cookie.Value, false, r.TLS != nil, h.clock.Now(), current.ExpiresAt))
+		http.SetCookie(w, webSessionCookie(cookie.Value, false, r.TLS != nil, h.clock.Now(), current.ExpiresAt))
 	}
 	return current, nil
 }
@@ -357,14 +357,14 @@ func (h *setupHandler) setupPassword(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
 	previousSID := h.state.sid
 	h.mu.Unlock()
-	sid, current, err := h.sessions.Create(r.Context())
+	sid, current, err := h.sessions.Create(r.Context(), session.AudienceWeb)
 	if err != nil {
 		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 		return
 	}
 	if previousSID != "" {
-		if err := h.sessions.Revoke(r.Context(), previousSID); err != nil {
-			_ = h.sessions.Revoke(r.Context(), sid)
+		if err := h.sessions.Revoke(r.Context(), previousSID, session.AudienceWeb); err != nil {
+			_ = h.sessions.Revoke(r.Context(), sid, session.AudienceWeb)
 			plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 			return
 		}
@@ -380,7 +380,7 @@ func (h *setupHandler) setupPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	targetStep := h.state.step
 	h.mu.Unlock()
-	http.SetCookie(w, sidCookie(sid, false, r.TLS != nil, h.clock.Now(), current.ExpiresAt))
+	http.SetCookie(w, webSessionCookie(sid, false, r.TLS != nil, h.clock.Now(), current.ExpiresAt))
 	http.Redirect(w, r, fmt.Sprintf("/setup?step=%d", targetStep), http.StatusSeeOther)
 }
 

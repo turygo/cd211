@@ -15,9 +15,8 @@ UPDATE qbt_api_key
 SET
     key_hash = ?1,
     key_hint = ?2,
-    key_secret = ?3,
-    created_at = ?4,
-    updated_at = ?5,
+    created_at = ?3,
+    updated_at = ?4,
     active = 1,
     row_version = row_version + 1
 WHERE id = 1
@@ -27,7 +26,6 @@ WHERE id = 1
 type ActivateQBTAPIKeyParams struct {
 	KeyHash   []byte    `json:"key_hash"`
 	KeyHint   string    `json:"key_hint"`
-	KeySecret string    `json:"key_secret"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -36,7 +34,6 @@ func (q *Queries) ActivateQBTAPIKey(ctx context.Context, arg ActivateQBTAPIKeyPa
 	result, err := q.db.ExecContext(ctx, activateQBTAPIKey,
 		arg.KeyHash,
 		arg.KeyHint,
-		arg.KeySecret,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 	)
@@ -47,7 +44,7 @@ func (q *Queries) ActivateQBTAPIKey(ctx context.Context, arg ActivateQBTAPIKeyPa
 }
 
 const getQBTAPIKey = `-- name: GetQBTAPIKey :one
-SELECT id, key_hash, key_hint, created_at, updated_at, active, row_version, key_secret
+SELECT id, key_hash, key_hint, created_at, updated_at, active, row_version
 FROM qbt_api_key
 WHERE id = 1
   AND active = 1
@@ -64,7 +61,6 @@ func (q *Queries) GetQBTAPIKey(ctx context.Context) (QbtApiKey, error) {
 		&i.UpdatedAt,
 		&i.Active,
 		&i.RowVersion,
-		&i.KeySecret,
 	)
 	return i, err
 }
@@ -74,7 +70,6 @@ INSERT INTO qbt_api_key (
     id,
     key_hash,
     key_hint,
-    key_secret,
     created_at,
     updated_at,
     active,
@@ -85,7 +80,6 @@ INSERT INTO qbt_api_key (
     ?2,
     ?3,
     ?4,
-    ?5,
     1,
     0
 )
@@ -94,7 +88,6 @@ INSERT INTO qbt_api_key (
 type InsertQBTAPIKeyParams struct {
 	KeyHash   []byte    `json:"key_hash"`
 	KeyHint   string    `json:"key_hint"`
-	KeySecret string    `json:"key_secret"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -103,7 +96,6 @@ func (q *Queries) InsertQBTAPIKey(ctx context.Context, arg InsertQBTAPIKeyParams
 	_, err := q.db.ExecContext(ctx, insertQBTAPIKey,
 		arg.KeyHash,
 		arg.KeyHint,
-		arg.KeySecret,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 	)

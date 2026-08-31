@@ -41,10 +41,12 @@ func (s *Store) CreateSession(ctx context.Context, digest session.Digest, curren
 		return false, cause
 	}
 
-	if _, err := queries.GetSession(ctx, digest[:]); err == nil {
-		return rollback(nil)
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return rollback(fmt.Errorf("read session for create: %w", err))
+	for _, audience := range []session.Audience{session.AudienceWeb, session.AudienceQBT} {
+		if _, err := queries.GetSession(ctx, storedb.GetSessionParams{SidDigest: digest[:], Audience: string(audience)}); err == nil {
+			return rollback(nil)
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return rollback(fmt.Errorf("read session for create: %w", err))
+		}
 	}
 	if _, err := queries.PurgeExpiredSessions(ctx, now.UTC()); err != nil {
 		return rollback(fmt.Errorf("purge expired sessions: %w", err))
@@ -61,6 +63,7 @@ func (s *Store) CreateSession(ctx context.Context, digest session.Digest, curren
 	}
 	if err := queries.InsertSession(ctx, storedb.InsertSessionParams{
 		SidDigest: digest[:],
+		Audience:  string(current.Audience),
 		CsrfToken: current.CSRFToken,
 		CreatedAt: current.CreatedAt.UTC(),
 		ExpiresAt: current.ExpiresAt.UTC(),
@@ -76,8 +79,8 @@ func (s *Store) CreateSession(ctx context.Context, digest session.Digest, curren
 // GetSession returns the persisted session for digest, validating every
 // stored field. A missing record maps to session.ErrNotFound; an invalid
 // record is a repository error, never an authentication miss.
-func (s *Store) GetSession(ctx context.Context, digest session.Digest) (session.Session, error) {
-	row, err := s.queries.GetSession(ctx, digest[:])
+func (s *Store) GetSession(ctx context.Context, digest session.Digest, audience session.Audience) (session.Session, error) {
+	row, err := s.queries.GetSession(ctx, storedb.GetSessionParams{SidDigest: digest[:], Audience: string(audience)})
 	if errors.Is(err, sql.ErrNoRows) {
 		return session.Session{}, session.ErrNotFound
 	}
@@ -91,11 +94,10 @@ func (s *Store) GetSession(ctx context.Context, digest session.Digest) (session.
 // expected expires_at. Only the expiry changes; the digest, CSRF token, and
 // created_at are untouched. A missing row or a stale expected expiry reports
 // updated=false.
-func (s *Store) RefreshSession(ctx context.Context, digest session.Digest, expectedExpiresAt, newExpiresAt time.Time) (bool, error) {
+func (s *Store) RefreshSession(ctx context.Context, digest session.Digest, audience session.Audience, expectedExpiresAt, newExpiresAt time.Time) (bool, error) {
 	updated, err := s.queries.RefreshSession(ctx, storedb.RefreshSessionParams{
-		SidDigest:         digest[:],
-		ExpectedExpiresAt: expectedExpiresAt,
-		NewExpiresAt:      newExpiresAt.UTC(),
+		SidDigest: digest[:], Audience: string(audience),
+		ExpectedExpiresAt: expectedExpiresAt, NewExpiresAt: newExpiresAt.UTC(),
 	})
 	if err != nil {
 		return false, fmt.Errorf("refresh session: %w", err)
@@ -105,8 +107,8 @@ func (s *Store) RefreshSession(ctx context.Context, digest session.Digest, expec
 
 // RevokeSession durably deletes a session record. Deleting an already-absent
 // record is idempotent.
-func (s *Store) RevokeSession(ctx context.Context, digest session.Digest) error {
-	if err := s.queries.RevokeSession(ctx, digest[:]); err != nil {
+func (s *Store) RevokeSession(ctx context.Context, digest session.Digest, audience session.Audience) error {
+	if err := s.queries.RevokeSession(ctx, storedb.RevokeSessionParams{SidDigest: digest[:], Audience: string(audience)}); err != nil {
 		return fmt.Errorf("revoke session: %w", err)
 	}
 	return nil
@@ -132,13 +134,15 @@ func (s *Store) CountSessions(ctx context.Context) (int, error) {
 }
 
 func sessionFromDB(row storedb.Session) (session.Session, error) {
-	if len(row.SidDigest) != sha256.Size || row.CsrfToken == "" || row.CreatedAt.IsZero() ||
-		row.ExpiresAt.IsZero() || !row.ExpiresAt.After(row.CreatedAt) {
+	if len(row.SidDigest) != sha256.Size ||
+		(row.Audience != string(session.AudienceWeb) && row.Audience != string(session.AudienceQBT)) ||
+		(row.Audience == string(session.AudienceWeb) && row.CsrfToken == "") ||
+		(row.Audience == string(session.AudienceQBT) && row.CsrfToken != "") ||
+		row.CreatedAt.IsZero() || row.ExpiresAt.IsZero() || !row.ExpiresAt.After(row.CreatedAt) {
 		return session.Session{}, errors.New("stored session is invalid")
 	}
 	return session.Session{
-		CSRFToken: row.CsrfToken,
-		CreatedAt: row.CreatedAt,
-		ExpiresAt: row.ExpiresAt,
+		Audience: session.Audience(row.Audience), CSRFToken: row.CsrfToken,
+		CreatedAt: row.CreatedAt, ExpiresAt: row.ExpiresAt,
 	}, nil
 }

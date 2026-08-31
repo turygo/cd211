@@ -144,9 +144,9 @@ PGID=100
 
 ### qBittorrent Web API
 
-`/api/v2` 接受持久化的 `SID` 会话 Cookie 或 `Authorization: Bearer qbt_<key>`。如果请求包含 `Authorization`，Bearer 认证优先；格式错误、未知或已撤销的 key 返回 `403`，不会回退到有效的 SID Cookie。没有该请求头时，服务检查 SID Cookie。
+`/api/v2` 是独立的 qBittorrent 认证边界。客户端可使用配置的操作员 `Username`/`Password` 通过 HTTP Basic，或使用 `Authorization: Bearer qbt_<key>`。成功登录 `POST /api/v2/auth/login` 会签发仅适用于 `/api/v2` 的 `SID` Cookie（Path 为 `/api/v2`）；无 Authorization 时也只接受该 qBittorrent 会话。Authorization 一旦存在但格式错误、重复、未知或无效，始终返回 `403`，不会回退到 Cookie。Basic 的认证方案名称不区分大小写。
 
-独立的 `qbt_` 密钥可在设置页面生成和撤销。SQLite 同时保存其明文、SHA-256 摘要和末尾提示，认证设置页需要显示明文；每次请求都会读取摘要，因此撤销会立即生效。该密钥只授权 `/api/v2`；`cd211_api_` 令牌只授权 `/api/v1`。
+`qbt_` 密钥只授权 `/api/v2`，可在 Web 设置页生成和撤销。完整密钥只在生成后返回的那一次 Settings 响应中显示；之后仅显示提示信息，遗失时必须撤销并重新生成。数据库只保存密钥摘要、提示和元数据，不保存明文。qBittorrent 会话与 Web 会话相互隔离。
 
 `/api/v2` 提供 qBittorrent 5.0.0 / WebAPI 2.11.0 的完整 102 个路由（`torrents/export` 已注册但始终返回 `404`）。`torrents/add` 接受 qB 5.0 支持的 URL、磁力链接和 torrent 文件，成功返回 `Ok.`、全部失败返回 `Fails.`，无效 torrent 文件返回 `415`；可映射到 CD211 工作流的开始、停止、标签、分类、重命名、文件优先级和保存位置操作会持久化并遵守现有路径安全边界。
 
@@ -154,7 +154,7 @@ BT 传输、做种和其他不对应 CD211 工作流的读取返回 qB 形状的
 
 ### 原生 API
 
-在 Web 界面的**设置**页面生成以 `cd211_api_` 开头的全局自动化 API 令牌，然后使用 `Authorization: Bearer <cd211_api-token>` 调用 `/api/v1`：
+在 Web 界面的**设置**页面生成以 `cd211_api_` 开头的全局自动化 API 令牌，然后使用 `Authorization: Bearer <cd211_api-token>` 调用 CD211 原生 `/api/v1`。该边界只接受此 Bearer 令牌；qB Basic、`qbt_` Bearer、qB `SID` 和 Web 会话均无效。
 
 | 端点 | 用途 |
 |---|---|
@@ -165,7 +165,11 @@ BT 传输、做种和其他不对应 CD211 工作流的读取返回 qB 形状的
 
 可通过 JSON 提交磁力链接，也可通过 multipart 表单上传种子文件。事件接口使用不透明游标，事件可能重复投递；调用方应按事件 ID 去重。
 
-自动化 API 令牌生成后明文会持久保存，并在每次进入设置页时显示；撤销后 API 停用。以 `cd211_api_` 开头的自动化 API 令牌只用于 `/api/v1`，不能用于 `/api/v2`；独立的 `qbt_` 密钥也不能用于 `/api/v1`。原生 API 不提供重试、取消或删除端点，这些操作请在 Web 界面完成。
+令牌完整明文只在生成后返回的那一次 Settings 响应中显示；之后仅显示提示信息，遗失时必须撤销并重新生成。数据库只保存摘要、提示和元数据。以 `cd211_api_` 开头的令牌只用于 `/api/v1`；独立的 `qbt_` 密钥也不能用于 `/api/v1`。原生 API 不提供重试、取消或删除端点，这些操作请在 Web 界面完成。
+
+### Web 界面
+
+Web 使用独立的 `CD211_SESSION` Cookie（Path `/`、HttpOnly、SameSite=Lax），只接受 Web 会话。qB `SID` 不会认证 Web，Web 会话也不会认证 `/api/v2`；登录和设置向导中的不安全操作继续要求同源和 CSRF 校验。
 
 ### Webhook
 

@@ -1,7 +1,4 @@
-// Package token implements the single global Automation API token: plaintext
-// generation, SHA-256 hashing, display hints, and constant-time verification.
-// The plaintext is persisted so the authenticated Settings page can display it
-// on every visit.
+// Package token implements the native CD211 API token.
 package token
 
 import (
@@ -41,15 +38,12 @@ var (
 	ErrConflict = errors.New("token: API token state changed")
 )
 
-// Secret is a plaintext API token. It is persisted so the authenticated
-// Settings page can display the configured token on every visit.
+// Secret is the plaintext token returned exactly once by generation.
 type Secret string
 
-// Token is the durable single API token row. Secret is persisted for Settings
-// display and Digest is used for constant-time request verification. Secret is
-// empty only for rows created before persistent token display was introduced.
+// Token is the durable single API token row. Digest is used for constant-time
+// request verification; the plaintext is never persisted.
 type Token struct {
-	Secret     Secret
 	Digest     []byte
 	Hint       string
 	CreatedAt  time.Time

@@ -19,6 +19,13 @@ import (
 
 const tokenBytes = 32
 
+type Audience string
+
+const (
+	AudienceWeb Audience = "web"
+	AudienceQBT Audience = "qbt"
+)
+
 const (
 	loginWindow       = 5 * time.Minute
 	loginBanDuration  = 15 * time.Minute
@@ -46,10 +53,10 @@ type Digest [sha256.Size]byte
 // Repository is the durable session boundary consumed by Store. The SQLite
 // store implements it.
 type Repository interface {
-	CreateSession(ctx context.Context, digest Digest, session Session, now time.Time, capacity int) (inserted bool, err error)
-	GetSession(ctx context.Context, digest Digest) (Session, error)
-	RefreshSession(ctx context.Context, digest Digest, expectedExpiresAt, newExpiresAt time.Time) (updated bool, err error)
-	RevokeSession(ctx context.Context, digest Digest) error
+	CreateSession(ctx context.Context, digest Digest, current Session, now time.Time, capacity int) (inserted bool, err error)
+	GetSession(ctx context.Context, digest Digest, audience Audience) (Session, error)
+	RefreshSession(ctx context.Context, digest Digest, audience Audience, expectedExpiresAt, newExpiresAt time.Time) (updated bool, err error)
+	RevokeSession(ctx context.Context, digest Digest, audience Audience) error
 	PurgeExpiredSessions(ctx context.Context, now time.Time) (int64, error)
 	CountSessions(ctx context.Context) (int, error)
 }
@@ -63,6 +70,7 @@ type Clock interface {
 // Session is the state associated with a session ID. The session ID itself is
 // deliberately kept separate as the store key.
 type Session struct {
+	Audience  Audience
 	CSRFToken string
 	CreatedAt time.Time
 	ExpiresAt time.Time
@@ -146,11 +154,13 @@ func isNil(value any) bool {
 	}
 }
 
-// Create generates a new session ID and an independent CSRF token, persists
-// the record through the repository, and returns the plaintext SID exactly
-// once. The repository reports whether the insert won; a digest collision
-// retries with a fresh SID.
-func (s *Store) Create(ctx context.Context) (sid string, current Session, err error) {
+// Create generates a new session ID and persists the record through the
+// repository. Web sessions receive an independent CSRF token; qB sessions do
+// not need one. The plaintext SID is returned exactly once.
+func (s *Store) Create(ctx context.Context, audience Audience) (sid string, current Session, err error) {
+	if audience != AudienceWeb && audience != AudienceQBT {
+		return "", Session{}, errors.New("session: invalid audience")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -160,11 +170,15 @@ func (s *Store) Create(ctx context.Context) (sid string, current Session, err er
 		if err != nil {
 			return "", Session{}, err
 		}
-		csrfToken, err := s.newToken()
-		if err != nil {
-			return "", Session{}, err
+		csrfToken := ""
+		if audience == AudienceWeb {
+			csrfToken, err = s.newToken()
+			if err != nil {
+				return "", Session{}, err
+			}
 		}
 		current = Session{
+			Audience:  audience,
 			CSRFToken: csrfToken,
 			CreatedAt: now,
 			ExpiresAt: now.Add(s.ttl),
@@ -181,57 +195,56 @@ func (s *Store) Create(ctx context.Context) (sid string, current Session, err er
 	return "", Session{}, errSIDCollision
 }
 
-// Get returns a session when sid is well-formed, persisted, and not expired.
-// Malformed, missing, or expired SIDs return ErrNotFound; an expired record is
-// deleted first. A session at or beyond ExpiresAt-(ttl-refreshInterval) is
-// renewed to ExpiresAt=now+ttl through an expiry compare-and-swap; when the
-// CAS misses, the authoritative persisted record is reread and returned.
-func (s *Store) Get(ctx context.Context, sid string) (current Session, renewed bool, err error) {
+// Get returns a session when sid is well-formed, persisted for the requested
+// audience, and not expired.
+func (s *Store) Get(ctx context.Context, sid string, audience Audience) (current Session, renewed bool, err error) {
+	if audience != AudienceWeb && audience != AudienceQBT {
+		return Session{}, false, ErrNotFound
+	}
 	if !validSID(sid) {
 		return Session{}, false, ErrNotFound
 	}
 
 	now := s.clock.Now()
 	digest := hashSID(sid)
-	session, err := s.repository.GetSession(ctx, digest)
+	current, err = s.repository.GetSession(ctx, digest, audience)
 	if errors.Is(err, ErrNotFound) {
 		return Session{}, false, ErrNotFound
 	}
 	if err != nil {
 		return Session{}, false, err
 	}
-	if !now.Before(session.ExpiresAt) {
-		if err := s.repository.RevokeSession(ctx, digest); err != nil {
+	if !now.Before(current.ExpiresAt) {
+		if err := s.repository.RevokeSession(ctx, digest, audience); err != nil {
 			return Session{}, false, err
 		}
 		return Session{}, false, ErrNotFound
 	}
-	if !now.Before(session.ExpiresAt.Add(-(s.ttl - s.refreshInterval))) {
+	if !now.Before(current.ExpiresAt.Add(-(s.ttl - s.refreshInterval))) {
 		newExpiresAt := now.Add(s.ttl)
-		updated, err := s.repository.RefreshSession(ctx, digest, session.ExpiresAt, newExpiresAt)
+		updated, err := s.repository.RefreshSession(ctx, digest, audience, current.ExpiresAt, newExpiresAt)
 		if err != nil {
 			return Session{}, false, err
 		}
 		if updated {
-			session.ExpiresAt = newExpiresAt
-			return session, true, nil
+			current.ExpiresAt = newExpiresAt
+			return current, true, nil
 		}
-		session, err = s.repository.GetSession(ctx, digest)
+		current, err = s.repository.GetSession(ctx, digest, audience)
 		if errors.Is(err, ErrNotFound) {
 			return Session{}, false, ErrNotFound
 		}
 		if err != nil {
 			return Session{}, false, err
 		}
-		if !now.Before(session.ExpiresAt) {
-			if err := s.repository.RevokeSession(ctx, digest); err != nil {
+		if !now.Before(current.ExpiresAt) {
+			if err := s.repository.RevokeSession(ctx, digest, audience); err != nil {
 				return Session{}, false, err
 			}
 			return Session{}, false, ErrNotFound
 		}
-		return session, false, nil
 	}
-	return session, false, nil
+	return current, false, nil
 }
 
 // AuthorizeLogin applies the shared bounded per-address login failure policy.
@@ -270,9 +283,13 @@ func (s *Store) AuthorizeLogin(remoteAddress string, credentialsValid bool) Logi
 	return LoginInvalid
 }
 
-// Revoke durably removes sid, if it is present. It is safe to call repeatedly.
-func (s *Store) Revoke(ctx context.Context, sid string) error {
-	return s.repository.RevokeSession(ctx, hashSID(sid))
+// Revoke durably removes sid for the requested audience, if it is present.
+// It is safe to call repeatedly.
+func (s *Store) Revoke(ctx context.Context, sid string, audience Audience) error {
+	if audience != AudienceWeb && audience != AudienceQBT {
+		return ErrNotFound
+	}
+	return s.repository.RevokeSession(ctx, hashSID(sid), audience)
 }
 
 // PurgeExpired removes all sessions at or beyond their absolute expiry time

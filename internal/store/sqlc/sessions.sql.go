@@ -38,16 +38,23 @@ func (q *Queries) EvictOldestSession(ctx context.Context) error {
 }
 
 const getSession = `-- name: GetSession :one
-SELECT sid_digest, csrf_token, created_at, expires_at
+SELECT sid_digest, audience, csrf_token, created_at, expires_at
 FROM sessions
 WHERE sid_digest = ?1
+  AND audience = ?2
 `
 
-func (q *Queries) GetSession(ctx context.Context, sidDigest []byte) (Session, error) {
-	row := q.db.QueryRowContext(ctx, getSession, sidDigest)
+type GetSessionParams struct {
+	SidDigest []byte `json:"sid_digest"`
+	Audience  string `json:"audience"`
+}
+
+func (q *Queries) GetSession(ctx context.Context, arg GetSessionParams) (Session, error) {
+	row := q.db.QueryRowContext(ctx, getSession, arg.SidDigest, arg.Audience)
 	var i Session
 	err := row.Scan(
 		&i.SidDigest,
+		&i.Audience,
 		&i.CsrfToken,
 		&i.CreatedAt,
 		&i.ExpiresAt,
@@ -56,12 +63,13 @@ func (q *Queries) GetSession(ctx context.Context, sidDigest []byte) (Session, er
 }
 
 const insertSession = `-- name: InsertSession :exec
-INSERT INTO sessions (sid_digest, csrf_token, created_at, expires_at)
-VALUES (?1, ?2, ?3, ?4)
+INSERT INTO sessions (sid_digest, audience, csrf_token, created_at, expires_at)
+VALUES (?1, ?2, ?3, ?4, ?5)
 `
 
 type InsertSessionParams struct {
 	SidDigest []byte    `json:"sid_digest"`
+	Audience  string    `json:"audience"`
 	CsrfToken string    `json:"csrf_token"`
 	CreatedAt time.Time `json:"created_at"`
 	ExpiresAt time.Time `json:"expires_at"`
@@ -70,6 +78,7 @@ type InsertSessionParams struct {
 func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) error {
 	_, err := q.db.ExecContext(ctx, insertSession,
 		arg.SidDigest,
+		arg.Audience,
 		arg.CsrfToken,
 		arg.CreatedAt,
 		arg.ExpiresAt,
@@ -94,17 +103,24 @@ const refreshSession = `-- name: RefreshSession :execrows
 UPDATE sessions
 SET expires_at = ?1
 WHERE sid_digest = ?2
-  AND expires_at = ?3
+  AND audience = ?3
+  AND expires_at = ?4
 `
 
 type RefreshSessionParams struct {
 	NewExpiresAt      time.Time `json:"new_expires_at"`
 	SidDigest         []byte    `json:"sid_digest"`
+	Audience          string    `json:"audience"`
 	ExpectedExpiresAt time.Time `json:"expected_expires_at"`
 }
 
 func (q *Queries) RefreshSession(ctx context.Context, arg RefreshSessionParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, refreshSession, arg.NewExpiresAt, arg.SidDigest, arg.ExpectedExpiresAt)
+	result, err := q.db.ExecContext(ctx, refreshSession,
+		arg.NewExpiresAt,
+		arg.SidDigest,
+		arg.Audience,
+		arg.ExpectedExpiresAt,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -114,9 +130,15 @@ func (q *Queries) RefreshSession(ctx context.Context, arg RefreshSessionParams) 
 const revokeSession = `-- name: RevokeSession :exec
 DELETE FROM sessions
 WHERE sid_digest = ?1
+  AND audience = ?2
 `
 
-func (q *Queries) RevokeSession(ctx context.Context, sidDigest []byte) error {
-	_, err := q.db.ExecContext(ctx, revokeSession, sidDigest)
+type RevokeSessionParams struct {
+	SidDigest []byte `json:"sid_digest"`
+	Audience  string `json:"audience"`
+}
+
+func (q *Queries) RevokeSession(ctx context.Context, arg RevokeSessionParams) error {
+	_, err := q.db.ExecContext(ctx, revokeSession, arg.SidDigest, arg.Audience)
 	return err
 }

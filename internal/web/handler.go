@@ -26,6 +26,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/turygo/cd211/internal/authn"
 	"github.com/turygo/cd211/internal/buildinfo"
 	"github.com/turygo/cd211/internal/creds"
 	"github.com/turygo/cd211/internal/domain"
@@ -105,18 +106,16 @@ type SettingsStore interface {
 	ReplaceSettingsAndCategories(ctx context.Context, values map[string]string, categories []domain.Category, now time.Time) error
 }
 
-// APITokenStore persists the single global Automation API token. The plaintext
-// is returned by reads so the authenticated Settings page can display it on
-// every visit.
+// APITokenStore persists the single global Automation API token. Reads expose
+// only its digest metadata; generation returns the plaintext exactly once.
 type APITokenStore interface {
 	GetAPIToken(ctx context.Context) (token.Token, error)
 	GenerateAPIToken(ctx context.Context, now time.Time) (token.Secret, error)
 	RevokeAPIToken(ctx context.Context, expectedVersion int64) error
 }
 
-// QBTAPIKeyStore persists the independent qBittorrent-compatible API key. The
-// plaintext is returned by reads so the authenticated Settings page can
-// display it on every visit.
+// QBTAPIKeyStore persists the independent qBittorrent-compatible API key.
+// Reads expose only its digest metadata; generation returns the plaintext once.
 type QBTAPIKeyStore interface {
 	GetQBTAPIKey(ctx context.Context) (qbtkey.Key, error)
 	GenerateQBTAPIKey(ctx context.Context, now time.Time) (qbtkey.Secret, error)
@@ -375,15 +374,19 @@ func browserOriginAllowed(r *http.Request) bool {
 	}
 	return strings.EqualFold(origin.Scheme, scheme) && strings.EqualFold(origin.Host, r.Host)
 }
-
 func (h *handler) auth(next http.HandlerFunc, csrf bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie("SID")
+		cookie, err := r.Cookie("CD211_SESSION")
+		attempt := "none"
+		if err == nil {
+			attempt = "session"
+		}
+		logging.SetAuthAttempt(r, "web", attempt)
 		if err != nil || cookie.Value == "" {
 			h.redirectLogin(w, r)
 			return
 		}
-		current, renewed, err := h.sessions.Get(r.Context(), cookie.Value)
+		current, renewed, err := h.sessions.Get(r.Context(), cookie.Value, session.AudienceWeb)
 		if err != nil {
 			if errors.Is(err, session.ErrNotFound) {
 				h.redirectLogin(w, r)
@@ -393,7 +396,7 @@ func (h *handler) auth(next http.HandlerFunc, csrf bool) http.Handler {
 			return
 		}
 		if renewed {
-			http.SetCookie(w, sidCookie(cookie.Value, false, r.TLS != nil, h.clock.Now(), current.ExpiresAt))
+			http.SetCookie(w, webSessionCookie(cookie.Value, false, r.TLS != nil, h.clock.Now(), current.ExpiresAt))
 		}
 		if csrf {
 			if !browserOriginAllowed(r) {
@@ -417,6 +420,9 @@ func (h *handler) auth(next http.HandlerFunc, csrf bool) http.Handler {
 			}
 		}
 		ctx := context.WithValue(r.Context(), authContextKey{}, authenticatedSession{sid: cookie.Value, session: current})
+		principal := authn.Principal{Kind: authn.OperatorPrincipal, Method: authn.SessionMethod}
+		ctx = authn.WithPrincipal(ctx, principal)
+		logging.SetAuthSuccess(r, principal)
 		next(w, r.WithContext(ctx))
 	})
 }
@@ -480,18 +486,17 @@ func static(w http.ResponseWriter, name, contentType string) {
 }
 
 func (h *handler) loginPage(w http.ResponseWriter, r *http.Request) {
-	cookie, err := r.Cookie("SID")
+	cookie, err := r.Cookie("CD211_SESSION")
 	if err == nil && cookie.Value != "" {
-		current, renewed, err := h.sessions.Get(r.Context(), cookie.Value)
+		current, renewed, err := h.sessions.Get(r.Context(), cookie.Value, session.AudienceWeb)
 		switch {
 		case err == nil:
 			if renewed {
-				http.SetCookie(w, sidCookie(cookie.Value, false, r.TLS != nil, h.clock.Now(), current.ExpiresAt))
+				http.SetCookie(w, webSessionCookie(cookie.Value, false, r.TLS != nil, h.clock.Now(), current.ExpiresAt))
 			}
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return
 		case errors.Is(err, session.ErrNotFound):
-			// Missing, malformed, or expired SID: render the login page.
 		default:
 			plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 			return
@@ -551,12 +556,12 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 		h.render(w, http.StatusUnauthorized, "login", loginView(requestLang(r), tr(requestLang(r)).LoginFailed))
 		return
 	}
-	sid, current, err := h.sessions.Create(r.Context())
+	sid, current, err := h.sessions.Create(r.Context(), session.AudienceWeb)
 	if err != nil {
 		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 		return
 	}
-	http.SetCookie(w, sidCookie(sid, false, r.TLS != nil, h.clock.Now(), current.ExpiresAt))
+	http.SetCookie(w, webSessionCookie(sid, false, r.TLS != nil, h.clock.Now(), current.ExpiresAt))
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
@@ -566,16 +571,16 @@ func (h *handler) logout(w http.ResponseWriter, r *http.Request) {
 		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 		return
 	}
-	if err := h.sessions.Revoke(r.Context(), current.sid); err != nil {
+	if err := h.sessions.Revoke(r.Context(), current.sid, session.AudienceWeb); err != nil {
 		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 		return
 	}
-	http.SetCookie(w, sidCookie("", true, r.TLS != nil, time.Time{}, time.Time{}))
+	http.SetCookie(w, webSessionCookie("", true, r.TLS != nil, time.Time{}, time.Time{}))
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
-func sidCookie(value string, expired, secure bool, now, expiresAt time.Time) *http.Cookie {
-	cookie := &http.Cookie{Name: "SID", Value: value, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: secure}
+func webSessionCookie(value string, expired, secure bool, now, expiresAt time.Time) *http.Cookie {
+	cookie := &http.Cookie{Name: "CD211_SESSION", Value: value, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: secure}
 	if expired {
 		cookie.MaxAge = -1
 		cookie.Expires = time.Unix(1, 0).UTC()
@@ -585,7 +590,6 @@ func sidCookie(value string, expired, secure bool, now, expiresAt time.Time) *ht
 	cookie.Expires = expiresAt.UTC()
 	return cookie
 }
-
 func (h *handler) downloads(w http.ResponseWriter, r *http.Request) {
 	options, ok := parseDownloadListOptions(r.URL.Query())
 	if !ok {
@@ -1146,6 +1150,19 @@ func (h *handler) settingsSave(w http.ResponseWriter, r *http.Request) {
 // renderSettings re-renders the settings page with the submitted values and
 // a notice describing the outcome of the last action.
 func (h *handler) renderSettings(w http.ResponseWriter, r *http.Request, status int, form SettingsFormValues, notice string, success bool) {
+	h.renderSettingsView(w, r, status, form, notice, success, "", "")
+}
+
+func (h *handler) renderSettingsGenerated(w http.ResponseWriter, r *http.Request, tokenSecret, qbtSecret string) {
+	values, err := h.settings.Store.ListSettings(r.Context())
+	if err != nil {
+		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
+		return
+	}
+	h.renderSettingsView(w, r, http.StatusOK, settingsFormFromValues(values), "", true, tokenSecret, qbtSecret)
+}
+
+func (h *handler) renderSettingsView(w http.ResponseWriter, r *http.Request, status int, form SettingsFormValues, notice string, success bool, tokenSecret, qbtSecret string) {
 	w.Header().Set("Cache-Control", "no-store")
 	categories, err := h.repo.ListCategories(r.Context())
 	if err != nil {
@@ -1162,19 +1179,20 @@ func (h *handler) renderSettings(w http.ResponseWriter, r *http.Request, status 
 		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 		return
 	}
+	tokenView.Secret = tokenSecret
+	qbtAPIKeyView.Secret = qbtSecret
+	str := tr(requestLang(r))
 	view := SettingsView{
-		PageMeta: pageMeta(tr(requestLang(r)).TitleSettings, "settings", h.authSession(r).CSRFToken, requestLang(r)),
+		PageMeta: pageMeta(str.TitleSettings, "settings", h.authSession(r).CSRFToken, requestLang(r)),
 		Values:   form, Categories: buildSettingsCategoryPaths(categories, h.config.CloudRoot, h.config.LocalRoot),
-		Notice: notice, Success: success,
-		APIToken: tokenView, QBTAPIKey: qbtAPIKeyView,
+		Notice: notice, Success: success, APIToken: tokenView, QBTAPIKey: qbtAPIKeyView,
 	}
 	view.Path = "/settings"
 	h.render(w, status, "settings", view)
 }
 
-// tokenView loads the persisted API token for the Settings page. A missing
-// token renders the unconfigured state; legacy rows may have an empty Secret
-// because their plaintext was not recoverable during migration.
+// tokenView loads persisted API token metadata for Settings. Plaintext is never
+// returned by the repository and is only supplied by the generation response.
 func (h *handler) tokenView(r *http.Request) (APITokenView, error) {
 	info, err := h.settings.Tokens.GetAPIToken(r.Context())
 	if errors.Is(err, token.ErrNotFound) {
@@ -1185,26 +1203,23 @@ func (h *handler) tokenView(r *http.Request) (APITokenView, error) {
 	}
 	str := tr(requestLang(r))
 	return APITokenView{
-		Configured:  true,
-		Secret:      string(info.Secret),
-		GeneratedAt: displayTime(info.UpdatedAt, str),
-		RowVersion:  info.RowVersion,
+		Configured: true, Hint: info.Hint,
+		GeneratedAt: displayTime(info.UpdatedAt, str), RowVersion: info.RowVersion,
 	}, nil
 }
 
-// apiTokenGenerate handles POST /settings/api-token/generate. It succeeds only
-// while no token exists; the generated token is then visible on Settings.
+// apiTokenGenerate renders a complete no-store Settings response so the
+// generated plaintext appears exactly once, without retaining it anywhere.
 func (h *handler) apiTokenGenerate(w http.ResponseWriter, r *http.Request) {
-	if _, err := h.settings.Tokens.GenerateAPIToken(r.Context(), h.clock.Now().UTC()); err != nil {
+	secret, err := h.settings.Tokens.GenerateAPIToken(r.Context(), h.clock.Now().UTC())
+	if err != nil {
 		tokenError(w, err)
 		return
 	}
-	http.Redirect(w, r, "/settings", http.StatusSeeOther)
+	h.renderSettingsGenerated(w, r, string(secret), "")
 }
 
-// qbtAPIKeyView loads the persisted qBittorrent API key for Settings. Legacy
-// rows may have an empty Secret because their plaintext was not recoverable
-// during migration.
+// qbtAPIKeyView loads persisted qBittorrent API key metadata for Settings.
 func (h *handler) qbtAPIKeyView(r *http.Request) (QBTAPIKeyView, error) {
 	info, err := h.settings.QBTKeys.GetQBTAPIKey(r.Context())
 	if errors.Is(err, qbtkey.ErrNotFound) {
@@ -1215,10 +1230,8 @@ func (h *handler) qbtAPIKeyView(r *http.Request) (QBTAPIKeyView, error) {
 	}
 	str := tr(requestLang(r))
 	return QBTAPIKeyView{
-		Configured:  true,
-		Secret:      string(info.Secret),
-		GeneratedAt: displayTime(info.UpdatedAt, str),
-		RowVersion:  info.RowVersion,
+		Configured: true, Hint: info.Hint,
+		GeneratedAt: displayTime(info.UpdatedAt, str), RowVersion: info.RowVersion,
 	}, nil
 }
 
@@ -1238,18 +1251,18 @@ func (h *handler) apiTokenRevoke(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/settings?token-revoked=1", http.StatusSeeOther)
 }
 
-// qbtAPIKeyGenerate handles POST /settings/qbt-api-key/generate. The generated
-// key is then visible on Settings and remains available on later visits.
+// qbtAPIKeyGenerate renders a complete no-store Settings response so the
+// generated plaintext appears exactly once, without retaining it anywhere.
 func (h *handler) qbtAPIKeyGenerate(w http.ResponseWriter, r *http.Request) {
-	if _, err := h.settings.QBTKeys.GenerateQBTAPIKey(r.Context(), h.clock.Now().UTC()); err != nil {
+	secret, err := h.settings.QBTKeys.GenerateQBTAPIKey(r.Context(), h.clock.Now().UTC())
+	if err != nil {
 		qbtAPIKeyError(w, err)
 		return
 	}
-	http.Redirect(w, r, "/settings", http.StatusSeeOther)
+	h.renderSettingsGenerated(w, r, "", string(secret))
 }
 
-// qbtAPIKeyRevoke handles POST /settings/qbt-api-key/revoke. Successful
-// revocation redirects with a qBittorrent-specific notice.
+// qbtAPIKeyRevoke handles POST /settings/qbt-api-key/revoke.
 func (h *handler) qbtAPIKeyRevoke(w http.ResponseWriter, r *http.Request) {
 	expected, ok := expectedTokenVersion(r)
 	if !ok {

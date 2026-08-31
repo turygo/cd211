@@ -653,6 +653,7 @@ func TestSessionsMigrationCreatesSchemaAndEnforcesChecks(t *testing.T) {
 		pk      bool
 	}{
 		"sid_digest": {"BLOB", true, true},
+		"audience":   {"TEXT", true, false},
 		"csrf_token": {"TEXT", true, false},
 		"created_at": {"DATETIME", true, false},
 		"expires_at": {"DATETIME", true, false},
@@ -704,23 +705,23 @@ func TestSessionsMigrationCreatesSchemaAndEnforcesChecks(t *testing.T) {
 	}
 
 	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
-	reject := func(name string, digest []byte, csrf string, created, expires time.Time) {
+	reject := func(name string, digest []byte, audience, csrf string, created, expires time.Time) {
 		t.Helper()
-		statement := "INSERT INTO sessions (sid_digest, csrf_token, created_at, expires_at) VALUES (?, ?, ?, ?)"
-		if _, err := store.db.ExecContext(ctx, statement, digest, csrf, created, expires); err == nil {
+		statement := "INSERT INTO sessions (sid_digest, audience, csrf_token, created_at, expires_at) VALUES (?, ?, ?, ?, ?)"
+		if _, err := store.db.ExecContext(ctx, statement, digest, audience, csrf, created, expires); err == nil {
 			t.Errorf("%s: insert unexpectedly succeeded", name)
 		}
 	}
-	reject("empty csrf token", make([]byte, 32), "", now, now.Add(time.Hour))
-	reject("short digest", make([]byte, 16), "csrf", now, now.Add(time.Hour))
-	reject("expiry at creation", make([]byte, 32), "csrf", now, now)
-	reject("expiry before creation", make([]byte, 32), "csrf", now, now.Add(-time.Hour))
-
+	reject("empty csrf token", make([]byte, 32), "web", "", now, now.Add(time.Hour))
+	reject("short digest", make([]byte, 16), "web", "csrf", now, now.Add(time.Hour))
+	reject("expiry at creation", make([]byte, 32), "web", "csrf", now, now)
+	reject("expiry before creation", make([]byte, 32), "web", "csrf", now, now.Add(-time.Hour))
 	var validDigest [32]byte
 	validDigest[0] = 0x7f
 	if _, err := store.db.ExecContext(ctx,
-		"INSERT INTO sessions (sid_digest, csrf_token, created_at, expires_at) VALUES (?, 'csrf', ?, ?)",
+		"INSERT INTO sessions (sid_digest, audience, csrf_token, created_at, expires_at) VALUES (?, 'web', 'csrf', ?, ?)",
 		validDigest[:], now, now.Add(time.Hour)); err != nil {
 		t.Fatalf("insert valid session row: %v", err)
 	}
+
 }

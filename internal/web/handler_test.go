@@ -150,7 +150,7 @@ func newWebFixtureAt(t *testing.T, dbPath string, settingsDeps SettingsDeps) *we
 	if err != nil {
 		t.Fatalf("session.New(): %v", err)
 	}
-	sid, current, err := sessions.Create(context.Background())
+	sid, current, err := sessions.Create(context.Background(), session.AudienceWeb)
 	if err != nil {
 		t.Fatalf("sessions.Create(): %v", err)
 	}
@@ -212,7 +212,7 @@ func (fixture *webFixture) request(method, target string, form url.Values, authe
 		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 	if authenticated {
-		request.AddCookie(&http.Cookie{Name: "SID", Value: fixture.sid})
+		request.AddCookie(&http.Cookie{Name: "CD211_SESSION", Value: fixture.sid})
 	}
 	response := httptest.NewRecorder()
 	fixture.handler.ServeHTTP(response, request)
@@ -485,10 +485,10 @@ func TestAuthenticationRedirectLoginAndLogout(t *testing.T) {
 	valid := fixture.request(http.MethodPost, "/login", url.Values{"username": {"admin"}, "password": {"adminadmin"}}, false)
 	requireStatus(t, valid, http.StatusSeeOther)
 	cookies := valid.Result().Cookies()
-	if len(cookies) != 1 || cookies[0].Name != "SID" || cookies[0].Path != "/" || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteLaxMode {
-		t.Fatalf("login cookies = %+v, want secure SID contract", cookies)
+	if len(cookies) != 1 || cookies[0].Name != "CD211_SESSION" || cookies[0].Path != "/" || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteLaxMode {
+		t.Fatalf("login cookies = %+v, want secure CD211_SESSION contract", cookies)
 	}
-	createdSession, _, err := fixture.sessions.Get(context.Background(), cookies[0].Value)
+	createdSession, _, err := fixture.sessions.Get(context.Background(), cookies[0].Value, session.AudienceWeb)
 	if err != nil {
 		t.Fatalf("sessions.Get(): %v", err)
 	}
@@ -511,12 +511,12 @@ func TestAuthenticationRedirectLoginAndLogout(t *testing.T) {
 	logout := httptest.NewRecorder()
 	fixture.handler.ServeHTTP(logout, logoutRequest)
 	requireStatus(t, logout, http.StatusSeeOther)
-	if _, _, err := fixture.sessions.Get(context.Background(), cookies[0].Value); !errors.Is(err, session.ErrNotFound) {
+	if _, _, err := fixture.sessions.Get(context.Background(), cookies[0].Value, session.AudienceWeb); !errors.Is(err, session.ErrNotFound) {
 		t.Errorf("session after logout = %v, want ErrNotFound", err)
 	}
 	cleared := logout.Result().Cookies()
-	if len(cleared) != 1 || cleared[0].Name != "SID" || cleared[0].MaxAge != -1 {
-		t.Errorf("logout cookies = %+v, want expired SID", cleared)
+	if len(cleared) != 1 || cleared[0].Name != "CD211_SESSION" || cleared[0].MaxAge != -1 {
+		t.Errorf("logout cookies = %+v, want expired CD211_SESSION", cleared)
 	}
 }
 
@@ -542,14 +542,14 @@ func TestWebSessionRenewalEmitsRefreshedCookie(t *testing.T) {
 	requireStatus(t, renewed, http.StatusOK)
 	var refreshed *http.Cookie
 	for _, cookie := range renewed.Result().Cookies() {
-		if cookie.Name == "SID" {
+		if cookie.Name == "CD211_SESSION" {
 			refreshed = cookie
 		}
 	}
 	if refreshed == nil || refreshed.Value != fixture.sid {
 		t.Fatalf("renewed cookies = %+v, want refreshed SID %q", renewed.Result().Cookies(), fixture.sid)
 	}
-	current, _, err := fixture.sessions.Get(context.Background(), fixture.sid)
+	current, _, err := fixture.sessions.Get(context.Background(), fixture.sid, session.AudienceWeb)
 	if err != nil {
 		t.Fatalf("sessions.Get(): %v", err)
 	}
@@ -565,7 +565,7 @@ func TestWebSessionRenewalEmitsRefreshedCookie(t *testing.T) {
 		t.Errorf("login Location = %q, want /", location)
 	}
 	loginRefreshed := login.Result().Cookies()
-	if len(loginRefreshed) != 1 || loginRefreshed[0].Name != "SID" || loginRefreshed[0].MaxAge <= 0 {
+	if len(loginRefreshed) != 1 || loginRefreshed[0].Name != "CD211_SESSION" || loginRefreshed[0].MaxAge <= 0 {
 		t.Errorf("login cookies = %+v, want refreshed persistent SID", loginRefreshed)
 	}
 }
@@ -579,7 +579,7 @@ func TestWebSessionSurvivesRestartOverSameDatabase(t *testing.T) {
 	login := first.request(http.MethodPost, "/login", url.Values{"username": {"admin"}, "password": {"adminadmin"}}, false)
 	requireStatus(t, login, http.StatusSeeOther)
 	cookies := login.Result().Cookies()
-	if len(cookies) != 1 || cookies[0].Name != "SID" {
+	if len(cookies) != 1 || cookies[0].Name != "CD211_SESSION" {
 		t.Fatalf("login cookies = %+v", cookies)
 	}
 	sidValue := cookies[0].Value
@@ -589,7 +589,7 @@ func TestWebSessionSurvivesRestartOverSameDatabase(t *testing.T) {
 
 	restarted := newWebFixtureAt(t, dbPath, SettingsDeps{})
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
-	request.AddCookie(&http.Cookie{Name: "SID", Value: sidValue})
+	request.AddCookie(&http.Cookie{Name: "CD211_SESSION", Value: sidValue})
 	response := httptest.NewRecorder()
 	restarted.handler.ServeHTTP(response, request)
 	requireStatus(t, response, http.StatusOK)
@@ -625,7 +625,7 @@ func TestAuthenticatedMutationBrowserOriginPolicy(t *testing.T) {
 		if origin != "" {
 			request.Header.Set("Origin", origin)
 		}
-		request.AddCookie(&http.Cookie{Name: "SID", Value: fixture.sid})
+		request.AddCookie(&http.Cookie{Name: "CD211_SESSION", Value: fixture.sid})
 		response := httptest.NewRecorder()
 		fixture.handler.ServeHTTP(response, request)
 		return response
@@ -928,7 +928,7 @@ func TestDetailShowsLogicalWorkspaceAndVerifiedContentPaths(t *testing.T) {
 	body = response.Body.String()
 	requireContains(t, body, "Logical save path", legacy.SavePath, "Legacy shared layout (workspace not recorded)")
 	request := httptest.NewRequest(http.MethodGet, "/downloads/"+isolated.Hash, nil)
-	request.AddCookie(&http.Cookie{Name: "SID", Value: fixture.sid})
+	request.AddCookie(&http.Cookie{Name: "CD211_SESSION", Value: fixture.sid})
 	request.AddCookie(&http.Cookie{Name: langCookie, Value: string(LangZH)})
 	chinese := httptest.NewRecorder()
 	fixture.handler.ServeHTTP(chinese, request)
@@ -1120,7 +1120,7 @@ func TestProblemLocalizationChinese(t *testing.T) {
 	retrying := fixture.seedProblem("3", []domain.State{domain.StateSubmittingOffline, domain.StateWaitingOffline, domain.StateSubmittingCopy}, domain.ProblemCloudCopyNotReady, &nextRun)
 
 	request := httptest.NewRequest(http.MethodGet, "/downloads/"+retrying.Hash, nil)
-	request.AddCookie(&http.Cookie{Name: "SID", Value: fixture.sid})
+	request.AddCookie(&http.Cookie{Name: "CD211_SESSION", Value: fixture.sid})
 	request.AddCookie(&http.Cookie{Name: langCookie, Value: string(LangZH)})
 	response := httptest.NewRecorder()
 	fixture.handler.ServeHTTP(response, request)
@@ -1434,7 +1434,7 @@ func (fixture *webFixture) requestLang(method, target string, authenticated bool
 	fixture.t.Helper()
 	request := httptest.NewRequest(method, target, nil)
 	if authenticated {
-		request.AddCookie(&http.Cookie{Name: "SID", Value: fixture.sid})
+		request.AddCookie(&http.Cookie{Name: "CD211_SESSION", Value: fixture.sid})
 	}
 	if lang != "" {
 		request.AddCookie(&http.Cookie{Name: langCookie, Value: lang})

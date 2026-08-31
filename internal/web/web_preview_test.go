@@ -21,25 +21,25 @@ func setPreviewSession(r *http.Request, sid string) {
 	cookies := r.Cookies()
 	r.Header.Del("Cookie")
 	for _, cookie := range cookies {
-		if cookie.Name != "SID" {
+		if cookie.Name != "CD211_SESSION" {
 			r.AddCookie(cookie)
 		}
 	}
-	r.AddCookie(&http.Cookie{Name: "SID", Value: sid, Path: "/"})
+	r.AddCookie(&http.Cookie{Name: "CD211_SESSION", Value: sid, Path: "/"})
 }
 
-func TestSetPreviewSessionReplacesSID(t *testing.T) {
+func TestSetPreviewSessionReplacesSessionCookie(t *testing.T) {
 	request, err := http.NewRequest(http.MethodGet, "/", nil)
 	if err != nil {
 		t.Fatalf("NewRequest(): %v", err)
 	}
 	request.AddCookie(&http.Cookie{Name: "lang", Value: "zh"})
-	request.AddCookie(&http.Cookie{Name: "SID", Value: "stale"})
+	request.AddCookie(&http.Cookie{Name: "CD211_SESSION", Value: "stale"})
 
 	setPreviewSession(request, "preview")
 
-	if sid, err := request.Cookie("SID"); err != nil || sid.Value != "preview" {
-		t.Fatalf("SID = (%v, %v), want preview", sid, err)
+	if sid, err := request.Cookie("CD211_SESSION"); err != nil || sid.Value != "preview" {
+		t.Fatalf("CD211_SESSION = (%v, %v), want preview", sid, err)
 	}
 	if lang, err := request.Cookie("lang"); err != nil || lang.Value != "zh" {
 		t.Fatalf("lang = (%v, %v), want zh", lang, err)

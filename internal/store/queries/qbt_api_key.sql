@@ -9,7 +9,6 @@ INSERT INTO qbt_api_key (
     id,
     key_hash,
     key_hint,
-    key_secret,
     created_at,
     updated_at,
     active,
@@ -18,7 +17,6 @@ INSERT INTO qbt_api_key (
     1,
     sqlc.arg(key_hash),
     sqlc.arg(key_hint),
-    sqlc.arg(key_secret),
     sqlc.arg(created_at),
     sqlc.arg(updated_at),
     1,
@@ -30,7 +28,6 @@ UPDATE qbt_api_key
 SET
     key_hash = sqlc.arg(key_hash),
     key_hint = sqlc.arg(key_hint),
-    key_secret = sqlc.arg(key_secret),
     created_at = sqlc.arg(created_at),
     updated_at = sqlc.arg(updated_at),
     active = 1,

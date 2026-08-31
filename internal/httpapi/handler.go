@@ -112,10 +112,24 @@ type handler struct {
 	service    *submission.Service
 }
 
-// New creates the authenticated qBittorrent-compatible HTTP handler. service
-// is the shared submission boundary also consumed by the native API; it owns
-// torrents/add parsing, category lookup, and persistence.
-func New(config Config, credentials Credentials, repo repository, sessions *session.Store, clock Clock, waker Waker, files filesystem, service *submission.Service, qbtkeys QBTAPIKeyRepository) (http.Handler, error) {
+// Handler serves the qBittorrent-compatible API. LoginHandler exposes only
+// the protocol login endpoint so composition can mount it outside the
+// protected prefix boundary.
+type Handler struct {
+	inner *handler
+	serve http.Handler
+}
+
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.serve.ServeHTTP(w, r)
+}
+
+func (h *Handler) LoginHandler() http.Handler {
+	return http.HandlerFunc(h.inner.login)
+}
+
+// New creates the qBittorrent-compatible HTTP handler.
+func New(config Config, credentials Credentials, repo repository, sessions *session.Store, clock Clock, waker Waker, files filesystem, service *submission.Service, qbtkeys QBTAPIKeyRepository) (*Handler, error) {
 	if isNil(credentials) || isNil(repo) || isNil(qbtkeys) || sessions == nil || isNil(clock) || isNil(waker) || isNil(files) || isNil(service) {
 		return nil, errors.New("httpapi dependency is nil")
 	}
@@ -138,9 +152,9 @@ func New(config Config, credentials Credentials, repo repository, sessions *sess
 	handlers := map[string]http.Handler{}
 	addRoute := func(name, method string, fn http.HandlerFunc) {
 		route := apiPrefix + name
-		routes[route], handlers[route] = method, h.auth(fn)
+		routes[route], handlers[route] = method, http.HandlerFunc(fn)
 	}
-	addRoute("auth/login", http.MethodPost, h.login)
+	routes[apiPrefix+"auth/login"] = http.MethodPost
 	handlers[apiPrefix+"auth/login"] = http.HandlerFunc(h.login)
 	addRoute("auth/logout", http.MethodPost, h.logout)
 
@@ -393,7 +407,7 @@ func New(config Config, credentials Credentials, repo repository, sessions *sess
 			mux.Handle(method+" "+route, fn)
 		}
 	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		method, found := routes[r.URL.Path]
 		if !found {
 			notFound(w)
@@ -409,7 +423,9 @@ func New(config Config, credentials Credentials, repo repository, sessions *sess
 			return
 		}
 		mux.ServeHTTP(w, r)
-	}), nil
+	})
+	protected := h.authBoundary(dispatch)
+	return &Handler{inner: h, serve: protected}, nil
 }
 
 func isNil(value any) bool {

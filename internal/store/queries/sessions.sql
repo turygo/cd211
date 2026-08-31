@@ -1,11 +1,12 @@
 -- name: GetSession :one
 SELECT *
 FROM sessions
-WHERE sid_digest = sqlc.arg(sid_digest);
+WHERE sid_digest = sqlc.arg(sid_digest)
+  AND audience = sqlc.arg(audience);
 
 -- name: InsertSession :exec
-INSERT INTO sessions (sid_digest, csrf_token, created_at, expires_at)
-VALUES (sqlc.arg(sid_digest), sqlc.arg(csrf_token), sqlc.arg(created_at), sqlc.arg(expires_at));
+INSERT INTO sessions (sid_digest, audience, csrf_token, created_at, expires_at)
+VALUES (sqlc.arg(sid_digest), sqlc.arg(audience), sqlc.arg(csrf_token), sqlc.arg(created_at), sqlc.arg(expires_at));
 
 -- name: PurgeExpiredSessions :execrows
 DELETE FROM sessions
@@ -24,11 +25,13 @@ WHERE sid_digest = (
 UPDATE sessions
 SET expires_at = sqlc.arg(new_expires_at)
 WHERE sid_digest = sqlc.arg(sid_digest)
+  AND audience = sqlc.arg(audience)
   AND expires_at = sqlc.arg(expected_expires_at);
 
 -- name: RevokeSession :exec
 DELETE FROM sessions
-WHERE sid_digest = sqlc.arg(sid_digest);
+WHERE sid_digest = sqlc.arg(sid_digest)
+  AND audience = sqlc.arg(audience);
 
 -- name: CountSessions :one
 SELECT COUNT(*)

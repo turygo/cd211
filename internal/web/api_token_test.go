@@ -11,8 +11,8 @@ import (
 	"github.com/turygo/cd211/internal/token"
 )
 
-// generateAPITokenThroughUI drives generation and returns the persisted secret
-// that the Settings page renders after the redirect.
+// generateAPITokenThroughUI drives generation and returns the one-time
+// plaintext rendered by the complete Settings response.
 func generateAPITokenThroughUI(t *testing.T, fixture *webFixture) string {
 	t.Helper()
 	page := fixture.request(http.MethodGet, "/settings", nil, true)
@@ -21,21 +21,20 @@ func generateAPITokenThroughUI(t *testing.T, fixture *webFixture) string {
 	requireAbsent(t, page.Body.String(), "cd211_api_")
 
 	response := fixture.post("/settings/api-token/generate", nil)
-	requireStatus(t, response, http.StatusSeeOther)
-	if got := response.Header().Get("Location"); got != "/settings" {
-		t.Fatalf("generate Location = %q, want /settings", got)
+	requireStatus(t, response, http.StatusOK)
+	body := response.Body.String()
+	start := strings.Index(body, "cd211_api_")
+	if start < 0 {
+		t.Fatal("generation response omitted token")
 	}
-	info, err := fixture.store.GetAPIToken(context.Background())
-	if err != nil {
-		t.Fatalf("GetAPIToken(): %v", err)
+	end := start
+	for end < len(body) && !strings.ContainsAny(body[end:end+1], "<\"' ") {
+		end++
 	}
-	if !token.Valid(info.Secret) {
-		t.Fatalf("persisted token %q is invalid", info.Secret)
-	}
-	return string(info.Secret)
+	return body[start:end]
 }
 
-func TestAPITokenGeneratePersistsAndSettingsAlwaysDisplays(t *testing.T) {
+func TestAPITokenGeneratePersistsAndSettingsHidesPlaintext(t *testing.T) {
 	fixture := newWebFixture(t)
 	secret := generateAPITokenThroughUI(t, fixture)
 
@@ -43,8 +42,8 @@ func TestAPITokenGeneratePersistsAndSettingsAlwaysDisplays(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAPIToken(): %v", err)
 	}
-	if info.Secret != token.Secret(secret) || info.RowVersion != 0 || info.CreatedAt.IsZero() || !info.CreatedAt.Equal(info.UpdatedAt) {
-		t.Errorf("stored token = %+v, want persisted secret and version 0", info)
+	if info.RowVersion != 0 || info.CreatedAt.IsZero() || !info.CreatedAt.Equal(info.UpdatedAt) {
+		t.Errorf("stored token = %+v, want digest metadata and version 0", info)
 	}
 
 	page := fixture.request(http.MethodGet, "/settings", nil, true)
@@ -53,8 +52,8 @@ func TestAPITokenGeneratePersistsAndSettingsAlwaysDisplays(t *testing.T) {
 		t.Errorf("settings Cache-Control = %q, want no-store", got)
 	}
 	body := page.Body.String()
-	requireContains(t, body, secret, tr(LangEN).APITokenGeneratedLabel, `data-copy-value="`+secret+`"`, `action="/settings/api-token/revoke"`, "Automation API token")
-	requireAbsent(t, body, info.Hint, "First configured", "Token hint", `action="/settings/api-token/rotate"`, "Rotate token", "sha256", "token_hash")
+	requireContains(t, body, info.Hint, tr(LangEN).APITokenSecretUnavailable, `action="/settings/api-token/revoke"`, "Automation API token")
+	requireAbsent(t, body, secret, "First configured", "Token hint", `action="/settings/api-token/rotate"`, "Rotate token", "sha256", "token_hash")
 }
 
 func TestAPITokenGenerateWhenPresentConflicts(t *testing.T) {

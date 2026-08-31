@@ -185,22 +185,22 @@ type SettingsView struct {
 	QBTAPIKey  QBTAPIKeyView
 }
 
-// APITokenView renders the Automation API token on every authenticated
-// Settings page visit. Secret is empty only for legacy rows migrated from the
-// digest-only schema.
+// APITokenView renders API token metadata. Secret is populated only in the
+// response immediately following generation.
 type APITokenView struct {
 	Configured  bool
 	Secret      string
+	Hint        string
 	GeneratedAt string
 	RowVersion  int64
 }
 
-// QBTAPIKeyView renders the qBittorrent API key on every authenticated
-// Settings page visit. Secret is empty only for legacy rows migrated from the
-// digest-only schema.
+// QBTAPIKeyView renders qBittorrent API key metadata. Secret is populated only
+// in the response immediately following generation.
 type QBTAPIKeyView struct {
 	Configured  bool
 	Secret      string
+	Hint        string
 	GeneratedAt string
 	RowVersion  int64
 }

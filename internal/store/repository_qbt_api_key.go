@@ -1,7 +1,6 @@
 package store
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -18,9 +17,8 @@ import (
 // persistence contract.
 var _ qbtkey.Repository = (*Store)(nil)
 
-// GetQBTAPIKey returns the configured qBittorrent API key, including its
-// persisted plaintext for the authenticated Settings page and its digest for
-// request verification.
+// GetQBTAPIKey returns the configured qBittorrent API key digest and metadata.
+// Plaintext secrets are never persisted or returned by reads.
 func (s *Store) GetQBTAPIKey(ctx context.Context) (qbtkey.Key, error) {
 	row, err := s.queries.GetQBTAPIKey(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -32,9 +30,8 @@ func (s *Store) GetQBTAPIKey(ctx context.Context) (qbtkey.Key, error) {
 	return qbtKeyFromDB(row)
 }
 
-// GenerateQBTAPIKey creates the single qBittorrent API key row and persists
-// the generated secret so Settings can display it on every visit. An inactive
-// tombstone is reactivated with a new key after revocation.
+// GenerateQBTAPIKey creates the single qBittorrent API key row and returns the
+// generated secret exactly once. Only its digest and display hint are persisted.
 func (s *Store) GenerateQBTAPIKey(ctx context.Context, now time.Time) (qbtkey.Secret, error) {
 	if now.IsZero() {
 		return "", errors.New("qBittorrent API key generation time is required")
@@ -49,7 +46,6 @@ func (s *Store) GenerateQBTAPIKey(ctx context.Context, now time.Time) (qbtkey.Se
 	err = s.queries.InsertQBTAPIKey(ctx, storedb.InsertQBTAPIKeyParams{
 		KeyHash:   keyHash,
 		KeyHint:   keyHint,
-		KeySecret: string(secret),
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
@@ -62,7 +58,6 @@ func (s *Store) GenerateQBTAPIKey(ctx context.Context, now time.Time) (qbtkey.Se
 	updated, err := s.queries.ActivateQBTAPIKey(ctx, storedb.ActivateQBTAPIKeyParams{
 		KeyHash:   keyHash,
 		KeyHint:   keyHint,
-		KeySecret: string(secret),
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
@@ -103,19 +98,9 @@ func qbtKeyFromDB(row storedb.QbtApiKey) (qbtkey.Key, error) {
 		row.UpdatedAt.IsZero() || row.UpdatedAt.Before(row.CreatedAt) || row.RowVersion < 0 {
 		return qbtkey.Key{}, errors.New("stored qBittorrent API key is invalid")
 	}
-	if row.KeySecret != "" {
-		secret := qbtkey.Secret(row.KeySecret)
-		if !qbtkey.Valid(secret) || !bytes.Equal(qbtkey.Hash(secret), row.KeyHash) {
-			return qbtkey.Key{}, errors.New("stored qBittorrent API key secret is invalid")
-		}
-	}
 	return qbtkey.Key{
-		Secret:     qbtkey.Secret(row.KeySecret),
-		Digest:     row.KeyHash,
-		Hint:       row.KeyHint,
-		CreatedAt:  row.CreatedAt,
-		UpdatedAt:  row.UpdatedAt,
-		RowVersion: row.RowVersion,
+		Digest: row.KeyHash, Hint: row.KeyHint, CreatedAt: row.CreatedAt,
+		UpdatedAt: row.UpdatedAt, RowVersion: row.RowVersion,
 	}, nil
 }
 

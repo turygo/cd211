@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -74,6 +75,15 @@ func TestQBTBearerAuthenticationContract(t *testing.T) {
 	}
 }
 
+func TestQBTBasicAuthenticationWithoutSID(t *testing.T) {
+	harness := newContractHarness(t)
+	credentials := base64.StdEncoding.EncodeToString([]byte("user:password"))
+	response := doAuthorization(t, harness.api, http.MethodGet, "/api/v2/app/version", "", nil, []string{"bAsIc " + credentials}, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("Basic authentication = %d %q, want 200", response.Code, response.Body.String())
+	}
+}
+
 func TestQBTBearerPrecedenceAndFailures(t *testing.T) {
 	t.Parallel()
 	harness := newContractHarness(t)
@@ -92,7 +102,7 @@ func TestQBTBearerPrecedenceAndFailures(t *testing.T) {
 		{name: "missing SID", headers: nil, wantStatus: http.StatusForbidden},
 		{name: "malformed empty", headers: []string{"Bearer "}, cookie: cookie, wantStatus: http.StatusForbidden},
 		{name: "malformed token", headers: []string{"Bearer qbt_invalid"}, cookie: cookie, wantStatus: http.StatusForbidden},
-		{name: "wrong scheme", headers: []string{"bearer " + string(secret)}, cookie: cookie, wantStatus: http.StatusForbidden},
+		{name: "scheme case insensitive", headers: []string{"bearer " + string(secret)}, cookie: cookie, wantStatus: http.StatusOK},
 		{name: "internal whitespace", headers: []string{"Bearer " + string(secret)[:5] + " " + string(secret)[5:]}, cookie: cookie, wantStatus: http.StatusForbidden},
 		{name: "multiple headers", headers: []string{"Bearer " + string(secret), "Bearer " + string(secret)}, cookie: cookie, wantStatus: http.StatusForbidden},
 		{name: "wrong digest", headers: []string{"Bearer " + string(secret)}, digest: qbtkey.Hash(qbtkey.Secret("qbt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")), cookie: cookie, wantStatus: http.StatusForbidden},
@@ -140,7 +150,7 @@ func TestQBTBearerOriginLoginAndLogoutContract(t *testing.T) {
 		t.Fatalf("cross-origin Bearer mutation = %d, want 403", crossOrigin.Code)
 	}
 
-	login := doAuthorization(t, harness.api, http.MethodPost, "/api/v2/auth/login", url.Values{"username": {"user"}, "password": {"password"}}.Encode(), nil, []string{"Bearer malformed"}, "")
+	login := doAuthorization(t, harness.loginHandler, http.MethodPost, "/api/v2/auth/login", url.Values{"username": {"user"}, "password": {"password"}}.Encode(), nil, []string{"Bearer malformed"}, "")
 	if login.Code != http.StatusOK || login.Body.String() != "Ok." {
 		t.Fatalf("login with Authorization = %d %q, want independent success", login.Code, login.Body.String())
 	}
@@ -150,7 +160,7 @@ func TestQBTBearerOriginLoginAndLogoutContract(t *testing.T) {
 		t.Fatalf("Bearer-only logout = %d %q, want 200", logout.Code, logout.Body.String())
 	}
 	cookies := logout.Result().Cookies()
-	if len(cookies) != 1 || cookies[0].Name != "SID" || cookies[0].MaxAge >= 0 {
-		t.Fatalf("Bearer-only logout cookies = %#v, want expired SID", cookies)
+	if len(cookies) != 1 || cookies[0].Name != "SID" || cookies[0].Path != "/api/v2" || cookies[0].MaxAge >= 0 {
+		t.Fatalf("Bearer-only logout cookies = %#v, want expired scoped SID", cookies)
 	}
 }

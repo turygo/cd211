@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/turygo/cd211/internal/authn"
+	"github.com/turygo/cd211/internal/logging"
 	"github.com/turygo/cd211/internal/token"
 )
 
@@ -53,6 +55,7 @@ const (
 // or exposed.
 func (a *Auth) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		logging.SetAuthAttempt(r, "native", nativeAuthAttempt(r))
 		secret, ok := bearerToken(r)
 		if !ok {
 			unauthorized(w)
@@ -71,8 +74,28 @@ func (a *Auth) Middleware(next http.Handler) http.Handler {
 			unauthorized(w)
 			return
 		}
-		next.ServeHTTP(w, r)
+		principal := authn.Principal{Kind: authn.NativeClientPrincipal, Method: authn.NativeTokenMethod}
+		logging.SetAuthSuccess(r, principal)
+		next.ServeHTTP(w, r.WithContext(authn.WithPrincipal(r.Context(), principal)))
 	})
+}
+
+func nativeAuthAttempt(r *http.Request) string {
+	values := r.Header.Values("Authorization")
+	if len(values) != 1 {
+		return "authorization"
+	}
+	value := strings.TrimSpace(values[0])
+	if value == "" {
+		return "authorization"
+	}
+	if index := strings.IndexAny(value, " \t"); index >= 0 {
+		value = value[:index]
+	}
+	if strings.EqualFold(value, "bearer") {
+		return "native_token"
+	}
+	return "authorization"
 }
 
 // bearerToken extracts the exact single "Bearer <token>" value. It rejects a

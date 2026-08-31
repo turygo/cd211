@@ -106,16 +106,16 @@ func TestRealStoreSubmissionChain(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	login := doForm(t, api, http.MethodPost, "/api/v2/auth/login", url.Values{"username": {"user"}, "password": {"password"}}, nil)
+	login := doForm(t, api.LoginHandler(), http.MethodPost, "/api/v2/auth/login", url.Values{"username": {"user"}, "password": {"password"}}, nil)
 	if login.Code != http.StatusOK || login.Body.String() != "Ok." {
 		t.Fatalf("login = %d %q", login.Code, login.Body.String())
 	}
 	cookies := login.Result().Cookies()
-	if len(cookies) != 1 || cookies[0].Name != "SID" || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteLaxMode {
+	if len(cookies) != 1 || cookies[0].Name != "SID" || cookies[0].Path != "/api/v2" || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteLaxMode {
 		t.Fatalf("unexpected session cookie: %#v", cookies)
 	}
 	cookie := cookies[0]
-	current, _, err := sessions.Get(context.Background(), cookie.Value)
+	current, _, err := sessions.Get(context.Background(), cookie.Value, session.AudienceQBT)
 	if err != nil {
 		t.Fatalf("sessions.Get(): %v", err)
 	}
@@ -185,14 +185,15 @@ func doRequest(t *testing.T, handler http.Handler, method, target string, body *
 }
 
 type contractHarness struct {
-	api        http.Handler
-	repository *store.Store
-	qbtkeys    *contractQBTAPIKeyRepository
-	sessions   *session.Store
-	clock      *contractClock
-	waker      *contractWaker
-	filesystem *contractFilesystem
-	limits     torrentmeta.Limits
+	api          http.Handler
+	loginHandler http.Handler
+	repository   *store.Store
+	qbtkeys      *contractQBTAPIKeyRepository
+	sessions     *session.Store
+	clock        *contractClock
+	waker        *contractWaker
+	filesystem   *contractFilesystem
+	limits       torrentmeta.Limits
 }
 
 func newContractHarness(t *testing.T) *contractHarness {
@@ -230,7 +231,7 @@ func newContractHarnessAt(t *testing.T, dbPath string) *contractHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &contractHarness{api: api, repository: repository, qbtkeys: qbtkeys, sessions: sessions, clock: clock, waker: waker, filesystem: filesystem, limits: limits}
+	return &contractHarness{api: api, loginHandler: api.LoginHandler(), repository: repository, qbtkeys: qbtkeys, sessions: sessions, clock: clock, waker: waker, filesystem: filesystem, limits: limits}
 }
 
 type stubCredentials struct {
@@ -244,7 +245,7 @@ func (s stubCredentials) Verify(_ context.Context, username, password string) (b
 
 func (h *contractHarness) login(t *testing.T) *http.Cookie {
 	t.Helper()
-	response := doForm(t, h.api, http.MethodPost, "/api/v2/auth/login", url.Values{"username": {"user"}, "password": {"password"}}, nil)
+	response := doForm(t, h.loginHandler, http.MethodPost, "/api/v2/auth/login", url.Values{"username": {"user"}, "password": {"password"}}, nil)
 	if response.Code != http.StatusOK || response.Body.String() != "Ok." {
 		t.Fatalf("login = %d %q", response.Code, response.Body.String())
 	}
@@ -421,7 +422,7 @@ func TestLoginCookieIsSecureOnHTTPS(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "https://cd211.test/api/v2/auth/login", body)
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response := httptest.NewRecorder()
-	harness.api.ServeHTTP(response, request)
+	harness.loginHandler.ServeHTTP(response, request)
 	cookies := response.Result().Cookies()
 	if response.Code != http.StatusOK || len(cookies) != 1 || !cookies[0].Secure {
 		t.Fatalf("HTTPS login cookie = status:%d cookies:%+v", response.Code, cookies)
@@ -432,7 +433,7 @@ func TestLoginBansRepeatedFailures(t *testing.T) {
 	t.Parallel()
 	harness := newContractHarness(t)
 	for attempt := 1; attempt <= 5; attempt++ {
-		response := doForm(t, harness.api, http.MethodPost, "/api/v2/auth/login", url.Values{"username": {"user"}, "password": {"wrong"}}, nil)
+		response := doForm(t, harness.loginHandler, http.MethodPost, "/api/v2/auth/login", url.Values{"username": {"user"}, "password": {"wrong"}}, nil)
 		want := http.StatusOK
 		if attempt == 5 {
 			want = http.StatusForbidden
@@ -441,7 +442,7 @@ func TestLoginBansRepeatedFailures(t *testing.T) {
 			t.Fatalf("login failure %d = %d %q, want %d Fails.", attempt, response.Code, response.Body.String(), want)
 		}
 	}
-	response := doForm(t, harness.api, http.MethodPost, "/api/v2/auth/login", url.Values{"username": {"user"}, "password": {"password"}}, nil)
+	response := doForm(t, harness.loginHandler, http.MethodPost, "/api/v2/auth/login", url.Values{"username": {"user"}, "password": {"password"}}, nil)
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("valid credentials bypassed login ban: %d", response.Code)
 	}
@@ -569,11 +570,11 @@ func TestAuthenticationAppCategoriesAndRoutingContract(t *testing.T) {
 	if response := doRequest(t, harness.api, http.MethodGet, "/api/v2/app/version", nil, nil); response.Code != http.StatusForbidden || response.Body.String() != "Forbidden\n" {
 		t.Fatalf("unauthenticated version = %d %q", response.Code, response.Body.String())
 	}
-	if response := doForm(t, harness.api, http.MethodPost, "/api/v2/auth/login", url.Values{"username": {"user"}, "password": {"wrong"}}, nil); response.Code != http.StatusOK || response.Body.String() != "Fails." {
+	if response := doForm(t, harness.loginHandler, http.MethodPost, "/api/v2/auth/login", url.Values{"username": {"user"}, "password": {"wrong"}}, nil); response.Code != http.StatusOK || response.Body.String() != "Fails." {
 		t.Fatalf("failed login = %d %q", response.Code, response.Body.String())
 	}
 	cookie := harness.login(t)
-	if !cookie.HttpOnly || cookie.Path != "/" || cookie.SameSite != http.SameSiteLaxMode {
+	if !cookie.HttpOnly || cookie.Path != "/api/v2" || cookie.SameSite != http.SameSiteLaxMode {
 		t.Fatalf("login cookie = %#v", cookie)
 	}
 	if response := doRequest(t, harness.api, http.MethodGet, "/api/v2/app/version", nil, cookie); response.Code != http.StatusOK || response.Body.String() != "v5.0.0-cd211" {
@@ -654,11 +655,14 @@ func TestAuthenticationAppCategoriesAndRoutingContract(t *testing.T) {
 			t.Fatalf("wrong method %s %s = %d %q", method, target, response.Code, response.Body.String())
 		}
 	}
-	if response := doRequest(t, harness.api, http.MethodGet, "/api/v2/auth/login", nil, nil); response.Code != http.StatusMethodNotAllowed || response.Body.String() != "Method Not Allowed\n" {
-		t.Fatalf("wrong method = %d %q", response.Code, response.Body.String())
+	if response := doRequest(t, harness.api, http.MethodGet, "/api/v2/auth/login", nil, nil); response.Code != http.StatusForbidden || response.Body.String() != "Forbidden\n" {
+		t.Fatalf("unauthenticated non-POST login = %d %q", response.Code, response.Body.String())
 	}
-	if response := doRequest(t, harness.api, http.MethodGet, "/api/v2/not-supported", nil, nil); response.Code != http.StatusNotFound || response.Body.String() != "Not Found\n" {
-		t.Fatalf("unknown route = %d %q", response.Code, response.Body.String())
+	if response := doRequest(t, harness.api, http.MethodGet, "/api/v2/not-supported", nil, nil); response.Code != http.StatusForbidden || response.Body.String() != "Forbidden\n" {
+		t.Fatalf("unauthenticated unknown route = %d %q", response.Code, response.Body.String())
+	}
+	if response := doRequest(t, harness.api, http.MethodGet, "/api/v2/not-supported", nil, cookie); response.Code != http.StatusNotFound || response.Body.String() != "Not Found\n" {
+		t.Fatalf("authenticated unknown route = %d %q", response.Code, response.Body.String())
 	}
 	if response := doForm(t, harness.api, http.MethodPost, "/api/v2/auth/logout", url.Values{}, cookie); response.Code != http.StatusOK || response.Body.Len() != 0 {
 		t.Fatalf("logout = %d %q", response.Code, response.Body.String())
@@ -1194,7 +1198,7 @@ func TestAPISessionRenewalEmitsRefreshedCookie(t *testing.T) {
 	if len(refreshed) != 1 || refreshed[0].Name != "SID" || refreshed[0].Value != cookie.Value {
 		t.Fatalf("renewed cookies = %#v, want refreshed SID %q", refreshed, cookie.Value)
 	}
-	current, _, err := harness.sessions.Get(context.Background(), cookie.Value)
+	current, _, err := harness.sessions.Get(context.Background(), cookie.Value, session.AudienceQBT)
 	if err != nil {
 		t.Fatalf("sessions.Get(): %v", err)
 	}

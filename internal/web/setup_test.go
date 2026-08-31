@@ -226,7 +226,7 @@ func newSetupFixture(t *testing.T) *setupFixture {
 func (f *setupFixture) get(target, sid string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(http.MethodGet, target, nil)
 	if sid != "" {
-		request.AddCookie(&http.Cookie{Name: "SID", Value: sid})
+		request.AddCookie(&http.Cookie{Name: "CD211_SESSION", Value: sid})
 	}
 	response := httptest.NewRecorder()
 	f.handler.ServeHTTP(response, request)
@@ -244,7 +244,7 @@ func (f *setupFixture) post(target, sid, csrf string, values url.Values) *httpte
 	request := httptest.NewRequest(http.MethodPost, target, strings.NewReader(values.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if sid != "" {
-		request.AddCookie(&http.Cookie{Name: "SID", Value: sid})
+		request.AddCookie(&http.Cookie{Name: "CD211_SESSION", Value: sid})
 	}
 	response := httptest.NewRecorder()
 	f.handler.ServeHTTP(response, request)
@@ -258,10 +258,10 @@ func (f *setupFixture) advancePassword() (string, string) {
 	response := f.post("/setup/password", "", "", url.Values{"password": {"correct horse"}, "confirm_password": {"correct horse"}})
 	requireStatus(f.t, response, http.StatusSeeOther)
 	cookies := response.Result().Cookies()
-	if len(cookies) != 1 || cookies[0].Name != "SID" {
+	if len(cookies) != 1 || cookies[0].Name != "CD211_SESSION" {
 		f.t.Fatalf("password step cookies = %+v, want SID", cookies)
 	}
-	current, _, err := f.sessions.Get(context.Background(), cookies[0].Value)
+	current, _, err := f.sessions.Get(context.Background(), cookies[0].Value, session.AudienceWeb)
 	if err != nil {
 		f.t.Fatalf("wizard session %q lookup: %v", cookies[0].Value, err)
 	}
@@ -540,7 +540,7 @@ func TestSetupStepGatingWithoutSession(t *testing.T) {
 	}
 
 	// A session that is not the wizard's own is equally rejected.
-	foreign, _, err := fixture.sessions.Create(context.Background())
+	foreign, _, err := fixture.sessions.Create(context.Background(), session.AudienceWeb)
 	if err != nil {
 		t.Fatalf("sessions.Create(): %v", err)
 	}
@@ -552,7 +552,7 @@ func TestSetupStepGatingWithoutSession(t *testing.T) {
 
 	// Losing the wizard session resets the visible flow to step 1.
 	sid, _ := fixture.advancePassword()
-	if err := fixture.sessions.Revoke(context.Background(), sid); err != nil {
+	if err := fixture.sessions.Revoke(context.Background(), sid, session.AudienceWeb); err != nil {
 		t.Fatalf("sessions.Revoke(): %v", err)
 	}
 	page := fixture.get("/setup", "")
@@ -582,14 +582,14 @@ func TestSetupSessionRenewalEmitsRefreshedCookie(t *testing.T) {
 	requireContains(t, renewed.Body.String(), `action="/setup/cd2/test"`)
 	var refreshed *http.Cookie
 	for _, cookie := range renewed.Result().Cookies() {
-		if cookie.Name == "SID" {
+		if cookie.Name == "CD211_SESSION" {
 			refreshed = cookie
 		}
 	}
 	if refreshed == nil || refreshed.Value != sid {
 		t.Fatalf("renewed cookies = %+v, want refreshed SID %q", renewed.Result().Cookies(), sid)
 	}
-	current, _, err := fixture.sessions.Get(context.Background(), sid)
+	current, _, err := fixture.sessions.Get(context.Background(), sid, session.AudienceWeb)
 	if err != nil {
 		t.Fatalf("sessions.Get(): %v", err)
 	}
@@ -857,11 +857,11 @@ func TestSetupStepRedirectTargets(t *testing.T) {
 		t.Errorf("password Location = %q, want /setup?step=2", location)
 	}
 	cookies := password.Result().Cookies()
-	if len(cookies) != 1 || cookies[0].Name != "SID" {
+	if len(cookies) != 1 || cookies[0].Name != "CD211_SESSION" {
 		t.Fatalf("password cookies = %+v, want one SID", cookies)
 	}
 	sid := cookies[0].Value
-	current, _, err := fixture.sessions.Get(context.Background(), sid)
+	current, _, err := fixture.sessions.Get(context.Background(), sid, session.AudienceWeb)
 	if err != nil {
 		t.Fatalf("wizard session %q lookup: %v", sid, err)
 	}

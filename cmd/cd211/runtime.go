@@ -256,6 +256,7 @@ func (m *manager) build(ctx context.Context, cfg settings.Config) (*runtime, err
 	if err != nil {
 		return nil, fmt.Errorf("nativeapi: %w", err)
 	}
+	nativeHandler := nativeAuth.Middleware(native)
 	if m.logReader != nil {
 		uiConfig.LogReader = *m.logReader
 	}
@@ -282,8 +283,9 @@ func (m *manager) build(ctx context.Context, cfg settings.Config) (*runtime, err
 	root := http.NewServeMux()
 	root.Handle("/healthz", health)
 	root.Handle("/readyz", health)
+	root.Handle("POST /api/v2/auth/login", api.LoginHandler())
+	root.Handle("/api/v1/", nativeHandler)
 	root.Handle("/api/v2/", api)
-	root.Handle("/api/v1/", nativeAuth.Middleware(native))
 	root.Handle("/setup", http.RedirectHandler("/", http.StatusSeeOther))
 	root.Handle("/", ui)
 

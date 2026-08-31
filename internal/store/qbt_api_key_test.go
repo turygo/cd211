@@ -31,8 +31,8 @@ func TestQBTAPIKeyGenerateDisplayRevokeLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetQBTAPIKey() error = %v", err)
 	}
-	if info.Secret != first || info.RowVersion != 0 || !info.CreatedAt.Equal(now) || !info.UpdatedAt.Equal(now) {
-		t.Errorf("initial key = %+v, want persisted secret and version 0", info)
+	if info.RowVersion != 0 || !info.CreatedAt.Equal(now) || !info.UpdatedAt.Equal(now) {
+		t.Errorf("initial key = %+v, want metadata and version 0", info)
 	}
 	if info.Hint != qbtkey.Hint(first) || !qbtkey.Verify(first, info.Digest) {
 		t.Errorf("initial qBittorrent API key does not match generated key: %+v", info)
@@ -49,7 +49,7 @@ func TestQBTAPIKeyGenerateDisplayRevokeLifecycle(t *testing.T) {
 	if err := store.RevokeQBTAPIKey(ctx, 0); err != nil {
 		t.Errorf("revoke absent error = %v, want idempotent success", err)
 	}
-	second, err := store.GenerateQBTAPIKey(ctx, now.Add(2*time.Hour))
+	_, err = store.GenerateQBTAPIKey(ctx, now.Add(2*time.Hour))
 	if err != nil {
 		t.Fatalf("generate after revoke error = %v", err)
 	}
@@ -57,15 +57,15 @@ func TestQBTAPIKeyGenerateDisplayRevokeLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetQBTAPIKey() after regenerate: %v", err)
 	}
-	if current.Secret != second || current.RowVersion <= info.RowVersion {
-		t.Errorf("regenerated key = %+v, want new persisted secret and monotonic version", current)
+	if current.RowVersion <= info.RowVersion {
+		t.Errorf("regenerated key = %+v, want new metadata and monotonic version", current)
 	}
 	if err := store.RevokeQBTAPIKey(ctx, info.RowVersion); !errors.Is(err, qbtkey.ErrConflict) {
 		t.Errorf("stale revoke error = %v, want qbtkey.ErrConflict", err)
 	}
 }
 
-func TestQBTAPIKeyPersistsSecretAndIsIndependent(t *testing.T) {
+func TestQBTAPIKeyStoresDigestOnlyAndIsIndependent(t *testing.T) {
 	ctx := context.Background()
 	store := testStore(t)
 	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
@@ -85,22 +85,13 @@ func TestQBTAPIKeyPersistsSecretAndIsIndependent(t *testing.T) {
 		t.Error("native token was accepted by qBittorrent API key shape validation")
 	}
 
-	var (
-		rawHash   []byte
-		rawSecret string
-		hint      string
-	)
-	if err := store.db.QueryRowContext(ctx, "SELECT key_hash, key_secret, key_hint FROM qbt_api_key WHERE id = 1").Scan(&rawHash, &rawSecret, &hint); err != nil {
+	var rawHash []byte
+	var hint string
+	if err := store.db.QueryRowContext(ctx, "SELECT key_hash, key_hint FROM qbt_api_key WHERE id = 1").Scan(&rawHash, &hint); err != nil {
 		t.Fatalf("read qbt_api_key row: %v", err)
 	}
-	if rawSecret != string(qbtSecret) {
-		t.Errorf("stored key_secret = %q, want generated key", rawSecret)
-	}
-	if bytes.Equal(rawHash, []byte(qbtSecret)) {
-		t.Fatal("qbt_api_key stored plaintext in key_hash")
-	}
-	if !bytes.Equal(rawHash, qbtkey.Hash(qbtSecret)) {
-		t.Error("stored key_hash is not the SHA-256 digest of the qBittorrent API key")
+	if string(rawHash) == string(qbtSecret) || !bytes.Equal(rawHash, qbtkey.Hash(qbtSecret)) {
+		t.Fatal("qbt_api_key did not store only the SHA-256 digest")
 	}
 	if hint != qbtkey.Hint(qbtSecret) {
 		t.Errorf("stored key_hint = %q, want %q", hint, qbtkey.Hint(qbtSecret))

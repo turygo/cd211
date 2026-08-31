@@ -365,8 +365,34 @@ func TestConfiguredRuntimeMountsAPIs(t *testing.T) {
 	m.activate(generation)
 	defer m.shutdown()
 
-	// Without a configured API token every /api/v1/* request is the stable 401.
+	ready := httptest.NewRecorder()
+	root.ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if ready.Code != http.StatusOK || ready.Body.String() != "ready\n" {
+		t.Fatalf("configured readyz = %d %q, want 200 ready", ready.Code, ready.Body.String())
+	}
+
+	// Only the exact POST login mount is public; every other qB request enters
+	// the prefix-wide authentication boundary.
 	recorder := httptest.NewRecorder()
+	root.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v2/auth/login", nil))
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("qB login GET status = %d, want 403", recorder.Code)
+	}
+	recorder = httptest.NewRecorder()
+	root.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v2/auth/login/", nil))
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("qB login trailing slash status = %d, want 403", recorder.Code)
+	}
+	loginRequest := httptest.NewRequest(http.MethodPost, "/api/v2/auth/login", strings.NewReader("username=user&password=wrong"))
+	loginRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recorder = httptest.NewRecorder()
+	root.ServeHTTP(recorder, loginRequest)
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "Fails." {
+		t.Fatalf("qB login POST = %d %q, want public login response", recorder.Code, recorder.Body.String())
+	}
+
+	// Without a configured API token every /api/v1/* request is the stable 401.
+	recorder = httptest.NewRecorder()
 	root.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/downloads/0123456789abcdef0123456789abcdef01234567", nil))
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("native api status = %d, want 401; body=%q", recorder.Code, recorder.Body.String())
@@ -376,20 +402,6 @@ func TestConfiguredRuntimeMountsAPIs(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), `"code":"unauthorized"`) {
 		t.Errorf("native api body = %q, want unauthorized JSON", recorder.Body.String())
-	}
-
-	// Unknown /api/v1/* paths are authenticated before routing.
-	recorder = httptest.NewRecorder()
-	root.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/events", nil))
-	if recorder.Code != http.StatusUnauthorized {
-		t.Fatalf("unknown native api status = %d, want 401", recorder.Code)
-	}
-
-	// The qBittorrent surface is untouched by the new mount.
-	recorder = httptest.NewRecorder()
-	root.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v2/torrents/add", nil))
-	if recorder.Code != http.StatusForbidden {
-		t.Fatalf("qBittorrent add status = %d, want 403 without SID", recorder.Code)
 	}
 
 	qbtSecret, err := st.GenerateQBTAPIKey(ctx, time.Now().UTC())
@@ -402,5 +414,12 @@ func TestConfiguredRuntimeMountsAPIs(t *testing.T) {
 	root.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("qBittorrent Bearer status = %d, want 200; body=%q", recorder.Code, recorder.Body.String())
+	}
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/api/v2/unknown", nil)
+	request.Header.Set("Authorization", "Bearer "+string(qbtSecret))
+	root.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("authenticated unknown qB route = %d, want 404", recorder.Code)
 	}
 }

@@ -8,7 +8,6 @@ INSERT INTO api_token (
     id,
     token_hash,
     token_hint,
-    token_secret,
     created_at,
     updated_at,
     row_version
@@ -16,7 +15,6 @@ INSERT INTO api_token (
     1,
     sqlc.arg(token_hash),
     sqlc.arg(token_hint),
-    sqlc.arg(token_secret),
     sqlc.arg(created_at),
     sqlc.arg(updated_at),
     0

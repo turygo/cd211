@@ -79,21 +79,21 @@ func (r *memoryRepository) CreateSession(ctx context.Context, digest Digest, ses
 	return true, nil
 }
 
-func (r *memoryRepository) GetSession(ctx context.Context, digest Digest) (Session, error) {
+func (r *memoryRepository) GetSession(ctx context.Context, digest Digest, audience Audience) (Session, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	session, exists := r.sessions[digest]
-	if !exists {
+	if !exists || session.Audience != audience {
 		return Session{}, ErrNotFound
 	}
 	return session, nil
 }
 
-func (r *memoryRepository) RefreshSession(ctx context.Context, digest Digest, expectedExpiresAt, newExpiresAt time.Time) (bool, error) {
+func (r *memoryRepository) RefreshSession(ctx context.Context, digest Digest, audience Audience, expectedExpiresAt, newExpiresAt time.Time) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	session, exists := r.sessions[digest]
-	if !exists || !session.ExpiresAt.Equal(expectedExpiresAt) {
+	if !exists || session.Audience != audience || !session.ExpiresAt.Equal(expectedExpiresAt) {
 		return false, nil
 	}
 	session.ExpiresAt = newExpiresAt
@@ -101,10 +101,12 @@ func (r *memoryRepository) RefreshSession(ctx context.Context, digest Digest, ex
 	return true, nil
 }
 
-func (r *memoryRepository) RevokeSession(ctx context.Context, digest Digest) error {
+func (r *memoryRepository) RevokeSession(ctx context.Context, digest Digest, audience Audience) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	delete(r.sessions, digest)
+	if session, exists := r.sessions[digest]; exists && session.Audience == audience {
+		delete(r.sessions, digest)
+	}
 	return nil
 }
 
@@ -149,15 +151,15 @@ func (f failingRepository) CreateSession(context.Context, Digest, Session, time.
 	return false, f.err
 }
 
-func (f failingRepository) GetSession(context.Context, Digest) (Session, error) {
+func (f failingRepository) GetSession(context.Context, Digest, Audience) (Session, error) {
 	return Session{}, f.err
 }
 
-func (f failingRepository) RefreshSession(context.Context, Digest, time.Time, time.Time) (bool, error) {
+func (f failingRepository) RefreshSession(context.Context, Digest, Audience, time.Time, time.Time) (bool, error) {
 	return false, f.err
 }
 
-func (f failingRepository) RevokeSession(context.Context, Digest) error {
+func (f failingRepository) RevokeSession(context.Context, Digest, Audience) error {
 	return f.err
 }
 
@@ -176,7 +178,7 @@ type revokeFailingRepository struct {
 	err error
 }
 
-func (f revokeFailingRepository) RevokeSession(context.Context, Digest) error {
+func (f revokeFailingRepository) RevokeSession(context.Context, Digest, Audience) error {
 	return f.err
 }
 
@@ -187,7 +189,7 @@ type refreshFailingRepository struct {
 	err error
 }
 
-func (f refreshFailingRepository) RefreshSession(context.Context, Digest, time.Time, time.Time) (bool, error) {
+func (f refreshFailingRepository) RefreshSession(context.Context, Digest, Audience, time.Time, time.Time) (bool, error) {
 	return false, f.err
 }
 
@@ -200,8 +202,8 @@ type refreshLoserRepository struct {
 	winnerExpiry time.Time
 }
 
-func (r refreshLoserRepository) RefreshSession(ctx context.Context, digest Digest, expectedExpiresAt, _ time.Time) (bool, error) {
-	if _, err := r.Repository.RefreshSession(ctx, digest, expectedExpiresAt, r.winnerExpiry); err != nil {
+func (r refreshLoserRepository) RefreshSession(ctx context.Context, digest Digest, audience Audience, expectedExpiresAt, _ time.Time) (bool, error) {
+	if _, err := r.Repository.RefreshSession(ctx, digest, AudienceWeb, expectedExpiresAt, r.winnerExpiry); err != nil {
 		return false, err
 	}
 	return false, nil
@@ -214,16 +216,16 @@ type casMissRepository struct {
 	reads int
 }
 
-func (c *casMissRepository) RefreshSession(context.Context, Digest, time.Time, time.Time) (bool, error) {
+func (c *casMissRepository) RefreshSession(context.Context, Digest, Audience, time.Time, time.Time) (bool, error) {
 	return false, nil
 }
 
-func (c *casMissRepository) GetSession(ctx context.Context, digest Digest) (Session, error) {
+func (c *casMissRepository) GetSession(ctx context.Context, digest Digest, audience Audience) (Session, error) {
 	c.reads++
 	if c.reads >= 2 {
 		return Session{}, ErrNotFound
 	}
-	return c.Repository.GetSession(ctx, digest)
+	return c.Repository.GetSession(ctx, digest, AudienceWeb)
 }
 
 func TestNewValidatesConfiguration(t *testing.T) {
@@ -311,7 +313,7 @@ func TestCreateProducesIndependent256BitTokens(t *testing.T) {
 	clock := &testClock{now: time.Unix(100, 0)}
 	store := newTestStore(t, clock, tokenData(0, 1), time.Hour, time.Minute, 1)
 
-	sid, session, err := store.Create(ctx)
+	sid, session, err := store.Create(ctx, AudienceWeb)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -338,7 +340,7 @@ func TestCreateProducesIndependent256BitTokens(t *testing.T) {
 
 	originalCSRF := session.CSRFToken
 	session.CSRFToken = "changed"
-	stored, renewed, err := store.Get(ctx, sid)
+	stored, renewed, err := store.Get(ctx, sid, AudienceWeb)
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
@@ -355,12 +357,12 @@ func TestGetExpiresAtAbsoluteBoundaryWithoutSliding(t *testing.T) {
 	clock := &testClock{now: time.Unix(100, 0)}
 	store := newTestStore(t, clock, tokenData(1, 2), time.Hour, 50*time.Minute, 1)
 
-	sid, created, err := store.Create(ctx)
+	sid, created, err := store.Create(ctx, AudienceWeb)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 	clock.Advance(30 * time.Minute)
-	got, renewed, err := store.Get(ctx, sid)
+	got, renewed, err := store.Get(ctx, sid, AudienceWeb)
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
@@ -371,7 +373,7 @@ func TestGetExpiresAtAbsoluteBoundaryWithoutSliding(t *testing.T) {
 		t.Fatalf("Get() slid expiry from %v to %v", created.ExpiresAt, got.ExpiresAt)
 	}
 	clock.Advance(30 * time.Minute)
-	if _, _, err := store.Get(ctx, sid); !errors.Is(err, ErrNotFound) {
+	if _, _, err := store.Get(ctx, sid, AudienceWeb); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Get() at expiry boundary = (%v), want ErrNotFound", err)
 	}
 	if got, err := store.Len(ctx); err != nil || got != 0 {
@@ -383,18 +385,18 @@ func TestGetRejectsMalformedSID(t *testing.T) {
 	ctx := context.Background()
 	clock := &testClock{now: time.Unix(100, 0)}
 	store := newTestStore(t, clock, tokenData(1, 2), time.Hour, time.Minute, 1)
-	sid, _, err := store.Create(ctx)
+	sid, _, err := store.Create(ctx, AudienceWeb)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 
 	malformed := []string{"", sid[:42], sid + "A", "!" + sid[1:], sid[:42] + "B"}
 	for _, candidate := range malformed {
-		if _, _, err := store.Get(ctx, candidate); !errors.Is(err, ErrNotFound) {
+		if _, _, err := store.Get(ctx, candidate, AudienceWeb); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("Get(%q) error = %v, want ErrNotFound", candidate, err)
 		}
 	}
-	if _, _, err := store.Get(ctx, sid); err != nil {
+	if _, _, err := store.Get(ctx, sid, AudienceWeb); err != nil {
 		t.Fatal("Get() removed the valid session while handling malformed SIDs")
 	}
 }
@@ -403,18 +405,18 @@ func TestRevokeIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	clock := &testClock{now: time.Unix(100, 0)}
 	store := newTestStore(t, clock, tokenData(1, 2), time.Hour, time.Minute, 1)
-	sid, _, err := store.Create(ctx)
+	sid, _, err := store.Create(ctx, AudienceWeb)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	if err := store.Revoke(ctx, sid); err != nil {
+	if err := store.Revoke(ctx, sid, AudienceWeb); err != nil {
 		t.Fatalf("Revoke() error = %v", err)
 	}
-	if err := store.Revoke(ctx, sid); err != nil {
+	if err := store.Revoke(ctx, sid, AudienceWeb); err != nil {
 		t.Fatalf("second Revoke() error = %v", err)
 	}
-	if _, _, err := store.Get(ctx, sid); !errors.Is(err, ErrNotFound) {
+	if _, _, err := store.Get(ctx, sid, AudienceWeb); !errors.Is(err, ErrNotFound) {
 		t.Fatal("Get() returned a revoked session")
 	}
 	if got, err := store.Len(ctx); err != nil || got != 0 {
@@ -426,26 +428,26 @@ func TestCreateEvictsEarliestExpiry(t *testing.T) {
 	ctx := context.Background()
 	clock := &testClock{now: time.Unix(100, 0)}
 	store := newTestStore(t, clock, tokenData(2, 20, 3, 30, 4, 40), time.Hour, time.Minute, 2)
-	firstSID, _, err := store.Create(ctx)
+	firstSID, _, err := store.Create(ctx, AudienceWeb)
 	if err != nil {
 		t.Fatalf("first Create() error = %v", err)
 	}
 	clock.Advance(time.Minute)
-	secondSID, _, err := store.Create(ctx)
+	secondSID, _, err := store.Create(ctx, AudienceWeb)
 	if err != nil {
 		t.Fatalf("second Create() error = %v", err)
 	}
-	thirdSID, _, err := store.Create(ctx)
+	thirdSID, _, err := store.Create(ctx, AudienceWeb)
 	if err != nil {
 		t.Fatalf("third Create() error = %v", err)
 	}
-	if _, _, err := store.Get(ctx, firstSID); !errors.Is(err, ErrNotFound) {
+	if _, _, err := store.Get(ctx, firstSID, AudienceWeb); !errors.Is(err, ErrNotFound) {
 		t.Fatal("Create() retained the session with earliest expiry")
 	}
-	if _, _, err := store.Get(ctx, secondSID); err != nil {
+	if _, _, err := store.Get(ctx, secondSID, AudienceWeb); err != nil {
 		t.Fatal("Create() evicted a later-expiring session")
 	}
-	if _, _, err := store.Get(ctx, thirdSID); err != nil {
+	if _, _, err := store.Get(ctx, thirdSID, AudienceWeb); err != nil {
 		t.Fatal("Create() did not retain the new session")
 	}
 }
@@ -455,7 +457,7 @@ func TestPurgeExpiredReturnsRemovalCount(t *testing.T) {
 	clock := &testClock{now: time.Unix(100, 0)}
 	store := newTestStore(t, clock, tokenData(1, 11, 2, 12, 3, 13), time.Minute, time.Second, 3)
 	for range 3 {
-		if _, _, err := store.Create(ctx); err != nil {
+		if _, _, err := store.Create(ctx, AudienceWeb); err != nil {
 			t.Fatalf("Create() error = %v", err)
 		}
 	}
@@ -472,13 +474,13 @@ func TestGetRefreshesAtThresholdAndNotBefore(t *testing.T) {
 	ctx := context.Background()
 	clock := &testClock{now: time.Unix(100, 0)}
 	store := newTestStore(t, clock, tokenData(1, 2), time.Hour, 10*time.Minute, 1)
-	sid, created, err := store.Create(ctx)
+	sid, created, err := store.Create(ctx, AudienceWeb)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 
 	clock.Advance(9 * time.Minute)
-	got, renewed, err := store.Get(ctx, sid)
+	got, renewed, err := store.Get(ctx, sid, AudienceWeb)
 	if err != nil {
 		t.Fatalf("Get() before threshold error = %v", err)
 	}
@@ -487,7 +489,7 @@ func TestGetRefreshesAtThresholdAndNotBefore(t *testing.T) {
 	}
 
 	clock.Advance(time.Minute)
-	got, renewed, err = store.Get(ctx, sid)
+	got, renewed, err = store.Get(ctx, sid, AudienceWeb)
 	if err != nil {
 		t.Fatalf("Get() at threshold error = %v", err)
 	}
@@ -500,7 +502,7 @@ func TestGetRefreshesAtThresholdAndNotBefore(t *testing.T) {
 	}
 
 	clock.Advance(5 * time.Minute)
-	got, renewed, err = store.Get(ctx, sid)
+	got, renewed, err = store.Get(ctx, sid, AudienceWeb)
 	if err != nil {
 		t.Fatalf("Get() after refresh error = %v", err)
 	}
@@ -509,7 +511,7 @@ func TestGetRefreshesAtThresholdAndNotBefore(t *testing.T) {
 	}
 
 	clock.Advance(5 * time.Minute)
-	got, renewed, err = store.Get(ctx, sid)
+	got, renewed, err = store.Get(ctx, sid, AudienceWeb)
 	if err != nil {
 		t.Fatalf("Get() at second threshold error = %v", err)
 	}
@@ -528,13 +530,13 @@ func TestGetRefreshCASSMissReturnsAuthoritativeRecord(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	sid, _, err := store.Create(ctx)
+	sid, _, err := store.Create(ctx, AudienceWeb)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 	clock.Advance(15 * time.Minute)
 	repository.winnerExpiry = clock.Now().Add(time.Hour)
-	got, renewed, err := store.Get(ctx, sid)
+	got, renewed, err := store.Get(ctx, sid, AudienceWeb)
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
@@ -554,12 +556,12 @@ func TestGetRefreshCASSMissWithMissingReread(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	sid, _, err := store.Create(ctx)
+	sid, _, err := store.Create(ctx, AudienceWeb)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 	clock.Advance(15 * time.Minute)
-	if _, _, err := store.Get(ctx, sid); !errors.Is(err, ErrNotFound) {
+	if _, _, err := store.Get(ctx, sid, AudienceWeb); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Get() after CAS miss with vanished record = %v, want ErrNotFound", err)
 	}
 }
@@ -572,15 +574,15 @@ func TestGetDeletesExpiredRecordBeforeNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	sid, _, err := store.Create(ctx)
+	sid, _, err := store.Create(ctx, AudienceWeb)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 	clock.Advance(time.Hour)
-	if _, _, err := store.Get(ctx, sid); !errors.Is(err, ErrNotFound) {
+	if _, _, err := store.Get(ctx, sid, AudienceWeb); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Get() on expired session = %v, want ErrNotFound", err)
 	}
-	if _, err := repository.GetSession(ctx, hashSID(sid)); !errors.Is(err, ErrNotFound) {
+	if _, err := repository.GetSession(ctx, hashSID(sid), AudienceWeb); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expired record still persisted after Get(), want ErrNotFound, got %v", err)
 	}
 }
@@ -594,13 +596,13 @@ func TestRepositoryErrorsPropagate(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	if _, _, err := store.Create(ctx); !errors.Is(err, repositoryErr) {
+	if _, _, err := store.Create(ctx, AudienceWeb); !errors.Is(err, repositoryErr) {
 		t.Fatalf("Create() error = %v, want repository error", err)
 	}
-	if _, _, err := store.Get(ctx, tokenString(1)); !errors.Is(err, repositoryErr) {
+	if _, _, err := store.Get(ctx, tokenString(1), AudienceWeb); !errors.Is(err, repositoryErr) {
 		t.Fatalf("Get() error = %v, want repository error", err)
 	}
-	if err := store.Revoke(ctx, tokenString(1)); !errors.Is(err, repositoryErr) {
+	if err := store.Revoke(ctx, tokenString(1), AudienceWeb); !errors.Is(err, repositoryErr) {
 		t.Fatalf("Revoke() error = %v, want repository error", err)
 	}
 	if _, err := store.PurgeExpired(ctx); !errors.Is(err, repositoryErr) {
@@ -620,12 +622,12 @@ func TestGetExpiredRecordDeletionFailureIsReturned(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	sid, _, err := store.Create(ctx)
+	sid, _, err := store.Create(ctx, AudienceWeb)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 	clock.Advance(time.Hour)
-	if _, _, err := store.Get(ctx, sid); !errors.Is(err, repositoryErr) {
+	if _, _, err := store.Get(ctx, sid, AudienceWeb); !errors.Is(err, repositoryErr) {
 		t.Fatalf("Get() deletion failure = %v, want repository error", err)
 	}
 }
@@ -639,12 +641,12 @@ func TestGetRefreshFailureIsReturned(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	sid, _, err := store.Create(ctx)
+	sid, _, err := store.Create(ctx, AudienceWeb)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 	clock.Advance(15 * time.Minute)
-	if _, _, err := store.Get(ctx, sid); !errors.Is(err, repositoryErr) {
+	if _, _, err := store.Get(ctx, sid, AudienceWeb); !errors.Is(err, repositoryErr) {
 		t.Fatalf("Get() refresh failure = %v, want repository error", err)
 	}
 }
@@ -653,11 +655,11 @@ func TestCreateRetriesSIDCollisionsAndFailsAfterThreeAttempts(t *testing.T) {
 	ctx := context.Background()
 	clock := &testClock{now: time.Unix(100, 0)}
 	store := newTestStore(t, clock, tokenData(1, 11, 1, 12, 2, 13), time.Hour, time.Minute, 2)
-	originalSID, _, err := store.Create(ctx)
+	originalSID, _, err := store.Create(ctx, AudienceWeb)
 	if err != nil {
 		t.Fatalf("initial Create() error = %v", err)
 	}
-	newSID, session, err := store.Create(ctx)
+	newSID, session, err := store.Create(ctx, AudienceWeb)
 	if err != nil {
 		t.Fatalf("retrying Create() error = %v", err)
 	}
@@ -669,10 +671,10 @@ func TestCreateRetriesSIDCollisionsAndFailsAfterThreeAttempts(t *testing.T) {
 	}
 
 	store = newTestStore(t, clock, tokenData(9, 19, 9, 20, 9, 21, 9, 22), time.Hour, time.Minute, 2)
-	if _, _, err := store.Create(ctx); err != nil {
+	if _, _, err := store.Create(ctx, AudienceWeb); err != nil {
 		t.Fatalf("initial Create() error = %v", err)
 	}
-	if _, _, err := store.Create(ctx); !errors.Is(err, errSIDCollision) {
+	if _, _, err := store.Create(ctx, AudienceWeb); !errors.Is(err, errSIDCollision) {
 		t.Fatalf("Create() collision error = %v, want %v", err, errSIDCollision)
 	}
 }
@@ -682,13 +684,13 @@ func TestCreatePropagatesShortReadAndRandomError(t *testing.T) {
 	clock := &testClock{now: time.Unix(100, 0)}
 
 	shortStore := newTestStore(t, clock, bytes.NewReader(bytes.Repeat([]byte{1}, tokenBytes-1)), time.Hour, time.Minute, 1)
-	if _, _, err := shortStore.Create(ctx); !errors.Is(err, io.ErrUnexpectedEOF) {
+	if _, _, err := shortStore.Create(ctx, AudienceWeb); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("Create() short-read error = %v, want %v", err, io.ErrUnexpectedEOF)
 	}
 
 	randomErr := errors.New("random reader failed")
 	errorStore := newTestStore(t, clock, errorReader{err: randomErr}, time.Hour, time.Minute, 1)
-	if _, _, err := errorStore.Create(ctx); !errors.Is(err, randomErr) {
+	if _, _, err := errorStore.Create(ctx, AudienceWeb); !errors.Is(err, randomErr) {
 		t.Fatalf("Create() random error = %v, want %v", err, randomErr)
 	}
 }
@@ -706,27 +708,50 @@ func TestStoreConcurrentCreateGetAndRevoke(t *testing.T) {
 		go func() {
 			defer group.Done()
 			for range iterations {
-				sid, _, err := store.Create(ctx)
+				sid, _, err := store.Create(ctx, AudienceWeb)
 				if err != nil {
 					t.Errorf("Create() error = %v", err)
 					return
 				}
-				if _, _, err := store.Get(ctx, sid); err != nil {
+				if _, _, err := store.Get(ctx, sid, AudienceWeb); err != nil {
 					t.Errorf("Get() error = %v", err)
 					return
 				}
-				if err := store.Revoke(ctx, sid); err != nil {
+				if err := store.Revoke(ctx, sid, AudienceWeb); err != nil {
 					t.Errorf("Revoke() error = %v", err)
 					return
 				}
-				if _, _, err := store.Get(ctx, sid); !errors.Is(err, ErrNotFound) {
+				if _, _, err := store.Get(ctx, sid, AudienceWeb); !errors.Is(err, ErrNotFound) {
 					t.Errorf("Get() after Revoke() = %v, want ErrNotFound", err)
 					return
 				}
 			}
+
 		}()
 	}
 	group.Wait()
+}
+func TestAudienceIsolation(t *testing.T) {
+	ctx := context.Background()
+	clock := &testClock{now: time.Unix(100, 0)}
+	store := newTestStore(t, clock, tokenData(1, 2, 3), time.Hour, time.Minute, 4)
+	sid, _, err := store.Create(ctx, AudienceWeb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Get(ctx, sid, AudienceQBT); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("qB audience accepted web SID: %v", err)
+	}
+	qbtSID, current, err := store.Create(ctx, AudienceQBT)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.CSRFToken != "" {
+		t.Fatal("qB session unexpectedly has CSRF token")
+	}
+	if _, _, err := store.Get(ctx, qbtSID, AudienceWeb); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("web audience accepted qB SID: %v", err)
+	}
 }
 
 func newTestStore(t *testing.T, clock Clock, random io.Reader, ttl, refreshInterval time.Duration, capacity int) *Store {

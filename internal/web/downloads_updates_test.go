@@ -27,7 +27,7 @@ type testUpdateRow struct {
 func fixtureRequest(fixture *webFixture, method, target string, headers map[string]string) *httptest.ResponseRecorder {
 	fixture.t.Helper()
 	request := httptest.NewRequest(method, target, nil)
-	request.AddCookie(&http.Cookie{Name: "SID", Value: fixture.sid})
+	request.AddCookie(&http.Cookie{Name: "CD211_SESSION", Value: fixture.sid})
 	for name, value := range headers {
 		request.Header.Set(name, value)
 	}

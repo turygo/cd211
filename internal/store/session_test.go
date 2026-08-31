@@ -52,7 +52,7 @@ func TestSessionReopenPersistence(t *testing.T) {
 		t.Fatalf("Open(first) error = %v", err)
 	}
 	sessions := openSessionStore(t, first, clock, 8)
-	sid, current, err := sessions.Create(ctx)
+	sid, current, err := sessions.Create(ctx, session.AudienceWeb)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -71,7 +71,7 @@ func TestSessionReopenPersistence(t *testing.T) {
 	})
 	reopened := openSessionStore(t, second, clock, 8)
 
-	got, renewed, err := reopened.Get(ctx, sid)
+	got, renewed, err := reopened.Get(ctx, sid, session.AudienceWeb)
 	if err != nil {
 		t.Fatalf("Get() after reopen error = %v", err)
 	}
@@ -89,7 +89,7 @@ func TestSessionExpiryPurge(t *testing.T) {
 	clock := &sessionTestClock{now: time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)}
 	sessions := openSessionStore(t, store, clock, 8)
 	for range 3 {
-		if _, _, err := sessions.Create(ctx); err != nil {
+		if _, _, err := sessions.Create(ctx, session.AudienceWeb); err != nil {
 			t.Fatalf("Create() error = %v", err)
 		}
 	}
@@ -115,18 +115,18 @@ func TestSessionRefreshCAS(t *testing.T) {
 	store := testStore(t)
 	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
 	digest := session.Digest{1}
-	created := session.Session{CSRFToken: "csrf-token", CreatedAt: now, ExpiresAt: now.Add(24 * time.Hour)}
+	created := session.Session{Audience: session.AudienceWeb, CSRFToken: "csrf-token", CreatedAt: now, ExpiresAt: now.Add(24 * time.Hour)}
 	inserted, err := store.CreateSession(ctx, digest, created, now, 4)
 	if err != nil || !inserted {
 		t.Fatalf("CreateSession() = (%t, %v), want inserted", inserted, err)
 	}
 
 	renewedAt := now.Add(48 * time.Hour)
-	updated, err := store.RefreshSession(ctx, digest, created.ExpiresAt, renewedAt)
+	updated, err := store.RefreshSession(ctx, digest, session.AudienceWeb, created.ExpiresAt, renewedAt)
 	if err != nil || !updated {
 		t.Fatalf("RefreshSession() = (%t, %v), want updated", updated, err)
 	}
-	got, err := store.GetSession(ctx, digest)
+	got, err := store.GetSession(ctx, digest, session.AudienceWeb)
 	if err != nil {
 		t.Fatalf("GetSession() error = %v", err)
 	}
@@ -134,16 +134,16 @@ func TestSessionRefreshCAS(t *testing.T) {
 		t.Fatalf("refreshed session = %+v, want new expiry with preserved identity", got)
 	}
 
-	updated, err = store.RefreshSession(ctx, digest, created.ExpiresAt, now.Add(72*time.Hour))
+	updated, err = store.RefreshSession(ctx, digest, session.AudienceWeb, created.ExpiresAt, now.Add(72*time.Hour))
 	if err != nil || updated {
 		t.Fatalf("stale RefreshSession() = (%t, %v), want miss", updated, err)
 	}
-	got, err = store.GetSession(ctx, digest)
+	got, err = store.GetSession(ctx, digest, session.AudienceWeb)
 	if err != nil || !got.ExpiresAt.Equal(renewedAt) {
 		t.Fatalf("session after stale CAS = (%+v, %v), want unchanged expiry", got, err)
 	}
 
-	updated, err = store.RefreshSession(ctx, digest, renewedAt, now.Add(72*time.Hour))
+	updated, err = store.RefreshSession(ctx, digest, session.AudienceWeb, renewedAt, now.Add(72*time.Hour))
 	if err != nil || !updated {
 		t.Fatalf("follow-up RefreshSession() = (%t, %v), want updated", updated, err)
 	}
@@ -154,18 +154,18 @@ func TestSessionRevocation(t *testing.T) {
 	store := testStore(t)
 	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
 	digest := session.Digest{2}
-	inserted, err := store.CreateSession(ctx, digest, session.Session{CSRFToken: "csrf", CreatedAt: now, ExpiresAt: now.Add(time.Hour)}, now, 4)
+	inserted, err := store.CreateSession(ctx, digest, session.Session{Audience: session.AudienceWeb, CSRFToken: "csrf", CreatedAt: now, ExpiresAt: now.Add(time.Hour)}, now, 4)
 	if err != nil || !inserted {
 		t.Fatalf("CreateSession() = (%t, %v), want inserted", inserted, err)
 	}
 
-	if err := store.RevokeSession(ctx, digest); err != nil {
+	if err := store.RevokeSession(ctx, digest, session.AudienceWeb); err != nil {
 		t.Fatalf("RevokeSession() error = %v", err)
 	}
-	if _, err := store.GetSession(ctx, digest); !errors.Is(err, session.ErrNotFound) {
+	if _, err := store.GetSession(ctx, digest, session.AudienceWeb); !errors.Is(err, session.ErrNotFound) {
 		t.Fatalf("GetSession() after revoke = %v, want ErrNotFound", err)
 	}
-	if err := store.RevokeSession(ctx, digest); err != nil {
+	if err := store.RevokeSession(ctx, digest, session.AudienceWeb); err != nil {
 		t.Fatalf("idempotent RevokeSession() error = %v", err)
 	}
 	if count, err := store.CountSessions(ctx); err != nil || count != 0 {
@@ -178,20 +178,20 @@ func TestSessionCapacityEviction(t *testing.T) {
 	insert := func(t *testing.T, store *Store, digest session.Digest, created, expires time.Time) {
 		t.Helper()
 		inserted, err := store.CreateSession(context.Background(), digest,
-			session.Session{CSRFToken: "csrf", CreatedAt: created, ExpiresAt: expires}, created, 2)
+			session.Session{Audience: session.AudienceWeb, CSRFToken: "csrf", CreatedAt: created, ExpiresAt: expires}, created, 2)
 		if err != nil || !inserted {
 			t.Fatalf("CreateSession() = (%t, %v), want inserted", inserted, err)
 		}
 	}
 	assertGone := func(t *testing.T, store *Store, digest session.Digest) {
 		t.Helper()
-		if _, err := store.GetSession(context.Background(), digest); !errors.Is(err, session.ErrNotFound) {
+		if _, err := store.GetSession(context.Background(), digest, session.AudienceWeb); !errors.Is(err, session.ErrNotFound) {
 			t.Fatalf("GetSession(evicted) = %v, want ErrNotFound", err)
 		}
 	}
 	assertPresent := func(t *testing.T, store *Store, digest session.Digest) {
 		t.Helper()
-		if _, err := store.GetSession(context.Background(), digest); err != nil {
+		if _, err := store.GetSession(context.Background(), digest, session.AudienceWeb); err != nil {
 			t.Fatalf("GetSession(retained) = %v, want present", err)
 		}
 	}
@@ -233,7 +233,7 @@ func TestSessionCapacityEviction(t *testing.T) {
 		insert(t, store, session.Digest{0x11}, now, now.Add(time.Hour))
 		insert(t, store, session.Digest{0x22}, now, now.Add(time.Hour))
 		inserted, err := store.CreateSession(ctx, session.Digest{0x11},
-			session.Session{CSRFToken: "csrf", CreatedAt: now, ExpiresAt: now.Add(time.Hour)}, now, 2)
+			session.Session{Audience: session.AudienceWeb, CSRFToken: "csrf", CreatedAt: now, ExpiresAt: now.Add(time.Hour)}, now, 2)
 		if err != nil || inserted {
 			t.Fatalf("colliding CreateSession() = (%t, %v), want not inserted", inserted, err)
 		}
@@ -250,7 +250,7 @@ func TestSessionDigestOnlyStorage(t *testing.T) {
 	store := testStore(t)
 	clock := &sessionTestClock{now: time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)}
 	sessions := openSessionStore(t, store, clock, 4)
-	sid, current, err := sessions.Create(ctx)
+	sid, current, err := sessions.Create(ctx, session.AudienceWeb)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -301,8 +301,8 @@ func TestSessionPersistedRecordValidation(t *testing.T) {
 			t.Fatalf("enable ignored check constraints: %v", err)
 		}
 		if _, err := store.db.ExecContext(ctx,
-			"INSERT INTO sessions (sid_digest, csrf_token, created_at, expires_at) VALUES (?, ?, ?, ?)",
-			digest, csrf, created, expires); err != nil {
+			"INSERT INTO sessions (sid_digest, audience, csrf_token, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+			digest, string(session.AudienceWeb), csrf, created, expires); err != nil {
 			t.Fatalf("insert corrupt session row: %v", err)
 		}
 		if _, err := store.db.ExecContext(ctx, "PRAGMA ignore_check_constraints = OFF"); err != nil {
@@ -313,14 +313,14 @@ func TestSessionPersistedRecordValidation(t *testing.T) {
 	var emptyCSRF session.Digest
 	emptyCSRF[0] = 0x51
 	corruptInsert(emptyCSRF[:], "", now, now.Add(time.Hour))
-	if _, err := store.GetSession(ctx, emptyCSRF); err == nil || !strings.Contains(err.Error(), "stored session is invalid") {
+	if _, err := store.GetSession(ctx, emptyCSRF, session.AudienceWeb); err == nil || !strings.Contains(err.Error(), "stored session is invalid") {
 		t.Fatalf("GetSession(empty CSRF) = %v, want invalid stored session", err)
 	}
 
 	var staleExpiry session.Digest
 	staleExpiry[0] = 0x52
 	corruptInsert(staleExpiry[:], "csrf", now, now)
-	if _, err := store.GetSession(ctx, staleExpiry); err == nil || !strings.Contains(err.Error(), "stored session is invalid") {
+	if _, err := store.GetSession(ctx, staleExpiry, session.AudienceWeb); err == nil || !strings.Contains(err.Error(), "stored session is invalid") {
 		t.Fatalf("GetSession(expiry at creation) = %v, want invalid stored session", err)
 	}
 }

@@ -31,8 +31,8 @@ func TestAPITokenGenerateDisplayRevokeLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAPIToken() error = %v", err)
 	}
-	if info.Secret != first || info.RowVersion != 0 || !info.CreatedAt.Equal(now) || !info.UpdatedAt.Equal(now) {
-		t.Errorf("initial token = %+v, want persisted secret and version 0", info)
+	if info.RowVersion != 0 || !info.CreatedAt.Equal(now) || !info.UpdatedAt.Equal(now) {
+		t.Errorf("initial token = %+v, want metadata and version 0", info)
 	}
 	if info.Hint != "cd211_api_…"+string(first[len(first)-6:]) {
 		t.Errorf("hint = %q, want prefix + ellipsis + final 6 characters", info.Hint)
@@ -54,7 +54,7 @@ func TestAPITokenGenerateDisplayRevokeLifecycle(t *testing.T) {
 		t.Errorf("revoke absent error = %v, want idempotent success", err)
 	}
 
-	second, err := store.GenerateAPIToken(ctx, now.Add(2*time.Hour))
+	_, err = store.GenerateAPIToken(ctx, now.Add(2*time.Hour))
 	if err != nil {
 		t.Fatalf("generate after revoke error = %v", err)
 	}
@@ -62,15 +62,15 @@ func TestAPITokenGenerateDisplayRevokeLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAPIToken() after regenerate: %v", err)
 	}
-	if current.Secret != second || current.RowVersion != 0 {
-		t.Errorf("regenerated token = %+v, want new persisted secret and version 0", current)
+	if current.RowVersion != 0 {
+		t.Errorf("regenerated token = %+v, want new metadata and version 0", current)
 	}
 	if err := store.RevokeAPIToken(ctx, 1); !errors.Is(err, token.ErrConflict) {
 		t.Errorf("stale revoke error = %v, want token.ErrConflict", err)
 	}
 }
 
-func TestAPITokenPersistsSecretAndDigest(t *testing.T) {
+func TestAPITokenStoresDigestOnly(t *testing.T) {
 	ctx := context.Background()
 	store := testStore(t)
 	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
@@ -79,24 +79,15 @@ func TestAPITokenPersistsSecretAndDigest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateAPIToken() error = %v", err)
 	}
-	var (
-		rawHash   []byte
-		rawSecret string
-		hint      string
-	)
-	if err := store.db.QueryRowContext(ctx, "SELECT token_hash, token_secret, token_hint FROM api_token WHERE id = 1").Scan(&rawHash, &rawSecret, &hint); err != nil {
+	var rawHash []byte
+	var hint string
+	if err := store.db.QueryRowContext(ctx, "SELECT token_hash, token_hint FROM api_token WHERE id = 1").Scan(&rawHash, &hint); err != nil {
 		t.Fatalf("read api_token row: %v", err)
 	}
-	if rawSecret != string(secret) {
-		t.Errorf("stored token_secret = %q, want generated secret", rawSecret)
+	if string(rawHash) == string(secret) || !bytes.Equal(rawHash, token.Hash(secret)) {
+		t.Fatal("api_token did not store only the SHA-256 digest")
 	}
-	if bytes.Equal(rawHash, []byte(secret)) {
-		t.Fatal("api_token stored the plaintext token as token_hash")
-	}
-	if !bytes.Equal(rawHash, token.Hash(secret)) {
-		t.Error("stored token_hash is not the SHA-256 digest of the secret")
-	}
-	if hint != "cd211_api_…"+string(secret[len(secret)-6:]) {
+	if hint != token.Hint(secret) {
 		t.Errorf("stored hint = %q, want the display hint", hint)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/turygo/cd211/internal/qbtkey"
@@ -18,29 +19,28 @@ func generateQBTAPIKeyThroughUI(t *testing.T, fixture *webFixture) string {
 	requireAbsent(t, page.Body.String(), "qbt_")
 
 	response := fixture.post("/settings/qbt-api-key/generate", nil)
-	requireStatus(t, response, http.StatusSeeOther)
-	if got := response.Header().Get("Location"); got != "/settings" {
-		t.Fatalf("generate Location = %q, want /settings", got)
+	requireStatus(t, response, http.StatusOK)
+	body := response.Body.String()
+	start := strings.Index(body, "qbt_")
+	if start < 0 {
+		t.Fatal("generation response omitted qBittorrent key")
 	}
-	info, err := fixture.store.GetQBTAPIKey(context.Background())
-	if err != nil {
-		t.Fatalf("GetQBTAPIKey(): %v", err)
+	end := start
+	for end < len(body) && !strings.ContainsAny(body[end:end+1], "<\"' ") {
+		end++
 	}
-	if !qbtkey.Valid(info.Secret) {
-		t.Fatalf("persisted qbt key %q is invalid", info.Secret)
-	}
-	return string(info.Secret)
+	return body[start:end]
 }
 
-func TestQBTAPIKeyGeneratePersistsAndSettingsAlwaysDisplays(t *testing.T) {
+func TestQBTAPIKeyGeneratePersistsAndSettingsHidesPlaintext(t *testing.T) {
 	fixture := newWebFixture(t)
 	secret := generateQBTAPIKeyThroughUI(t, fixture)
 	info, err := fixture.store.GetQBTAPIKey(context.Background())
 	if err != nil {
 		t.Fatalf("GetQBTAPIKey(): %v", err)
 	}
-	if info.Secret != qbtkey.Secret(secret) || info.RowVersion != 0 || info.CreatedAt.IsZero() || !info.CreatedAt.Equal(info.UpdatedAt) {
-		t.Errorf("stored qbt key = %+v, want persisted secret and version 0", info)
+	if info.RowVersion != 0 || info.CreatedAt.IsZero() || !info.CreatedAt.Equal(info.UpdatedAt) {
+		t.Errorf("stored qbt key = %+v, want digest metadata and version 0", info)
 	}
 	page := fixture.request(http.MethodGet, "/settings", nil, true)
 	requireStatus(t, page, http.StatusOK)
@@ -48,8 +48,8 @@ func TestQBTAPIKeyGeneratePersistsAndSettingsAlwaysDisplays(t *testing.T) {
 		t.Errorf("settings Cache-Control = %q, want no-store", got)
 	}
 	body := page.Body.String()
-	requireContains(t, body, secret, tr(LangEN).QBTAPIKeyGeneratedLabel, `data-copy-value="`+secret+`"`, `action="/settings/qbt-api-key/revoke"`, "qBittorrent API key")
-	requireAbsent(t, body, info.Hint, "First configured", "Key hint", `action="/settings/qbt-api-key/rotate"`, "Rotate key", "sha256", "qbt_api_key")
+	requireContains(t, body, info.Hint, tr(LangEN).QBTAPIKeySecretUnavailable, `action="/settings/qbt-api-key/revoke"`, "qBittorrent API key")
+	requireAbsent(t, body, secret, "First configured", "Key hint", `action="/settings/qbt-api-key/rotate"`, "Rotate key", "sha256", "qbt_api_key")
 }
 
 func TestQBTAPIKeyGenerateWhenPresentConflicts(t *testing.T) {
