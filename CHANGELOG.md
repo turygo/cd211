@@ -9,7 +9,13 @@ CD211 的所有重要变更均记录在此文件中。
 
 ### Changed
 
+### Fixed
+
+## [0.5.1] - 2026-08-31
+### Changed
+
 - 现已兼容 qBittorrent 5.0.0（WebAPI 2.11.0）的 102 个路由：支持的任务操作会持久化结果，BT-only 读取返回中性值，不支持的修改在参数校验通过后返回成功。
+
 ### Fixed
 
 - 修复 qBittorrent `torrents/add` 只能处理单个 URL 或文件来源的问题；现在兼容换行分隔的多个 URL、任意 multipart 文件字段，以及同一请求中混合提交 URL 和文件。
