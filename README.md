@@ -148,9 +148,9 @@ PGID=100
 
 独立的 `qbt_` 密钥可在设置页面生成和撤销。SQLite 同时保存其明文、SHA-256 摘要和末尾提示，认证设置页需要显示明文；每次请求都会读取摘要，因此撤销会立即生效。该密钥只授权 `/api/v2`；`cd211_api_` 令牌只授权 `/api/v1`。
 
-`/api/v2` 提供当前 ANI-RSS 所需的兼容子集：七个读接口同时接受 GET 和 POST；支持 `torrents/add`、`start`、标签、文件优先级、文件重命名、禁用自动管理及保存位置更新。该服务不是完整 qBittorrent，也不实现 BT 传输、做种、限速或 `/torrents/resume` 别名。
+`/api/v2` 提供 qBittorrent 5.0.0 / WebAPI 2.11.0 的完整 102 个路由（`torrents/export` 已注册但始终返回 `404`）。`torrents/add` 接受 qB 5.0 支持的 URL、磁力链接和 torrent 文件，成功返回 `Ok.`、全部失败返回 `Fails.`，无效 torrent 文件返回 `415`；可映射到 CD211 工作流的开始、停止、标签、分类、重命名、文件优先级和保存位置操作会持久化并遵守现有路径安全边界。
 
-兼容基线为 qBittorrent 5.0.0 / WebAPI 2.11.0 的 102 个路由，其中 CD211 实现 24 个。`log`、`rss`、`search`、`sync` 和 `transfer` 整组未实现；已实现路由也只投影 CD211 持有的数据：`app/preferences`、`torrents/info`、`properties` 和 `files` 不返回完整 qBittorrent 字段，`info` 仅处理 `category` 与 `filter`，自动管理只能禁用，保存位置只能在任务开始前改到已配置本地根目录内，`setShareLimits` 与 `topPrio` 是空操作。
+BT 传输、做种和其他不对应 CD211 工作流的读取返回 qB 形状的中性值；不支持的修改会先执行 qB 所需的参数校验，校验通过后返回成功且不伪造 BT 状态。`app/getDirectoryContent` 只列出已配置本地根目录下的绝对路径，并拒绝越界和符号链接逃逸。`torrents/recheck` 会将失败任务交给共享重试策略、对已完成任务重新执行本地校验，活动中或已停止的任务则幂等返回成功。
 
 ### 原生 API
 
