@@ -309,7 +309,6 @@ type Strings struct {
 	APITokenRevokeConfirm     string
 	APITokenRevoked           string
 	APITokenSecretLabel       string
-	APITokenSecretOnce        string
 	APITokenSecretUnavailable string
 
 	// qBittorrent-compatible API key (managed inside the Settings page)
@@ -323,9 +322,10 @@ type Strings struct {
 	QBTAPIKeyRevokeConfirm     string
 	QBTAPIKeyRevoked           string
 	QBTAPIKeySecretLabel       string
-	QBTAPIKeySecretOnce        string
 	QBTAPIKeySecretUnavailable string
 
+	CredentialShowButton string
+	CredentialHideButton string
 	CredentialCopyButton string
 	CredentialCopied     string
 	CredentialCopyFailed string
@@ -716,7 +716,7 @@ var stringsEN = Strings{
 	SettingsRemapTitle:        "Category path changes",
 	SettingsRemapHint:         "Changing either root keeps every category subfolder and previews its new full path below.",
 	SettingsSectionAPIToken:   "Automation API token",
-	APITokenLede:              "Automation clients authenticate with this token. The full value is shown only in the response immediately after generation.",
+	APITokenLede:              "Automation clients authenticate with this token. Saved tokens can be shown or copied here whenever needed.",
 	APITokenConfigured:        "An API token is configured. Send it as the Authorization: Bearer header.",
 	APITokenNotConfigured:     "No API token is configured. Generate one to enable automation API access.",
 	APITokenGeneratedLabel:    "Token generated",
@@ -725,11 +725,10 @@ var stringsEN = Strings{
 	APITokenRevokeConfirm:     "Revoke the API token? Automation API access stops immediately until a new token is generated.",
 	APITokenRevoked:           "API token revoked.",
 	APITokenSecretLabel:       "Bearer token",
-	APITokenSecretOnce:        "Copy this value now. It will not be shown again.",
-	APITokenSecretUnavailable: "The token is not shown after generation. Generate a new token after revoking it if you lost the value.",
+	APITokenSecretUnavailable: "This legacy token still works, but its full value cannot be recovered. Revoke it and generate a new token once to enable future viewing.",
 
 	SettingsSectionQBTAPIKey:   "qBittorrent API key",
-	QBTAPIKeyLede:              "This independent key is only for the qBittorrent-compatible /api/v2 API. The full value is shown only in the response immediately after generation.",
+	QBTAPIKeyLede:              "This independent key is only for the qBittorrent-compatible /api/v2 API. Saved keys can be shown or copied here whenever needed.",
 	QBTAPIKeyConfigured:        "A qBittorrent API key is configured. Send it as the Authorization: Bearer header.",
 	QBTAPIKeyNotConfigured:     "No qBittorrent API key is configured. Generate one for qBittorrent-compatible API access.",
 	QBTAPIKeyGeneratedLabel:    "Key generated",
@@ -738,9 +737,10 @@ var stringsEN = Strings{
 	QBTAPIKeyRevokeConfirm:     "Revoke the qBittorrent API key? qBittorrent-compatible API access stops immediately until a new key is generated.",
 	QBTAPIKeyRevoked:           "qBittorrent API key revoked.",
 	QBTAPIKeySecretLabel:       "qBittorrent API key",
-	QBTAPIKeySecretOnce:        "Copy this value now. It will not be shown again.",
-	QBTAPIKeySecretUnavailable: "The key is not shown after generation. Generate a new key after revoking it if you lost the value.",
+	QBTAPIKeySecretUnavailable: "This legacy key still works, but its full value cannot be recovered. Revoke it and generate a new key once to enable future viewing.",
 
+	CredentialShowButton: "Show",
+	CredentialHideButton: "Hide",
 	CredentialCopyButton: "Copy",
 	CredentialCopied:     "Copied",
 	CredentialCopyFailed: "Copy failed",
@@ -1128,7 +1128,7 @@ var stringsZH = Strings{
 	SettingsRemapTitle:        "分类路径变化",
 	SettingsRemapHint:         "修改任一根目录时会保留每个分类的子目录；下方会预览新的完整路径。",
 	SettingsSectionAPIToken:   "自动化 API 令牌",
-	APITokenLede:              "自动化客户端使用此令牌进行身份验证。完整值只会在生成后返回的那一次 Settings 响应中显示。",
+	APITokenLede:              "自动化客户端使用此令牌进行身份验证。已保存的令牌可随时在此查看或复制。",
 	APITokenConfigured:        "已配置 API 令牌。请将其放入 Authorization: Bearer 请求头。",
 	APITokenNotConfigured:     "尚未配置 API 令牌。生成一个以启用自动化 API 访问。",
 	APITokenGeneratedLabel:    "令牌生成时间",
@@ -1137,11 +1137,10 @@ var stringsZH = Strings{
 	APITokenRevokeConfirm:     "确定撤销 API 令牌吗？撤销后自动化 API 将立即停止访问，直到生成新令牌。",
 	APITokenRevoked:           "API 令牌已撤销。",
 	APITokenSecretLabel:       "Bearer 令牌",
-	APITokenSecretOnce:        "请立即复制此值；之后不会再次显示。",
-	APITokenSecretUnavailable: "生成后不会再次显示令牌原文。若遗失，请先撤销，再生成新令牌。",
+	APITokenSecretUnavailable: "旧令牌仍然有效，但原文已无法恢复。请先撤销，再生成新令牌；此后即可随时查看。",
 
 	SettingsSectionQBTAPIKey:   "qBittorrent API 密钥",
-	QBTAPIKeyLede:              "此密钥独立于自动化 API 令牌，仅用于兼容 qBittorrent 的 /api/v2 接口。完整值只会在生成后返回的那一次 Settings 响应中显示。",
+	QBTAPIKeyLede:              "此密钥独立于自动化 API 令牌，仅用于兼容 qBittorrent 的 /api/v2 接口。已保存的密钥可随时在此查看或复制。",
 	QBTAPIKeyConfigured:        "已配置 qBittorrent API 密钥。请通过 Authorization 请求头以 Bearer 方式发送此密钥。",
 	QBTAPIKeyNotConfigured:     "尚未配置 qBittorrent API 密钥。请先生成密钥，才能访问兼容 qBittorrent 的 API。",
 	QBTAPIKeyGeneratedLabel:    "密钥生成时间",
@@ -1150,9 +1149,10 @@ var stringsZH = Strings{
 	QBTAPIKeyRevokeConfirm:     "确定撤销 qBittorrent API 密钥吗？撤销后将无法访问兼容 qBittorrent 的 API，直到生成新密钥。",
 	QBTAPIKeyRevoked:           "qBittorrent API 密钥已撤销。",
 	QBTAPIKeySecretLabel:       "qBittorrent API 密钥",
-	QBTAPIKeySecretOnce:        "请立即复制此值；之后不会再次显示。",
-	QBTAPIKeySecretUnavailable: "生成后不会再次显示密钥原文。若遗失，请先撤销，再生成新密钥。",
+	QBTAPIKeySecretUnavailable: "旧密钥仍然有效，但原文已无法恢复。请先撤销，再生成新密钥；此后即可随时查看。",
 
+	CredentialShowButton:   "显示",
+	CredentialHideButton:   "隐藏",
 	CredentialCopyButton:   "复制",
 	CredentialCopied:       "已复制",
 	CredentialCopyFailed:   "复制失败",

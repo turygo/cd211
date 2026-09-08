@@ -17,8 +17,7 @@ import (
 // persistence contract.
 var _ qbtkey.Repository = (*Store)(nil)
 
-// GetQBTAPIKey returns the configured qBittorrent API key digest and metadata.
-// Plaintext secrets are never persisted or returned by reads.
+// GetQBTAPIKey 返回密钥摘要、元数据和已保存的明文；旧密钥的明文为空。
 func (s *Store) GetQBTAPIKey(ctx context.Context) (qbtkey.Key, error) {
 	row, err := s.queries.GetQBTAPIKey(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -30,8 +29,7 @@ func (s *Store) GetQBTAPIKey(ctx context.Context) (qbtkey.Key, error) {
 	return qbtKeyFromDB(row)
 }
 
-// GenerateQBTAPIKey creates the single qBittorrent API key row and returns the
-// generated secret exactly once. Only its digest and display hint are persisted.
+// GenerateQBTAPIKey 创建或重新启用唯一的 qBittorrent API 密钥，保存并返回生成的明文。
 func (s *Store) GenerateQBTAPIKey(ctx context.Context, now time.Time) (qbtkey.Secret, error) {
 	if now.IsZero() {
 		return "", errors.New("qBittorrent API key generation time is required")
@@ -46,6 +44,7 @@ func (s *Store) GenerateQBTAPIKey(ctx context.Context, now time.Time) (qbtkey.Se
 	err = s.queries.InsertQBTAPIKey(ctx, storedb.InsertQBTAPIKeyParams{
 		KeyHash:   keyHash,
 		KeyHint:   keyHint,
+		KeySecret: string(secret),
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
@@ -58,6 +57,7 @@ func (s *Store) GenerateQBTAPIKey(ctx context.Context, now time.Time) (qbtkey.Se
 	updated, err := s.queries.ActivateQBTAPIKey(ctx, storedb.ActivateQBTAPIKeyParams{
 		KeyHash:   keyHash,
 		KeyHint:   keyHint,
+		KeySecret: string(secret),
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
@@ -101,6 +101,7 @@ func qbtKeyFromDB(row storedb.QbtApiKey) (qbtkey.Key, error) {
 	return qbtkey.Key{
 		Digest: row.KeyHash, Hint: row.KeyHint, CreatedAt: row.CreatedAt,
 		UpdatedAt: row.UpdatedAt, RowVersion: row.RowVersion,
+		Secret: qbtkey.Secret(row.KeySecret),
 	}, nil
 }
 

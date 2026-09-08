@@ -2038,8 +2038,9 @@ html.vt-back::view-transition-new(setup-content) {
   display: flex;
   min-width: 0;
   flex: 1;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
 }
 
 .credential-label {
@@ -2052,10 +2053,9 @@ html.vt-back::view-transition-new(setup-content) {
 
 .credential-value {
   min-width: 0;
-  overflow: hidden;
   color: var(--text-secondary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
   user-select: all;
 }
 

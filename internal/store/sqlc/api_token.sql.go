@@ -25,7 +25,7 @@ func (q *Queries) DeleteAPIToken(ctx context.Context, expectedRowVersion int64) 
 }
 
 const getAPIToken = `-- name: GetAPIToken :one
-SELECT id, token_hash, token_hint, created_at, updated_at, row_version
+SELECT id, token_hash, token_hint, created_at, updated_at, row_version, token_secret
 FROM api_token
 WHERE id = 1
 `
@@ -40,6 +40,7 @@ func (q *Queries) GetAPIToken(ctx context.Context) (ApiToken, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RowVersion,
+		&i.TokenSecret,
 	)
 	return i, err
 }
@@ -49,6 +50,7 @@ INSERT INTO api_token (
     id,
     token_hash,
     token_hint,
+    token_secret,
     created_at,
     updated_at,
     row_version
@@ -58,21 +60,24 @@ INSERT INTO api_token (
     ?2,
     ?3,
     ?4,
+    ?5,
     0
 )
 `
 
 type InsertAPITokenParams struct {
-	TokenHash []byte    `json:"token_hash"`
-	TokenHint string    `json:"token_hint"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	TokenHash   []byte    `json:"token_hash"`
+	TokenHint   string    `json:"token_hint"`
+	TokenSecret string    `json:"token_secret"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 func (q *Queries) InsertAPIToken(ctx context.Context, arg InsertAPITokenParams) error {
 	_, err := q.db.ExecContext(ctx, insertAPIToken,
 		arg.TokenHash,
 		arg.TokenHint,
+		arg.TokenSecret,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 	)

@@ -89,9 +89,10 @@
         <div class="credential-row">
           <div class="credential-main">
             <span class="credential-label">{{.Str.APITokenSecretLabel}}</span>
-            {{if .APIToken.Secret}}<code class="credential-value" title="{{.APIToken.Secret}}">{{.APIToken.Secret}}</code>{{else}}<span class="credential-value">{{.APIToken.Hint}}</span>{{end}}
-            {{if .APIToken.Secret}}<small class="muted">{{.Str.APITokenSecretOnce}}</small>{{else}}<small class="muted">{{.Str.APITokenSecretUnavailable}}</small>{{end}}
+            <code id="api-token-value" class="credential-value" data-credential-value>{{.APIToken.Hint}}</code>
+            {{if not .APIToken.Secret}}<small class="muted">{{.Str.APITokenSecretUnavailable}}</small>{{end}}
           </div>
+          {{if .APIToken.Secret}}<button class="button button-secondary" type="button" aria-pressed="false" aria-controls="api-token-value" data-credential-toggle data-show-label="{{.Str.CredentialShowButton}}" data-hide-label="{{.Str.CredentialHideButton}}">{{.Str.CredentialShowButton}}</button>{{end}}
           {{if .APIToken.Secret}}<button class="credential-copy iconfont" type="button" aria-label="{{.Str.CredentialCopyButton}}" title="{{.Str.CredentialCopyButton}}" data-copy-value="{{.APIToken.Secret}}" data-copy-label="{{.Str.CredentialCopyButton}}" data-copied-label="{{.Str.CredentialCopied}}" data-copy-failed-label="{{.Str.CredentialCopyFailed}}">⧉</button>{{end}}
         </div>
         <dl class="credential-meta">
@@ -122,9 +123,10 @@
         <div class="credential-row">
           <div class="credential-main">
             <span class="credential-label">{{.Str.QBTAPIKeySecretLabel}}</span>
-            {{if .QBTAPIKey.Secret}}<code class="credential-value" title="{{.QBTAPIKey.Secret}}">{{.QBTAPIKey.Secret}}</code>{{else}}<span class="credential-value">{{.QBTAPIKey.Hint}}</span>{{end}}
-            {{if .QBTAPIKey.Secret}}<small class="muted">{{.Str.QBTAPIKeySecretOnce}}</small>{{else}}<small class="muted">{{.Str.QBTAPIKeySecretUnavailable}}</small>{{end}}
+            <code id="qbt-api-key-value" class="credential-value" data-credential-value>{{.QBTAPIKey.Hint}}</code>
+            {{if not .QBTAPIKey.Secret}}<small class="muted">{{.Str.QBTAPIKeySecretUnavailable}}</small>{{end}}
           </div>
+          {{if .QBTAPIKey.Secret}}<button class="button button-secondary" type="button" aria-pressed="false" aria-controls="qbt-api-key-value" data-credential-toggle data-show-label="{{.Str.CredentialShowButton}}" data-hide-label="{{.Str.CredentialHideButton}}">{{.Str.CredentialShowButton}}</button>{{end}}
           {{if .QBTAPIKey.Secret}}<button class="credential-copy iconfont" type="button" aria-label="{{.Str.CredentialCopyButton}}" title="{{.Str.CredentialCopyButton}}" data-copy-value="{{.QBTAPIKey.Secret}}" data-copy-label="{{.Str.CredentialCopyButton}}" data-copied-label="{{.Str.CredentialCopied}}" data-copy-failed-label="{{.Str.CredentialCopyFailed}}">⧉</button>{{end}}
         </div>
         <dl class="credential-meta">

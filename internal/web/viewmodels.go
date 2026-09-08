@@ -185,8 +185,7 @@ type SettingsView struct {
 	QBTAPIKey  QBTAPIKeyView
 }
 
-// APITokenView renders API token metadata. Secret is populated only in the
-// response immediately following generation.
+// APITokenView 提供设置页所需的令牌原文和元数据。
 type APITokenView struct {
 	Configured  bool
 	Secret      string
@@ -195,8 +194,7 @@ type APITokenView struct {
 	RowVersion  int64
 }
 
-// QBTAPIKeyView renders qBittorrent API key metadata. Secret is populated only
-// in the response immediately following generation.
+// QBTAPIKeyView 提供设置页所需的 qBittorrent 密钥原文和元数据。
 type QBTAPIKeyView struct {
 	Configured  bool
 	Secret      string

@@ -106,16 +106,14 @@ type SettingsStore interface {
 	ReplaceSettingsAndCategories(ctx context.Context, values map[string]string, categories []domain.Category, now time.Time) error
 }
 
-// APITokenStore persists the single global Automation API token. Reads expose
-// only its digest metadata; generation returns the plaintext exactly once.
+// APITokenStore 保存全局自动化 API 令牌，供设置页读取已保存的明文。
 type APITokenStore interface {
 	GetAPIToken(ctx context.Context) (token.Token, error)
 	GenerateAPIToken(ctx context.Context, now time.Time) (token.Secret, error)
 	RevokeAPIToken(ctx context.Context, expectedVersion int64) error
 }
 
-// QBTAPIKeyStore persists the independent qBittorrent-compatible API key.
-// Reads expose only its digest metadata; generation returns the plaintext once.
+// QBTAPIKeyStore 保存独立的 qBittorrent API 密钥，供设置页读取已保存的明文。
 type QBTAPIKeyStore interface {
 	GetQBTAPIKey(ctx context.Context) (qbtkey.Key, error)
 	GenerateQBTAPIKey(ctx context.Context, now time.Time) (qbtkey.Secret, error)
@@ -1147,22 +1145,8 @@ func (h *handler) settingsSave(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/settings?saved=1", http.StatusSeeOther)
 }
 
-// renderSettings re-renders the settings page with the submitted values and
-// a notice describing the outcome of the last action.
+// renderSettings 使用提交值和操作结果提示重新渲染设置页。
 func (h *handler) renderSettings(w http.ResponseWriter, r *http.Request, status int, form SettingsFormValues, notice string, success bool) {
-	h.renderSettingsView(w, r, status, form, notice, success, "", "")
-}
-
-func (h *handler) renderSettingsGenerated(w http.ResponseWriter, r *http.Request, tokenSecret, qbtSecret string) {
-	values, err := h.settings.Store.ListSettings(r.Context())
-	if err != nil {
-		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
-		return
-	}
-	h.renderSettingsView(w, r, http.StatusOK, settingsFormFromValues(values), "", true, tokenSecret, qbtSecret)
-}
-
-func (h *handler) renderSettingsView(w http.ResponseWriter, r *http.Request, status int, form SettingsFormValues, notice string, success bool, tokenSecret, qbtSecret string) {
 	w.Header().Set("Cache-Control", "no-store")
 	categories, err := h.repo.ListCategories(r.Context())
 	if err != nil {
@@ -1179,8 +1163,6 @@ func (h *handler) renderSettingsView(w http.ResponseWriter, r *http.Request, sta
 		plain(w, http.StatusInternalServerError, "Internal Server Error\n")
 		return
 	}
-	tokenView.Secret = tokenSecret
-	qbtAPIKeyView.Secret = qbtSecret
 	str := tr(requestLang(r))
 	view := SettingsView{
 		PageMeta: pageMeta(str.TitleSettings, "settings", h.authSession(r).CSRFToken, requestLang(r)),
@@ -1191,8 +1173,7 @@ func (h *handler) renderSettingsView(w http.ResponseWriter, r *http.Request, sta
 	h.render(w, status, "settings", view)
 }
 
-// tokenView loads persisted API token metadata for Settings. Plaintext is never
-// returned by the repository and is only supplied by the generation response.
+// tokenView 读取已保存的 API 令牌，供设置页按需显示。
 func (h *handler) tokenView(r *http.Request) (APITokenView, error) {
 	info, err := h.settings.Tokens.GetAPIToken(r.Context())
 	if errors.Is(err, token.ErrNotFound) {
@@ -1203,23 +1184,20 @@ func (h *handler) tokenView(r *http.Request) (APITokenView, error) {
 	}
 	str := tr(requestLang(r))
 	return APITokenView{
-		Configured: true, Hint: info.Hint,
+		Configured: true, Secret: string(info.Secret), Hint: info.Hint,
 		GeneratedAt: displayTime(info.UpdatedAt, str), RowVersion: info.RowVersion,
 	}, nil
 }
 
-// apiTokenGenerate renders a complete no-store Settings response so the
-// generated plaintext appears exactly once, without retaining it anywhere.
 func (h *handler) apiTokenGenerate(w http.ResponseWriter, r *http.Request) {
-	secret, err := h.settings.Tokens.GenerateAPIToken(r.Context(), h.clock.Now().UTC())
-	if err != nil {
+	if _, err := h.settings.Tokens.GenerateAPIToken(r.Context(), h.clock.Now().UTC()); err != nil {
 		tokenError(w, err)
 		return
 	}
-	h.renderSettingsGenerated(w, r, string(secret), "")
+	http.Redirect(w, r, "/settings", http.StatusSeeOther)
 }
 
-// qbtAPIKeyView loads persisted qBittorrent API key metadata for Settings.
+// qbtAPIKeyView 读取已保存的 qBittorrent API 密钥，供设置页按需显示。
 func (h *handler) qbtAPIKeyView(r *http.Request) (QBTAPIKeyView, error) {
 	info, err := h.settings.QBTKeys.GetQBTAPIKey(r.Context())
 	if errors.Is(err, qbtkey.ErrNotFound) {
@@ -1230,7 +1208,7 @@ func (h *handler) qbtAPIKeyView(r *http.Request) (QBTAPIKeyView, error) {
 	}
 	str := tr(requestLang(r))
 	return QBTAPIKeyView{
-		Configured: true, Hint: info.Hint,
+		Configured: true, Secret: string(info.Secret), Hint: info.Hint,
 		GeneratedAt: displayTime(info.UpdatedAt, str), RowVersion: info.RowVersion,
 	}, nil
 }
@@ -1251,15 +1229,12 @@ func (h *handler) apiTokenRevoke(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/settings?token-revoked=1", http.StatusSeeOther)
 }
 
-// qbtAPIKeyGenerate renders a complete no-store Settings response so the
-// generated plaintext appears exactly once, without retaining it anywhere.
 func (h *handler) qbtAPIKeyGenerate(w http.ResponseWriter, r *http.Request) {
-	secret, err := h.settings.QBTKeys.GenerateQBTAPIKey(r.Context(), h.clock.Now().UTC())
-	if err != nil {
+	if _, err := h.settings.QBTKeys.GenerateQBTAPIKey(r.Context(), h.clock.Now().UTC()); err != nil {
 		qbtAPIKeyError(w, err)
 		return
 	}
-	h.renderSettingsGenerated(w, r, "", string(secret))
+	http.Redirect(w, r, "/settings", http.StatusSeeOther)
 }
 
 // qbtAPIKeyRevoke handles POST /settings/qbt-api-key/revoke.

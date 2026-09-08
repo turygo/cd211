@@ -38,13 +38,13 @@ var (
 	ErrConflict = errors.New("token: API token state changed")
 )
 
-// Secret is the plaintext token returned exactly once by generation.
+// Secret 是可持久化并由已认证设置页读取的明文令牌。
 type Secret string
 
-// Token is the durable single API token row. Digest is used for constant-time
-// request verification; the plaintext is never persisted.
+// Token 保存唯一的 API 令牌；Digest 用于常量时间比较，Secret 供设置页读取。
 type Token struct {
 	Digest     []byte
+	Secret     Secret `json:"-"`
 	Hint       string
 	CreatedAt  time.Time
 	UpdatedAt  time.Time

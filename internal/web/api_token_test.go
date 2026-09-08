@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"net/url"
@@ -11,8 +12,7 @@ import (
 	"github.com/turygo/cd211/internal/token"
 )
 
-// generateAPITokenThroughUI drives generation and returns the one-time
-// plaintext rendered by the complete Settings response.
+// generateAPITokenThroughUI 生成令牌，并从重定向后的设置页读取原文。
 func generateAPITokenThroughUI(t *testing.T, fixture *webFixture) string {
 	t.Helper()
 	page := fixture.request(http.MethodGet, "/settings", nil, true)
@@ -21,39 +21,40 @@ func generateAPITokenThroughUI(t *testing.T, fixture *webFixture) string {
 	requireAbsent(t, page.Body.String(), "cd211_api_")
 
 	response := fixture.post("/settings/api-token/generate", nil)
-	requireStatus(t, response, http.StatusOK)
-	body := response.Body.String()
-	start := strings.Index(body, "cd211_api_")
-	if start < 0 {
-		t.Fatal("generation response omitted token")
+	requireStatus(t, response, http.StatusSeeOther)
+	if location := response.Header().Get("Location"); location != "/settings" {
+		t.Fatalf("generate Location = %q, want /settings", location)
 	}
-	end := start
-	for end < len(body) && !strings.ContainsAny(body[end:end+1], "<\"' ") {
-		end++
+	page = fixture.request(http.MethodGet, response.Header().Get("Location"), nil, true)
+	requireStatus(t, page, http.StatusOK)
+	_, remainder, ok := strings.Cut(page.Body.String(), `data-copy-value="cd211_api_`)
+	if !ok {
+		t.Fatal("settings page omitted saved token")
 	}
-	return body[start:end]
+	value, _, ok := strings.Cut(remainder, `"`)
+	if !ok {
+		t.Fatal("settings page has an incomplete saved token")
+	}
+	return "cd211_api_" + value
 }
 
-func TestAPITokenGeneratePersistsAndSettingsHidesPlaintext(t *testing.T) {
+func TestAPITokenSettingsRecoversMaskedTokenOnRepeatedVisits(t *testing.T) {
 	fixture := newWebFixture(t)
 	secret := generateAPITokenThroughUI(t, fixture)
-
 	info, err := fixture.store.GetAPIToken(context.Background())
 	if err != nil {
 		t.Fatalf("GetAPIToken(): %v", err)
 	}
-	if info.RowVersion != 0 || info.CreatedAt.IsZero() || !info.CreatedAt.Equal(info.UpdatedAt) {
-		t.Errorf("stored token = %+v, want digest metadata and version 0", info)
+	for range 2 {
+		page := fixture.request(http.MethodGet, "/settings", nil, true)
+		requireStatus(t, page, http.StatusOK)
+		if got := page.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("settings Cache-Control = %q, want no-store", got)
+		}
+		body := page.Body.String()
+		requireContains(t, body, `data-copy-value="`+secret+`"`, `data-credential-value>`+info.Hint+`</code>`, `aria-pressed="false" aria-controls="api-token-value"`, `action="/settings/api-token/revoke"`)
+		requireAbsent(t, body, `>`+secret+`<`, `title="`+secret+`"`, tr(LangEN).APITokenSecretUnavailable, "token_hash")
 	}
-
-	page := fixture.request(http.MethodGet, "/settings", nil, true)
-	requireStatus(t, page, http.StatusOK)
-	if got := page.Header().Get("Cache-Control"); got != "no-store" {
-		t.Errorf("settings Cache-Control = %q, want no-store", got)
-	}
-	body := page.Body.String()
-	requireContains(t, body, info.Hint, tr(LangEN).APITokenSecretUnavailable, `action="/settings/api-token/revoke"`, "Automation API token")
-	requireAbsent(t, body, secret, "First configured", "Token hint", `action="/settings/api-token/rotate"`, "Rotate token", "sha256", "token_hash")
 }
 
 func TestAPITokenGenerateWhenPresentConflicts(t *testing.T) {
@@ -104,12 +105,39 @@ func TestAPITokenActionsRequireAuthAndCSRF(t *testing.T) {
 	}
 }
 
+func TestSettingsCredentialsRequireAuthentication(t *testing.T) {
+	fixture := newWebFixture(t)
+	tokenSecret := generateAPITokenThroughUI(t, fixture)
+	qbtSecret := generateQBTAPIKeyThroughUI(t, fixture)
+	page := fixture.request(http.MethodGet, "/settings", nil, false)
+	requireStatus(t, page, http.StatusSeeOther)
+	if location := page.Header().Get("Location"); location != "/login" {
+		t.Errorf("anonymous settings Location = %q, want /login", location)
+	}
+	requireAbsent(t, page.Body.String(), tokenSecret, qbtSecret, "data-copy-value", "data-credential-toggle")
+}
+
+func TestSettingsLegacyCredentialsExplainRecovery(t *testing.T) {
+	fixture := newWebFixture(t)
+	tokenSecret := generateAPITokenThroughUI(t, fixture)
+	qbtSecret := generateQBTAPIKeyThroughUI(t, fixture)
+	database, err := sql.Open("sqlite", fixture.dbPath)
+	if err != nil {
+		t.Fatalf("open legacy fixture: %v", err)
+	}
+	defer database.Close()
+	if _, err := database.ExecContext(context.Background(), `UPDATE api_token SET token_secret = ''; UPDATE qbt_api_key SET key_secret = '';`); err != nil {
+		t.Fatalf("clear legacy credential plaintext: %v", err)
+	}
+	page := fixture.request(http.MethodGet, "/settings", nil, true)
+	requireStatus(t, page, http.StatusOK)
+	requireContains(t, page.Body.String(), tr(LangEN).APITokenSecretUnavailable, tr(LangEN).QBTAPIKeySecretUnavailable, `action="/settings/api-token/revoke"`, `action="/settings/qbt-api-key/revoke"`)
+	requireAbsent(t, page.Body.String(), tokenSecret, qbtSecret, "data-copy-value", "data-credential-toggle", `action="/settings/api-token/generate"`, `action="/settings/qbt-api-key/generate"`)
+}
+
 func TestAPITokenRotateRouteRemoved(t *testing.T) {
 	fixture := newWebFixture(t)
 	response := fixture.post("/settings/api-token/rotate", url.Values{"expected_version": {"0"}})
 	requireStatus(t, response, http.StatusNotFound)
 	requireContains(t, response.Body.String(), "Not Found\n")
-	if strings.Contains(response.Body.String(), "Rotate") {
-		t.Fatal("removed rotate route exposed a rotation response")
-	}
 }

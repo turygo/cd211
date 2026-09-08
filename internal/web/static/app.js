@@ -622,6 +622,19 @@ for (const preview of document.querySelectorAll("[data-settings-remap]")) {
   renderRemap();
 }
 
+for (const button of document.querySelectorAll("[data-credential-toggle]")) {
+  const row = button.closest(".credential-row");
+  const value = row.querySelector("[data-credential-value]");
+  const copy = row.querySelector("[data-copy-value]");
+  const hint = value.textContent;
+  button.addEventListener("click", () => {
+    const show = button.getAttribute("aria-pressed") !== "true";
+    value.textContent = show ? copy.getAttribute("data-copy-value") : hint;
+    button.setAttribute("aria-pressed", String(show));
+    button.textContent = button.getAttribute(show ? "data-hide-label" : "data-show-label");
+  });
+}
+
 async function copyText(value) {
   if (navigator.clipboard && window.isSecureContext) {
     await navigator.clipboard.writeText(value);

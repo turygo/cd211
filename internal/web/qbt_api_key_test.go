@@ -19,37 +19,40 @@ func generateQBTAPIKeyThroughUI(t *testing.T, fixture *webFixture) string {
 	requireAbsent(t, page.Body.String(), "qbt_")
 
 	response := fixture.post("/settings/qbt-api-key/generate", nil)
-	requireStatus(t, response, http.StatusOK)
-	body := response.Body.String()
-	start := strings.Index(body, "qbt_")
-	if start < 0 {
-		t.Fatal("generation response omitted qBittorrent key")
+	requireStatus(t, response, http.StatusSeeOther)
+	if location := response.Header().Get("Location"); location != "/settings" {
+		t.Fatalf("generate Location = %q, want /settings", location)
 	}
-	end := start
-	for end < len(body) && !strings.ContainsAny(body[end:end+1], "<\"' ") {
-		end++
+	page = fixture.request(http.MethodGet, response.Header().Get("Location"), nil, true)
+	requireStatus(t, page, http.StatusOK)
+	_, remainder, ok := strings.Cut(page.Body.String(), `data-copy-value="qbt_`)
+	if !ok {
+		t.Fatal("settings page omitted saved qBittorrent key")
 	}
-	return body[start:end]
+	value, _, ok := strings.Cut(remainder, `"`)
+	if !ok {
+		t.Fatal("settings page has an incomplete saved qBittorrent key")
+	}
+	return "qbt_" + value
 }
 
-func TestQBTAPIKeyGeneratePersistsAndSettingsHidesPlaintext(t *testing.T) {
+func TestQBTAPIKeySettingsRecoversMaskedKeyOnRepeatedVisits(t *testing.T) {
 	fixture := newWebFixture(t)
 	secret := generateQBTAPIKeyThroughUI(t, fixture)
 	info, err := fixture.store.GetQBTAPIKey(context.Background())
 	if err != nil {
 		t.Fatalf("GetQBTAPIKey(): %v", err)
 	}
-	if info.RowVersion != 0 || info.CreatedAt.IsZero() || !info.CreatedAt.Equal(info.UpdatedAt) {
-		t.Errorf("stored qbt key = %+v, want digest metadata and version 0", info)
+	for range 2 {
+		page := fixture.request(http.MethodGet, "/settings", nil, true)
+		requireStatus(t, page, http.StatusOK)
+		if got := page.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("settings Cache-Control = %q, want no-store", got)
+		}
+		body := page.Body.String()
+		requireContains(t, body, `data-copy-value="`+secret+`"`, `data-credential-value>`+info.Hint+`</code>`, `aria-pressed="false" aria-controls="qbt-api-key-value"`, `action="/settings/qbt-api-key/revoke"`)
+		requireAbsent(t, body, `>`+secret+`<`, `title="`+secret+`"`, tr(LangEN).QBTAPIKeySecretUnavailable, "qbt_api_key")
 	}
-	page := fixture.request(http.MethodGet, "/settings", nil, true)
-	requireStatus(t, page, http.StatusOK)
-	if got := page.Header().Get("Cache-Control"); got != "no-store" {
-		t.Errorf("settings Cache-Control = %q, want no-store", got)
-	}
-	body := page.Body.String()
-	requireContains(t, body, info.Hint, tr(LangEN).QBTAPIKeySecretUnavailable, `action="/settings/qbt-api-key/revoke"`, "qBittorrent API key")
-	requireAbsent(t, body, secret, "First configured", "Key hint", `action="/settings/qbt-api-key/rotate"`, "Rotate key", "sha256", "qbt_api_key")
 }
 
 func TestQBTAPIKeyGenerateWhenPresentConflicts(t *testing.T) {

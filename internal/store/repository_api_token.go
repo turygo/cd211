@@ -16,8 +16,7 @@ import (
 // Compile-time check that the store satisfies the token persistence contract.
 var _ token.Repository = (*Store)(nil)
 
-// GetAPIToken returns the configured API token digest and metadata. Plaintext
-// secrets are never persisted or returned by reads.
+// GetAPIToken 返回令牌摘要、元数据和已保存的明文；旧令牌的明文为空。
 func (s *Store) GetAPIToken(ctx context.Context) (token.Token, error) {
 	row, err := s.queries.GetAPIToken(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -29,8 +28,7 @@ func (s *Store) GetAPIToken(ctx context.Context) (token.Token, error) {
 	return apiTokenFromDB(row)
 }
 
-// GenerateAPIToken creates the single API token row and returns the generated
-// secret exactly once. Only its digest and display hint are persisted.
+// GenerateAPIToken 创建唯一的 API 令牌，保存并返回生成的明文。
 func (s *Store) GenerateAPIToken(ctx context.Context, now time.Time) (token.Secret, error) {
 	if now.IsZero() {
 		return "", errors.New("API token generation time is required")
@@ -40,10 +38,11 @@ func (s *Store) GenerateAPIToken(ctx context.Context, now time.Time) (token.Secr
 		return "", err
 	}
 	err = s.queries.InsertAPIToken(ctx, storedb.InsertAPITokenParams{
-		TokenHash: token.Hash(secret),
-		TokenHint: token.Hint(secret),
-		CreatedAt: now.UTC(),
-		UpdatedAt: now.UTC(),
+		TokenHash:   token.Hash(secret),
+		TokenHint:   token.Hint(secret),
+		TokenSecret: string(secret),
+		CreatedAt:   now.UTC(),
+		UpdatedAt:   now.UTC(),
 	})
 	if err != nil {
 		if tokenRowConflict(err) {
@@ -85,6 +84,7 @@ func apiTokenFromDB(row storedb.ApiToken) (token.Token, error) {
 	return token.Token{
 		Digest: row.TokenHash, Hint: row.TokenHint, CreatedAt: row.CreatedAt,
 		UpdatedAt: row.UpdatedAt, RowVersion: row.RowVersion,
+		Secret: token.Secret(row.TokenSecret),
 	}, nil
 }
 

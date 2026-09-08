@@ -37,13 +37,13 @@ var (
 	ErrConflict = errors.New("qbtkey: qBittorrent API key state changed")
 )
 
-// Secret is the plaintext key returned exactly once by generation.
+// Secret 是可持久化并由已认证设置页读取的明文密钥。
 type Secret string
 
-// Key is the durable single qBittorrent API key row. Digest is used for
-// constant-time request verification; the plaintext is never persisted.
+// Key 保存唯一的 qBittorrent API 密钥；Digest 用于常量时间比较，Secret 供设置页读取。
 type Key struct {
 	Digest     []byte
+	Secret     Secret `json:"-"`
 	Hint       string
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
