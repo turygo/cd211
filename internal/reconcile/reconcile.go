@@ -8,11 +8,13 @@ import (
 	"io/fs"
 	"log/slog"
 	"math"
+	"os"
 	"path"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -363,7 +365,8 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 				s.fail(d, domain.ProblemInternalWorkflowError)
 				return "retry_delete_copy", nil
 			}
-			if err := s.deleteCopyWorkspace(d); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			if err := s.deleteCopyWorkspace(d); err != nil {
+				s.logLocalDeleteFailure(d, "retry_delete_copy", err)
 				s.fail(d, domain.ProblemLocalDeleteFailed)
 				d.AttemptCount++
 				return "retry_delete_copy", nil
@@ -534,7 +537,8 @@ func (s *Scheduler) pause(ctx context.Context, d *domain.Download, now time.Time
 		return "pause_copy", s.cleanupFailure(d, err)
 	}
 	if d.WorkspacePath != "" {
-		if err := s.files.DeleteWorkspace(d.SavePath, d.Hash); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if err := s.files.DeleteWorkspace(d.SavePath, d.Hash); err != nil {
+			s.logLocalDeleteFailure(d, "pause_copy", err)
 			s.cleanupProblem(d, domain.ProblemLocalDeleteFailed)
 			return "pause_copy", nil
 		}
@@ -544,7 +548,8 @@ func (s *Scheduler) pause(ctx context.Context, d *domain.Download, now time.Time
 			return "pause_copy", nil
 		}
 	} else {
-		if err := s.files.Delete(filepath.Join(d.SavePath, d.DestinationName), d.SavePath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if err := s.files.Delete(filepath.Join(d.SavePath, d.DestinationName), d.SavePath); err != nil {
+			s.logLocalDeleteFailure(d, "pause_copy", err)
 			s.cleanupProblem(d, domain.ProblemLocalDeleteFailed)
 			return "pause_copy", nil
 		}
@@ -574,7 +579,8 @@ func (s *Scheduler) delete(ctx context.Context, d *domain.Download, now time.Tim
 	}
 	if d.DeleteFilesRequested {
 		if d.WorkspacePath != "" {
-			if err := s.files.DeleteWorkspace(d.SavePath, d.Hash); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			if err := s.files.DeleteWorkspace(d.SavePath, d.Hash); err != nil {
+				s.logLocalDeleteFailure(d, "delete_local", err)
 				s.cleanupProblem(d, domain.ProblemLocalDeleteFailed)
 				return "delete_local", nil
 			}
@@ -588,7 +594,8 @@ func (s *Scheduler) delete(ctx context.Context, d *domain.Download, now time.Tim
 				contentPath = filepath.Join(d.SavePath, d.DestinationName)
 			}
 			if contentPath != "" {
-				if err := s.files.Delete(contentPath, d.SavePath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				if err := s.files.Delete(contentPath, d.SavePath); err != nil {
+					s.logLocalDeleteFailure(d, "delete_local", err)
 					s.cleanupProblem(d, domain.ProblemLocalDeleteFailed)
 					return "delete_local", nil
 				}
@@ -1092,6 +1099,31 @@ func copyProgress(value float64) float64    { return round6(0.9 + 0.09*value) }
 func round6(value float64) float64          { return math.Round(value*1_000_000) / 1_000_000 }
 
 func notFound(err error) bool { return status.Code(errors.Unwrap(err)) == codes.NotFound }
+
+// 只提取系统操作和 errno，不输出可能含路径、文件名或凭据的错误全文。
+func (s *Scheduler) logLocalDeleteFailure(d *domain.Download, operation string, err error) {
+	fsOperation := "unknown"
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		switch pathErr.Op {
+		case "open", "openat", "stat", "lstat", "statat", "fstatat", "chmod", "fchmod",
+			"readdir", "readdirent", "unlink", "unlinkat", "rmdir", "removeat", "RemoveAll":
+			fsOperation = pathErr.Op
+		}
+	}
+	attributes := []any{
+		"hash", d.Hash[:min(8, len(d.Hash))],
+		"state", d.State,
+		"operation", operation,
+		"fs_operation", fsOperation,
+		"problem", domain.ProblemLocalDeleteFailed,
+	}
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		attributes = append(attributes, "errno", uint64(errno), "errno_text", errno.Error())
+	}
+	s.logger.Warn("local content deletion failed", attributes...)
+}
 
 func (s *Scheduler) log(d domain.Download, operation string, started time.Time, result string) {
 	hash := d.Hash

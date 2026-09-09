@@ -2,6 +2,7 @@ package fsafe
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -320,6 +321,7 @@ func TestDeleteWorkspaceIsolatesSiblingsAndIsIdempotent(t *testing.T) {
 		t.Fatalf("DeleteWorkspace(A): %v", err)
 	}
 	assertNotExist(t, workspaceA)
+	assertNotExist(t, filepath.Join(save, ".cd211", ".quarantine"))
 	assertFileContent(t, filepath.Join(workspaceB, "content", "b.bin"), "B")
 	if _, err := os.Stat(filepath.Join(save, ".cd211")); err != nil {
 		t.Fatalf("shared workspace parent removed: %v", err)
@@ -358,6 +360,43 @@ func TestDeleteWorkspaceRetriesQuarantinedEntry(t *testing.T) {
 	assertNotExist(t, workspaceA)
 	assertNotExist(t, filepath.Join(quarantine, workspaceHashA))
 	assertFileContent(t, filepath.Join(workspaceB, "content"), "B")
+}
+
+func TestDeleteWorkspaceResumesPartialContents(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	save := mkdir(t, filepath.Join(root, "save"))
+	workspace, err := verifier.PrepareWorkspace(save, workspaceHashA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sibling, err := verifier.PrepareWorkspace(save, workspaceHashB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(sibling, "content"), "keep")
+	writeFile(t, filepath.Join(workspace, "already-removed"), "partial")
+	if err := os.Remove(filepath.Join(workspace, "already-removed")); err != nil {
+		t.Fatal(err)
+	}
+	for index := range 260 {
+		writeFile(t, filepath.Join(workspace, fmt.Sprintf("remaining-%03d", index), "content"), "remove")
+	}
+	unsafePath := filepath.Join(workspace, "unsafe")
+	mustSymlink(t, sibling, unsafePath)
+	if err := verifier.DeleteWorkspace(save, workspaceHashA); err == nil {
+		t.Fatal("DeleteWorkspace() accepted a symlink in the remaining tree")
+	}
+	assertFileContent(t, filepath.Join(workspace, "remaining-000", "content"), "remove")
+	assertFileContent(t, filepath.Join(sibling, "content"), "keep")
+	if err := os.Remove(unsafePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifier.DeleteWorkspace(save, workspaceHashA); err != nil {
+		t.Fatalf("DeleteWorkspace() resume: %v", err)
+	}
+	assertNotExist(t, workspace)
+	assertNotExist(t, filepath.Join(save, ".cd211", ".quarantine"))
+	assertFileContent(t, filepath.Join(sibling, "content"), "keep")
 }
 
 func TestDeleteWorkspaceRejectsQuarantineReplacement(t *testing.T) {

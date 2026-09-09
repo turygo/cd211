@@ -3,14 +3,18 @@ package reconcile
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -406,6 +410,68 @@ func TestDeleteCancelsOnceThenDeletesDerivedLocalPath(t *testing.T) {
 	}
 	if afterDelete.State != domain.StateDeleteRequested || afterDelete.LastErrorCode != string(domain.ProblemLocalDeleteFailed) || afterDelete.NextRunAt != nil {
 		t.Fatalf("failed local deletion lost cleanup intent: %+v", afterDelete)
+	}
+}
+
+func TestLocalDeleteFailuresPreserveIntentAndSafeDiagnostics(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		state       domain.State
+		operation   string
+		fsOperation string
+		isolated    bool
+		errno       syscall.Errno
+	}{
+		{"delete_workspace_missing_during_validation", domain.StateDeleteRequested, "delete_local", "statat", true, syscall.ENOENT},
+		{"delete_legacy", domain.StateDeleteRequested, "delete_local", "unlinkat", false, syscall.EIO},
+		{"pause_workspace", domain.StateCancelRequested, "pause_copy", "statat", true, syscall.EIO},
+		{"pause_legacy", domain.StateCancelRequested, "pause_copy", "unlinkat", false, syscall.EIO},
+		{"retry_workspace", domain.StateSubmittingCopy, "retry_delete_copy", "unlinkat", true, syscall.EIO},
+		{"retry_legacy", domain.StateSubmittingCopy, "retry_delete_copy", "unlinkat", false, syscall.EIO},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+			repo := &fakeRepository{}
+			cloud, files := defaults()
+			failure := fmt.Errorf("private-wrapper: %w", &os.PathError{Op: test.fsOperation, Path: "/downloads/private-filename", Err: test.errno})
+			files.delete = func(string, string) error { return failure }
+			files.deleteWorkspace = func(string, string) error { return failure }
+			scheduler := testScheduler(t, &fakeClock{now: now}, repo, cloud, files)
+			var output bytes.Buffer
+			scheduler.logger = slog.New(slog.NewJSONHandler(&output, nil))
+			d := baseDownload(test.state, now)
+			d.CopySourcePath, d.DestinationName = "/cloud/payload", "payload"
+			d.LastUpstreamStatus = cleanupCancelled + "|" + domain.UpstreamCopyFailed
+			d.DeleteFilesRequested = true
+			d.PauseRequested = test.state == domain.StateCancelRequested
+			if test.isolated {
+				d.WorkspacePath = filepath.Join(d.SavePath, ".cd211", d.Hash)
+			}
+			got := step(t, scheduler, repo, d)
+			wantState := test.state
+			if test.state == domain.StateSubmittingCopy {
+				wantState = domain.StateFailed
+			}
+			if got.State != wantState || got.LastErrorCode != string(domain.ProblemLocalDeleteFailed) || got.NextRunAt != nil {
+				t.Fatalf("failed deletion lost intent: %+v", got)
+			}
+			for _, secret := range []string{"private-wrapper", "private-filename", "/downloads", d.Hash} {
+				if strings.Contains(output.String(), secret) || strings.Contains(got.LastError, secret) {
+					t.Fatalf("deletion diagnostics leaked %q", secret)
+				}
+			}
+			var diagnostic struct {
+				Operation   string `json:"operation"`
+				FSOperation string `json:"fs_operation"`
+				Errno       uint64 `json:"errno"`
+			}
+			if err := json.NewDecoder(&output).Decode(&diagnostic); err != nil {
+				t.Fatal(err)
+			}
+			if diagnostic.Operation != test.operation || diagnostic.FSOperation != test.fsOperation || diagnostic.Errno != uint64(test.errno) {
+				t.Fatalf("missing filesystem diagnosis: %+v", diagnostic)
+			}
+		})
 	}
 }
 

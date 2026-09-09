@@ -4,6 +4,7 @@ package fsafe
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"math"
 	"os"
@@ -299,7 +300,6 @@ const (
 	saveRootMode        = os.ModeSticky | os.ModeSetgid | 0o770
 	workspaceParentMode = os.ModeSetgid | 0o750
 	workspaceMode       = os.ModeSetgid | 0o770
-	quarantineMode      = 0o700
 )
 
 // PrepareSaveRoot creates a missing canonical staging directory and hardens
@@ -410,8 +410,8 @@ func (v *Verifier) PrepareWorkspace(savePath, hash string) (string, error) {
 	return logicalWorkspacePath, nil
 }
 
-// DeleteWorkspace safely and idempotently removes exactly hash's workspace,
-// retaining the shared .cd211 parent.
+// DeleteWorkspace 在工作区目录句柄内原地删除内容，保留共享的 .cd211 父目录。
+// 中断后保留的内容可继续清理，不再通过目录改名进行隔离。
 func (v *Verifier) DeleteWorkspace(savePath, hash string) error {
 	if _, err := WorkspacePath(savePath, hash); err != nil {
 		return err
@@ -442,83 +442,30 @@ func (v *Verifier) DeleteWorkspace(savePath, hash string) error {
 		return err
 	}
 
-	quarantineRoot, err := ensureWorkspaceDir(cdRoot, ".quarantine", quarantineMode)
-	if err != nil {
-		return fmt.Errorf("fsafe: prepare workspace quarantine: %w", err)
-	}
-	defer quarantineRoot.Close()
+	// 仅恢复旧版本遗留的隔离目录；不创建新目录，也不执行改名。
 	quarantineInfo, err := cdRoot.Lstat(".quarantine")
-	if err != nil {
-		return fmt.Errorf("fsafe: revalidate workspace quarantine: %w", err)
-	}
-	if err := sameRootDirectory(cdRoot, ".quarantine", quarantineInfo, quarantineRoot); err != nil {
-		return err
-	}
-
-	// A previous process may have crashed after quarantine. Clean that exact
-	// inode first; a mismatched entry is never recursively removed.
-	if err := removeQuarantinedWorkspace(quarantineRoot, hash); err != nil {
-		return err
-	}
-
-	hashInfo, err := cdRoot.Lstat(hash)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
+	if err == nil {
+		if quarantineInfo.Mode()&os.ModeSymlink != 0 || !quarantineInfo.IsDir() {
+			return fmt.Errorf("fsafe: workspace quarantine must be a directory")
 		}
-		return fmt.Errorf("fsafe: inspect workspace: %w", err)
-	}
-	if hashInfo.Mode()&os.ModeSymlink != 0 || !hashInfo.IsDir() {
-		return fmt.Errorf("fsafe: workspace must be a directory")
-	}
-	hashRoot, err := cdRoot.OpenRoot(hash)
-	if err != nil {
-		return fmt.Errorf("fsafe: open workspace: %w", err)
-	}
-	if err := sameRootDirectory(cdRoot, hash, hashInfo, hashRoot); err != nil {
-		_ = hashRoot.Close()
-		return err
-	}
-	if err := rejectWorkspaceTree(hashRoot); err != nil {
-		_ = hashRoot.Close()
-		return err
+		quarantineRoot, err := cdRoot.OpenRoot(".quarantine")
+		if err != nil {
+			return fmt.Errorf("fsafe: open workspace quarantine: %w", err)
+		}
+		defer quarantineRoot.Close()
+		if err := sameRootDirectory(cdRoot, ".quarantine", quarantineInfo, quarantineRoot); err != nil {
+			return err
+		}
+		if err := removeWorkspace(quarantineRoot, hash); err != nil {
+			return fmt.Errorf("fsafe: clean legacy quarantine: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("fsafe: inspect workspace quarantine: %w", err)
 	}
 	if err := sameRootDirectory(saveRoot, ".cd211", cdInfo, cdRoot); err != nil {
-		_ = hashRoot.Close()
 		return err
 	}
-	if err := sameRootDirectory(cdRoot, hash, hashInfo, hashRoot); err != nil {
-		_ = hashRoot.Close()
-		return err
-	}
-	if err := cdRoot.Rename(hash, filepath.Join(".quarantine", hash)); err != nil {
-		_ = hashRoot.Close()
-		return fmt.Errorf("fsafe: quarantine workspace: %w", err)
-	}
-	quarantinedInfo, err := quarantineRoot.Lstat(hash)
-	if err != nil {
-		_ = hashRoot.Close()
-		return fmt.Errorf("fsafe: revalidate quarantined workspace: %w", err)
-	}
-	if !os.SameFile(hashInfo, quarantinedInfo) {
-		_ = hashRoot.Close()
-		return fmt.Errorf("fsafe: workspace changed during quarantine")
-	}
-	if err := sameRootDirectory(quarantineRoot, hash, quarantinedInfo, hashRoot); err != nil {
-		_ = hashRoot.Close()
-		return err
-	}
-	if err := rejectWorkspaceTree(hashRoot); err != nil {
-		_ = hashRoot.Close()
-		return err
-	}
-	if err := hashRoot.Close(); err != nil {
-		return fmt.Errorf("fsafe: close quarantined workspace: %w", err)
-	}
-	if err := quarantineRoot.RemoveAll(hash); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("fsafe: remove quarantined workspace: %w", err)
-	}
-	return nil
+	return removeWorkspace(cdRoot, hash)
 }
 
 func validateWorkspaceHash(hash string) error {
@@ -571,20 +518,20 @@ func setRootMode(root *os.Root, mode os.FileMode, name string) error {
 	return nil
 }
 
-func removeQuarantinedWorkspace(parent *os.Root, hash string) error {
+func removeWorkspace(parent *os.Root, hash string) error {
 	info, err := parent.Lstat(hash)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return fmt.Errorf("fsafe: inspect quarantined workspace: %w", err)
+		return fmt.Errorf("fsafe: inspect workspace: %w", err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return fmt.Errorf("fsafe: quarantined workspace must be a directory")
+		return fmt.Errorf("fsafe: workspace must be a directory")
 	}
 	child, err := parent.OpenRoot(hash)
 	if err != nil {
-		return fmt.Errorf("fsafe: open quarantined workspace: %w", err)
+		return fmt.Errorf("fsafe: open workspace: %w", err)
 	}
 	defer child.Close()
 	if err := sameRootDirectory(parent, hash, info, child); err != nil {
@@ -596,8 +543,36 @@ func removeQuarantinedWorkspace(parent *os.Root, hash string) error {
 	if err := sameRootDirectory(parent, hash, info, child); err != nil {
 		return err
 	}
-	if err := parent.RemoveAll(hash); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("fsafe: remove quarantined workspace: %w", err)
+	for {
+		// 删除会使部分文件系统重排目录项，每批都从锚定根重新打开目录。
+		dir, err := child.Open(".")
+		if err != nil {
+			return fmt.Errorf("fsafe: open workspace contents: %w", err)
+		}
+		names, err := dir.Readdirnames(128)
+		closeErr := dir.Close()
+		if err != nil && !errors.Is(err, io.EOF) {
+			return fmt.Errorf("fsafe: list workspace contents: %w", err)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("fsafe: close workspace contents: %w", closeErr)
+		}
+		for _, name := range names {
+			// 递归删除始终锚定工作区本身，不能通过共享父目录重新解析 hash。
+			if err := child.RemoveAll(name); err != nil {
+				return fmt.Errorf("fsafe: remove workspace contents: %w", err)
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+	}
+	if err := sameRootDirectory(parent, hash, info, child); err != nil {
+		return err
+	}
+	// 最后只删除空目录；并发写入或替换不能导致递归删除另一个工作区。
+	if err := parent.Remove(hash); err != nil {
+		return fmt.Errorf("fsafe: remove empty workspace: %w", err)
 	}
 	return nil
 }
