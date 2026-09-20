@@ -96,6 +96,34 @@ func TestParseLogQueryLevels(t *testing.T) {
 		})
 	}
 }
+func TestParseLogQueryDateRange(t *testing.T) {
+	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name, target string
+		ok           bool
+	}{
+		{name: "three calendar months", target: "/logs?from=2026-06-20&to=2026-09-20", ok: true},
+		{name: "screenshot range", target: "/logs?from=2026-09-01&to=2026-09-20", ok: true},
+		{name: "before retention window", target: "/logs?from=2026-06-19&to=2026-09-20", ok: false},
+		{name: "future end", target: "/logs?from=2026-09-01&to=2026-09-21", ok: false},
+		{name: "reversed", target: "/logs?from=2026-09-20&to=2026-09-19", ok: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, ok := parseLogQuery(httptest.NewRequest(http.MethodGet, test.target, nil), now)
+			if ok != test.ok {
+				t.Fatalf("parseLogQuery ok = %v, want %v", ok, test.ok)
+			}
+		})
+	}
+
+	if !validLogDateRange(
+		time.Date(2026, 1, 31, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC),
+	) {
+		t.Fatal("January 31 through April 30 should be valid")
+	}
+}
 
 func TestLogsSearchMatchesSafeRecordFields(t *testing.T) {
 	fixture := newWebFixture(t)
@@ -118,9 +146,10 @@ func TestLogsRenderLocalizedChrome(t *testing.T) {
 		lede       string
 		levelLabel string
 		summary    string
+		rangeHint  string
 	}{
-		{name: "English", lang: "en", title: "Logs", nav: "Logs", lede: "Application and HTTP request history.", levelLabel: "Level", summary: "Warning, Error"},
-		{name: "Chinese", lang: "zh", title: "日志", nav: "日志", lede: "应用与 HTTP 请求历史", levelLabel: "级别", summary: "警告、错误"},
+		{name: "English", lang: "en", title: "Logs", nav: "Logs", lede: "Application and HTTP request history.", levelLabel: "Level", summary: "Warning, Error", rangeHint: "Logs are retained for the last three calendar months; dates use UTC."},
+		{name: "Chinese", lang: "zh", title: "日志", nav: "日志", lede: "应用与 HTTP 请求历史", levelLabel: "级别", summary: "警告、错误", rangeHint: "日志保留最近三个月，日期按 UTC 时间计算。"},
 	} {
 		response := fixture.requestLang(http.MethodGet, "/logs", true, item.lang)
 		if response.Code != http.StatusOK {
@@ -136,6 +165,10 @@ func TestLogsRenderLocalizedChrome(t *testing.T) {
 			`<form class="filter-bar log-filters"`,
 			`class="filter-field"`,
 			`<input type="hidden" name="level_set" value="1">`,
+			`data-log-max-months="3"`,
+			`data-log-date-min="2026-05-06"`,
+			`data-log-date-max="2026-08-06"`,
+			`<p class="form-hint log-range-hint">` + item.rangeHint + `</p>`,
 		} {
 			if !strings.Contains(body, want) {
 				t.Errorf("logs missing %q in %s response", want, item.name)
@@ -309,6 +342,10 @@ func TestLogsLocalTimeScriptContract(t *testing.T) {
 		`second: "2-digit"`,
 		`data-local-time`,
 		`catch`,
+		`data-log-filter`,
+		`dataset.logMaxMonths`,
+		`addMonthsClamped`,
+		`toInput.max`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("app.js missing local time contract %q", want)

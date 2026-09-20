@@ -40,6 +40,59 @@ function formatLocalTimes(root = document) {
 }
 
 formatLocalTimes();
+function setupLogDateFilter() {
+  const form = document.querySelector("form[data-log-filter]");
+  if (!form) return;
+  const fromInput = form.elements.namedItem("from");
+  const toInput = form.elements.namedItem("to");
+  const maxMonths = Number.parseInt(form.dataset.logMaxMonths || "", 10);
+  const dateMin = form.dataset.logDateMin || "";
+  const dateMax = form.dataset.logDateMax || "";
+  if (!(fromInput instanceof HTMLInputElement) || !(toInput instanceof HTMLInputElement) ||
+      !Number.isInteger(maxMonths) || maxMonths < 1 || !dateMin || !dateMax) {
+    return;
+  }
+
+  const parseDate = (value) => {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+    if (!match) return null;
+    const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+    return date.getUTCFullYear() === Number(match[1]) &&
+      date.getUTCMonth() === Number(match[2]) - 1 &&
+      date.getUTCDate() === Number(match[3]) ? date : null;
+  };
+  const formatDate = (date) => [
+    date.getUTCFullYear().toString().padStart(4, "0"),
+    (date.getUTCMonth() + 1).toString().padStart(2, "0"),
+    date.getUTCDate().toString().padStart(2, "0"),
+  ].join("-");
+  const addMonthsClamped = (value) => {
+    const date = parseDate(value);
+    if (!date) return dateMax;
+    const target = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + maxMonths, 1));
+    const lastDay = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+    return formatDate(new Date(Date.UTC(
+      target.getUTCFullYear(),
+      target.getUTCMonth(),
+      Math.min(date.getUTCDate(), lastDay),
+    )));
+  };
+  const syncBounds = () => {
+    const from = parseDate(fromInput.value);
+    const lower = from && fromInput.value > dateMin ? fromInput.value : dateMin;
+    const calculatedMax = from ? addMonthsClamped(fromInput.value) : dateMax;
+    const upper = calculatedMax < dateMax ? calculatedMax : dateMax;
+    toInput.min = lower;
+    toInput.max = upper;
+  };
+
+  fromInput.addEventListener("input", syncBounds);
+  fromInput.addEventListener("change", syncBounds);
+  form.addEventListener("submit", syncBounds);
+  syncBounds();
+}
+
+setupLogDateFilter();
 if (document.body) {
   const localTimeObserver = new MutationObserver((mutations) => {
     for (const mutation of mutations) {

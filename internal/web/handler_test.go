@@ -663,7 +663,7 @@ func TestSecurityHeadersAndStaticAssets(t *testing.T) {
 	if themeInit < 0 || stylesheet < 0 || themeInit > stylesheet {
 		t.Errorf("theme initializer must load before stylesheet: theme=%d stylesheet=%d", themeInit, stylesheet)
 	}
-	moduleScript := strings.Index(body, `<script type="module" src="/static/app.js?v=11"></script>`)
+	moduleScript := strings.Index(body, `<script type="module" src="/static/app.js?v=12"></script>`)
 	if moduleScript < 0 || moduleScript < stylesheet {
 		t.Errorf("app module script must load after stylesheet: module=%d stylesheet=%d", moduleScript, stylesheet)
 	}

@@ -36,6 +36,40 @@ func TestRotatingWriterAppendsAndRotates(t *testing.T) {
 		}
 	}
 }
+func TestRotatingWriterKeepsThreeCalendarMonths(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	for _, name := range []string{
+		"cd211-2026-06-19.jsonl",
+		"cd211-2026-06-20.jsonl",
+		"cd211-2026-09-20.jsonl",
+		"notes.txt",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0640); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	(&RotatingWriter{dir: dir}).cleanLocked(now)
+
+	for _, test := range []struct {
+		name   string
+		exists bool
+	}{
+		{name: "cd211-2026-06-19.jsonl", exists: false},
+		{name: "cd211-2026-06-20.jsonl", exists: true},
+		{name: "cd211-2026-09-20.jsonl", exists: true},
+		{name: "notes.txt", exists: true},
+	} {
+		_, err := os.Stat(filepath.Join(dir, test.name))
+		if test.exists && err != nil {
+			t.Errorf("%s removed unexpectedly: %v", test.name, err)
+		}
+		if !test.exists && !os.IsNotExist(err) {
+			t.Errorf("%s exists unexpectedly: %v", test.name, err)
+		}
+	}
+}
 
 func TestRotatingWriterConcurrentLines(t *testing.T) {
 	dir := t.TempDir()

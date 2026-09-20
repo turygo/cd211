@@ -12,9 +12,9 @@
     </div>
   </header>
   <p class="page-lede">{{.Str.LogsLede}}</p>
-  <form class="filter-bar log-filters" method="get" action="/logs">
-    <label class="filter-field"><span>{{.Str.LogFrom}}</span><input type="date" name="from" value="{{.From}}"></label>
-    <label class="filter-field"><span>{{.Str.LogTo}}</span><input type="date" name="to" value="{{.To}}"></label>
+  <form class="filter-bar log-filters" method="get" action="/logs" data-log-filter data-log-max-months="{{.MaxRangeMonths}}" data-log-date-min="{{.DateMin}}" data-log-date-max="{{.DateMax}}">
+    <label class="filter-field"><span>{{.Str.LogFrom}}</span><input type="date" name="from" min="{{.DateMin}}" max="{{.DateMax}}" value="{{.From}}"></label>
+    <label class="filter-field"><span>{{.Str.LogTo}}</span><input type="date" name="to" min="{{.DateMin}}" max="{{.DateMax}}" value="{{.To}}"></label>
     <div class="filter-field log-level-field">
       <span>{{.Str.LogLevel}}</span>
       <details class="log-level-menu">
@@ -28,6 +28,7 @@
     <label class="filter-field search-field"><span>{{.Str.LogSearch}}</span><input type="search" name="q" value="{{.Search}}"></label>
     <button class="button" type="submit">{{.Str.LogApply}}</button>
   </form>
+  <p class="form-hint log-range-hint">{{.Str.LogRangeHint}}</p>
   {{if .Invalid}}<p class="notice notice-error" role="alert">{{.Str.LogInvalid}}</p>{{end}}
   {{if .Rows}}
   <section class="panel log-list" aria-label="{{.Str.TitleLogs}}">

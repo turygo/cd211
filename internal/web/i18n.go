@@ -421,6 +421,7 @@ type Strings struct {
 	LogApply          string
 	LogEmpty          string
 	LogInvalid        string
+	LogRangeHint      string
 	LogDetails        string
 }
 
@@ -833,6 +834,7 @@ var stringsEN = Strings{
 	LogApply:           "Apply filters",
 	LogEmpty:           "No matching log records.",
 	LogInvalid:         "Log filters are invalid.",
+	LogRangeHint:       "Logs are retained for the last three calendar months; dates use UTC.",
 	LogDetails:         "Details",
 }
 
@@ -1243,7 +1245,8 @@ var stringsZH = Strings{
 	LogSearch:          "搜索",
 	LogApply:           "应用筛选",
 	LogEmpty:           "没有匹配的日志记录。",
-	LogInvalid:         "日志筛选条件无效。",
+	LogInvalid:         "日志筛选范围无效：日期必须在最近三个月内，且范围不得超过三个月。",
+	LogRangeHint:       "日志保留最近三个月，日期按 UTC 时间计算。",
 	LogDetails:         "详情",
 }
 

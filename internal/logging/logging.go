@@ -29,11 +29,12 @@ import (
 )
 
 const (
-	maxString     = 512
-	maxPathString = 1024
-	maxPreview    = 4096
-	maxDetail     = 16 << 10
-	maxLine       = 256 << 10
+	maxString       = 512
+	maxPathString   = 1024
+	maxPreview      = 4096
+	maxDetail       = 16 << 10
+	maxLine         = 256 << 10
+	RetentionMonths = 3
 )
 
 type RotatingWriter struct {
@@ -89,7 +90,8 @@ func (w *RotatingWriter) cleanLocked(now time.Time) {
 	if err != nil {
 		return
 	}
-	cutoff := now.UTC().AddDate(0, 0, -29)
+	now = now.UTC()
+	cutoff := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, -RetentionMonths, 0)
 	for _, entry := range entries {
 		name := entry.Name()
 		if len(name) != len("cd211-YYYY-MM-DD.jsonl") || !strings.HasPrefix(name, "cd211-") || !strings.HasSuffix(name, ".jsonl") {

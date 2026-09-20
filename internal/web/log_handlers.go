@@ -35,19 +35,33 @@ type LogRow struct {
 type LogsView struct {
 	PageMeta
 	From, To, Search string
+	DateMin, DateMax string
+	MaxRangeMonths   int
 	Levels           []LogLevelOption
 	LevelSummary     string
 	Rows             []LogRow
 	Invalid          bool
 }
 
+const logFilterMaxMonths = logging.RetentionMonths
+
 func (h *handler) logs(w http.ResponseWriter, r *http.Request) {
 	lang := requestLang(r)
-	query, ok := parseLogQuery(r, h.clock.Now().UTC())
+	now := h.clock.Now().UTC()
+	query, ok := parseLogQuery(r, now)
 	str := tr(lang)
+	dateMin, dateMax := logFilterDateBounds(now)
 	view := LogsView{
-		PageMeta: PageMeta{Title: str.TitleLogs, ActiveNav: "logs", CSRFToken: h.authSession(r).CSRFToken, Lang: lang, OtherLang: otherLang(lang), Path: r.URL.RequestURI(), Str: str},
-		From:     query.from, To: query.to, Search: query.search, Levels: logLevelOptions(str, query.levels), LevelSummary: logLevelSummary(str, query.levels), Invalid: !ok,
+		PageMeta:       PageMeta{Title: str.TitleLogs, ActiveNav: "logs", CSRFToken: h.authSession(r).CSRFToken, Lang: lang, OtherLang: otherLang(lang), Path: r.URL.RequestURI(), Str: str},
+		From:           query.from,
+		To:             query.to,
+		Search:         query.search,
+		DateMin:        dateMin,
+		DateMax:        dateMax,
+		MaxRangeMonths: logFilterMaxMonths,
+		Levels:         logLevelOptions(str, query.levels),
+		LevelSummary:   logLevelSummary(str, query.levels),
+		Invalid:        !ok,
 	}
 	if ok {
 		records, err := h.logReader.Query(query.query)
@@ -63,6 +77,41 @@ func (h *handler) logs(w http.ResponseWriter, r *http.Request) {
 	h.render(w, status, "logs", view)
 }
 
+func logFilterDateBounds(now time.Time) (string, string) {
+	today := utcDate(now)
+	return formatLogDate(addCalendarMonthsClamped(today, -logFilterMaxMonths)), formatLogDate(today)
+}
+
+func utcDate(value time.Time) time.Time {
+	y, m, d := value.UTC().Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+}
+
+func formatLogDate(value time.Time) string {
+	return utcDate(value).Format("2006-01-02")
+}
+
+func addCalendarMonthsClamped(value time.Time, months int) time.Time {
+	date := utcDate(value)
+	year, month, day := date.Date()
+	target := time.Date(year, month+time.Month(months), 1, 0, 0, 0, 0, time.UTC)
+	lastDay := target.AddDate(0, 1, -1).Day()
+	if day > lastDay {
+		day = lastDay
+	}
+	return time.Date(target.Year(), target.Month(), day, 0, 0, 0, 0, time.UTC)
+}
+
+func validLogDateRange(from, to, today time.Time) bool {
+	from = utcDate(from)
+	to = utcDate(to)
+	today = utcDate(today)
+	return !from.Before(addCalendarMonthsClamped(today, -logFilterMaxMonths)) &&
+		!from.After(to) &&
+		!to.After(today) &&
+		!to.After(addCalendarMonthsClamped(from, logFilterMaxMonths))
+}
+
 type parsedLogQuery struct {
 	query    logging.Query
 	from, to string
@@ -74,7 +123,8 @@ var logLevelValues = []string{"debug", "info", "warn", "error"}
 
 func parseLogQuery(r *http.Request, now time.Time) (parsedLogQuery, bool) {
 	values := r.URL.Query()
-	day := now.UTC().Format("2006-01-02")
+	today := utcDate(now)
+	day := formatLogDate(today)
 	out := parsedLogQuery{from: values.Get("from"), to: values.Get("to"), search: values.Get("q")}
 	if out.from == "" {
 		out.from = day
@@ -112,7 +162,7 @@ func parseLogQuery(r *http.Request, now time.Time) (parsedLogQuery, bool) {
 	}
 	from, err1 := time.Parse("2006-01-02", out.from)
 	to, err2 := time.Parse("2006-01-02", out.to)
-	if err1 != nil || err2 != nil || from.After(to) || to.Sub(from) > 6*24*time.Hour || len(out.search) > 256 {
+	if err1 != nil || err2 != nil || !validLogDateRange(from, to, today) || len(out.search) > 256 {
 		return out, false
 	}
 	levels := make(map[string]bool, len(out.levels))
