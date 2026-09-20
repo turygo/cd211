@@ -761,6 +761,77 @@ func TestOpenSaveRootRemainsAnchoredAfterRename(t *testing.T) {
 	assertFileContent(t, replacementTarget, "replacement")
 }
 
+func TestDiagnoseClassifiesErrnoAndPreservesTypedFailure(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		want FailureKind
+	}{
+		{name: "missing", err: &os.PathError{Op: "lstat", Path: "/redacted", Err: syscall.ENOENT}, want: FailureMissing},
+		{name: "permission", err: &os.PathError{Op: "open", Path: "/redacted", Err: syscall.EACCES}, want: FailurePermission},
+		{name: "read only", err: &os.PathError{Op: "mkdir", Path: "/redacted", Err: syscall.EROFS}, want: FailurePermission},
+		{name: "stale", err: &os.PathError{Op: "stat", Path: "/redacted", Err: syscall.ESTALE}, want: FailureTransient},
+		{name: "unknown", err: errors.New("unknown filesystem failure"), want: FailureTransient},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := Diagnose(test.err); got.Kind != test.want {
+				t.Fatalf("Diagnose() kind = %q, want %q", got.Kind, test.want)
+			}
+		})
+	}
+
+	typed := &Failure{
+		Kind:      FailureUnsafe,
+		Operation: OperationValidateWorkspaceIdentity,
+		Err:       &os.PathError{Op: "lstat", Path: "/redacted", Err: syscall.ENOENT},
+	}
+	got := Diagnose(typed)
+	if got.Kind != FailureUnsafe || got.Operation != OperationValidateWorkspaceIdentity || got.Errno != syscall.ENOENT {
+		t.Fatalf("Diagnose(typed) = %+v", got)
+	}
+}
+
+func TestInspectCandidateDistinguishesMissingContentAndUnsafeEntries(t *testing.T) {
+	verifier, root := newTestVerifier(t)
+	save := mkdir(t, filepath.Join(root, "save"))
+
+	exists, err := verifier.InspectCandidate(save, "missing")
+	if err != nil || exists {
+		t.Fatalf("InspectCandidate(missing) = (%t, %v)", exists, err)
+	}
+
+	writeFile(t, filepath.Join(save, "file"), "content")
+	mkdir(t, filepath.Join(save, "directory"))
+	for _, name := range []string{"file", "directory"} {
+		exists, err = verifier.InspectCandidate(save, name)
+		if err != nil || !exists {
+			t.Fatalf("InspectCandidate(%s) = (%t, %v)", name, exists, err)
+		}
+	}
+
+	mustSymlink(t, filepath.Join(save, "missing-target"), filepath.Join(save, "link"))
+	if _, err := verifier.InspectCandidate(save, "link"); Diagnose(err).Kind != FailureUnsafe {
+		t.Fatalf("InspectCandidate(link) error = %v, diagnostic = %+v", err, Diagnose(err))
+	}
+
+	fifo := filepath.Join(save, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatalf("Mkfifo(): %v", err)
+	}
+	if _, err := verifier.InspectCandidate(save, "fifo"); Diagnose(err).Kind != FailureUnsafe {
+		t.Fatalf("InspectCandidate(fifo) error = %v, diagnostic = %+v", err, Diagnose(err))
+	}
+
+	if err := os.RemoveAll(save); err != nil {
+		t.Fatalf("RemoveAll(save): %v", err)
+	}
+	exists, err = verifier.InspectCandidate(save, "missing")
+	diagnostic := Diagnose(err)
+	if err == nil || exists || diagnostic.Kind != FailureTransient || diagnostic.Operation != OperationResolveCandidate {
+		t.Fatalf("InspectCandidate(missing root) = (%t, %v), diagnostic = %+v", exists, err, diagnostic)
+	}
+}
+
 func newTestVerifier(t *testing.T) (*Verifier, string) {
 	t.Helper()
 	root := mkdir(t, filepath.Join(t.TempDir(), "local"))

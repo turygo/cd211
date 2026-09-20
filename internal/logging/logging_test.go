@@ -123,6 +123,42 @@ func TestRotatingWriterConcurrentLines(t *testing.T) {
 	}
 }
 
+func TestSafeHandlerKeepsFilesystemDiagnosticsWithoutRawPaths(t *testing.T) {
+	var out bytes.Buffer
+	logger := slog.New(&safeHandler{Handler: slog.NewJSONHandler(&out, nil)})
+	logger.Warn(
+		"local filesystem failure observed",
+		"hash", "01234567",
+		"state", "SUBMITTING_COPY",
+		"operation", "preflight_local",
+		"attempt", 2,
+		"problem", "local_permission_denied",
+		"failure_kind", "permission",
+		"fs_operation", "inspect_candidate",
+		"errno", 13,
+		"errno_text", "permission denied",
+		"path_role", "workspace",
+		"row_version", 7,
+		"raw_path", "/downloads/private/release",
+	)
+
+	var record map[string]any
+	if err := json.Unmarshal(out.Bytes(), &record); err != nil {
+		t.Fatalf("Unmarshal(log): %v", err)
+	}
+	for _, key := range []string{"hash", "state", "operation", "attempt", "problem", "failure_kind", "fs_operation", "errno", "errno_text", "path_role", "row_version"} {
+		if record[key] == nil || record[key] == "[OMITTED]" {
+			t.Errorf("diagnostic field %q was not retained: %#v", key, record[key])
+		}
+	}
+	if got := record["raw_path"]; got != "[OMITTED]" {
+		t.Errorf("raw_path = %#v, want omitted", got)
+	}
+	if strings.Contains(out.String(), "/downloads/private/release") {
+		t.Fatal("safe log exposed raw path")
+	}
+}
+
 func TestMiddlewareRedactsAndCapturesOneCompletion(t *testing.T) {
 	var out bytes.Buffer
 	logger := slog.New(&safeHandler{Handler: slog.NewJSONHandler(&out, nil)})

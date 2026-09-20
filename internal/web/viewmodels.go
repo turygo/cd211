@@ -120,6 +120,14 @@ type RouteStage struct {
 	Class  string
 }
 
+type ProblemView struct {
+	Summary   string
+	Action    string
+	PathLabel string
+	Path      string
+	Warning   bool
+}
+
 type DetailView struct {
 	PageMeta
 	Hash             string
@@ -145,8 +153,7 @@ type DetailView struct {
 	NextRunAt        string
 	RetryScheduledAt string
 	AttemptCount     int64
-	Error            string
-	ErrorIsWarning   bool
+	Problem          *ProblemView
 	Route            RouteView
 	Files            []FileView
 	CanStart         bool
@@ -346,7 +353,7 @@ func buildDetailView(download domain.Download, files []domain.DownloadFile, csrf
 		return DetailView{}, err
 	}
 	str := tr(lang)
-	message, warning := problemError(download, str)
+	problem := buildProblemView(download, str)
 	page := DetailView{
 		PageMeta:         pageMeta(download.Name, "downloads", csrfToken, lang),
 		Hash:             download.Hash,
@@ -372,8 +379,7 @@ func buildDetailView(download domain.Download, files []domain.DownloadFile, csrf
 		NextRunAt:        displayOptionalTime(download.NextRunAt, str.NotScheduled, str),
 		RetryScheduledAt: retryScheduledAt(download, str),
 		AttemptCount:     download.AttemptCount,
-		Error:            message,
-		ErrorIsWarning:   warning,
+		Problem:          problem,
 		Route:            buildRoute(download, str),
 		CanStart:         download.State == domain.StateStopped,
 		CanRetry:         domain.CanRetry(download),
@@ -588,7 +594,11 @@ func problemError(download domain.Download, str *Strings) (message string, warni
 		}
 		return errorText, false
 	}
-	message = str.Problems[code]
+	localized := str.Problems[code]
+	message = localized.Summary
+	if localized.Action != "" {
+		message = strings.TrimSpace(message + " " + localized.Action)
+	}
 	if message == "" {
 		message = domain.ProblemText(code)
 	}
@@ -596,6 +606,57 @@ func problemError(download domain.Download, str *Strings) (message string, warni
 		warning = true
 	}
 	return message, warning
+}
+func buildProblemView(download domain.Download, str *Strings) *ProblemView {
+	message, warning := problemError(download, str)
+	if message == "" {
+		return nil
+	}
+	view := &ProblemView{Summary: message, Warning: warning}
+	code := domain.ProblemCode(download.LastErrorCode)
+	if localized, ok := str.Problems[code]; ok {
+		view.Summary = localized.Summary
+		view.Action = localized.Action
+	}
+	if code == domain.ProblemLocalVerificationFailed &&
+		download.LastUpstreamStatus == domain.UpstreamOfflineFinished &&
+		download.CopyProgress == 0 {
+		view.Summary = str.LegacyLocalPreflightSummary
+		view.Action = str.LegacyLocalPreflightAction
+	}
+	if localProblemCode(code) {
+		view.PathLabel = str.ContainerVisibleSharedPath
+		view.Path = localProblemPath(download)
+	}
+	return view
+}
+
+func localProblemCode(code domain.ProblemCode) bool {
+	switch code {
+	case domain.ProblemLocalFilesystemUnavailable,
+		domain.ProblemLocalFilesystemUnavailableTimeout,
+		domain.ProblemLocalPermissionDenied,
+		domain.ProblemLocalPathUnsafe,
+		domain.ProblemLocalContentLayoutInvalid,
+		domain.ProblemLocalVerificationFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+func localProblemPath(download domain.Download) string {
+	root := download.WorkspacePath
+	if root == "" {
+		root = download.SavePath
+	}
+	if download.LastUpstreamStatus == domain.UpstreamOfflineFinished && download.CopyProgress == 0 {
+		return root
+	}
+	if root == "" || download.DestinationName == "" {
+		return root
+	}
+	return filepath.Join(root, download.DestinationName)
 }
 
 func retryScheduledAt(download domain.Download, str *Strings) string {

@@ -100,7 +100,12 @@
   <section class="panel" data-live-route>
     {{template "segmented-track" .Route}}
   </section>
-  {{if .Error}}<div class="notice {{if .ErrorIsWarning}}notice-warning{{else}}notice-error{{end}}" data-live-error role="{{if .ErrorIsWarning}}status{{else}}alert{{end}}"><strong>{{if .ErrorIsWarning}}{{.Str.RetryingTitle}}{{else}}{{.Str.RecordedError}}{{end}}</strong><p>{{.Error}}{{if .RetryScheduledAt}} {{localTimeFormat .Str.RetryScheduledFormat .RetryScheduledAt}}{{end}}</p></div>{{end}}
+  {{if .Problem}}<div class="notice {{if .Problem.Warning}}notice-warning{{else}}notice-error{{end}}" data-live-error role="{{if .Problem.Warning}}status{{else}}alert{{end}}">
+    <strong>{{if .Problem.Warning}}{{.Str.RetryingTitle}}{{else}}{{.Str.RecordedError}}{{end}}</strong>
+    <p>{{.Problem.Summary}}{{if .RetryScheduledAt}} {{localTimeFormat .Str.RetryScheduledFormat .RetryScheduledAt}}{{end}}</p>
+    {{if .Problem.Action}}<p>{{.Problem.Action}}</p>{{end}}
+    {{if .Problem.Path}}<p><strong>{{.Problem.PathLabel}}</strong><br><code>{{.Problem.Path}}</code></p>{{end}}
+  </div>{{end}}
   <div class="panel-grid">
     <section class="panel" aria-labelledby="paths-title" data-live-paths>
       <h2 id="paths-title">{{.Str.SectionPaths}}</h2>

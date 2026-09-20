@@ -140,6 +140,7 @@ func (c fakeCloud) CancelCopy(ctx context.Context, source, destination string) e
 type fakeFilesystem struct {
 	verify            func(string, fsafe.ExpectedContent) (string, error)
 	verifyUnknownType func(string, string) (fsafe.UnknownContent, error)
+	inspectCandidate  func(string, string) (bool, error)
 	size              int64
 	delete            func(string, string) error
 	prepareWorkspace  func(string, string) (string, error)
@@ -161,6 +162,12 @@ func (f *fakeFilesystem) VerifyUnknownType(save, name string) (fsafe.UnknownCont
 		return fsafe.UnknownContent{}, fs.ErrNotExist
 	}
 	return f.verifyUnknownType(save, name)
+}
+func (f *fakeFilesystem) InspectCandidate(save, name string) (bool, error) {
+	if f.inspectCandidate == nil {
+		return false, nil
+	}
+	return f.inspectCandidate(save, name)
 }
 
 func (f *fakeFilesystem) Delete(content, save string) error {
@@ -885,9 +892,6 @@ func TestRetryAfterLocalVerificationFailureRemovesStaleCopy(t *testing.T) {
 		if !deleted {
 			return "", errors.New("fsafe: single-file manifest does not match candidate")
 		}
-		if verifyCalls == 1 {
-			return "", fs.ErrNotExist
-		}
 		return filepath.Join(save, expected.CandidateName), nil
 	}
 	files.delete = func(content, save string) error {
@@ -911,7 +915,7 @@ func TestRetryAfterLocalVerificationFailureRemovesStaleCopy(t *testing.T) {
 			download.NextRunAt = nil
 		}
 	}
-	if !deleted || cancelCalls != 1 || ensureCalls != 1 || verifyCalls != 2 || download.State != domain.StateCompleted {
+	if !deleted || cancelCalls != 1 || ensureCalls != 1 || verifyCalls != 1 || download.State != domain.StateCompleted {
 		t.Fatalf("retry recovery = deleted:%t cancel:%d ensure:%d verify:%d download:%+v", deleted, cancelCalls, ensureCalls, verifyCalls, download)
 	}
 }
@@ -1024,14 +1028,10 @@ func TestStepWorkflowAndMissingCopyRecovery(t *testing.T) {
 	cloud.inspectCopy = func(context.Context, string, string) (clouddrive.CopyTask, bool, error) {
 		return clouddrive.CopyTask{}, false, nil
 	}
-	unknownTypeCalls := 0
+	files.inspectCandidate = func(string, string) (bool, error) {
+		return false, nil
+	}
 	files.verifyUnknownType = func(save, name string) (fsafe.UnknownContent, error) {
-		unknownTypeCalls++
-		if unknownTypeCalls == 1 {
-			// Pre-copy collision detection: the destination is clear.
-			return fsafe.UnknownContent{}, fs.ErrNotExist
-		}
-		// The staged tree is what counts for a magnet: kind, path, and size.
 		return fsafe.UnknownContent{Path: "/downloads/payload", Size: 4096, MultiFile: false}, nil
 	}
 	files.size = 4096
@@ -1106,8 +1106,8 @@ func TestStepFailuresBackoffTimeoutCollisionAndCAS(t *testing.T) {
 
 	multi := false
 	collision := baseDownload(domain.StateSubmittingCopy, now)
-	files.verifyUnknownType = func(string, string) (fsafe.UnknownContent, error) {
-		return fsafe.UnknownContent{Path: "/downloads/payload", Size: 4096, MultiFile: false}, nil
+	files.inspectCandidate = func(string, string) (bool, error) {
+		return true, nil
 	}
 	collision.IsMultiFile, collision.LastUpstreamStatus = new(multi), "offline:FINISHED"
 	collision.CopySourcePath = collision.CloudResultPath
@@ -1607,8 +1607,8 @@ func TestMagnetPreflightCollisionRegardlessOfType(t *testing.T) {
 	clock := &fakeClock{now: now}
 	repo := &fakeRepository{}
 	cloud, files := defaults()
-	files.verifyUnknownType = func(string, string) (fsafe.UnknownContent, error) {
-		return fsafe.UnknownContent{Path: "/downloads/payload", Size: 1, MultiFile: false}, nil
+	files.inspectCandidate = func(string, string) (bool, error) {
+		return true, nil
 	}
 	s := testScheduler(t, clock, repo, cloud, files)
 
@@ -1697,10 +1697,10 @@ func TestPollStatesAndPermanentFailures(t *testing.T) {
 		t.Fatalf("magnet verify retry = %#v", d)
 	}
 	files.verifyUnknownType = func(string, string) (fsafe.UnknownContent, error) {
-		return fsafe.UnknownContent{}, errors.New("unsafe symlink")
+		return fsafe.UnknownContent{}, &fsafe.Failure{Kind: fsafe.FailureUnsafe, Operation: fsafe.OperationInspectCandidate, Err: errors.New("unsafe symlink")}
 	}
 	d = step(t, s, repo, verifyRow)
-	if d.State != domain.StateFailed || d.LastErrorCode != string(domain.ProblemLocalVerificationFailed) {
+	if d.State != domain.StateFailed || d.LastErrorCode != string(domain.ProblemLocalPathUnsafe) {
 		t.Fatalf("unsafe verification = %#v", d)
 	}
 
@@ -1710,6 +1710,65 @@ func TestPollStatesAndPermanentFailures(t *testing.T) {
 	d = step(t, s, repo, baseDownload(domain.StateSubmittingOffline, now))
 	if d.State != domain.StateFailed || d.LastErrorCode != string(domain.ProblemOfflineSubmissionRejected) || d.NextRunAt != nil {
 		t.Fatalf("rejected cloud failure = %#v", d)
+	}
+}
+func TestLocalFilesystemFailuresMapToRetryAndActionableTerminalCodes(t *testing.T) {
+	now := time.Date(2026, 9, 1, 3, 4, 5, 0, time.UTC)
+	for _, test := range []struct {
+		name      string
+		kind      fsafe.FailureKind
+		wantState domain.State
+		wantCode  domain.ProblemCode
+	}{
+		{name: "transient", kind: fsafe.FailureTransient, wantState: domain.StateVerifyingLocal, wantCode: domain.ProblemLocalFilesystemUnavailable},
+		{name: "permission", kind: fsafe.FailurePermission, wantState: domain.StateFailed, wantCode: domain.ProblemLocalPermissionDenied},
+		{name: "unsafe", kind: fsafe.FailureUnsafe, wantState: domain.StateFailed, wantCode: domain.ProblemLocalPathUnsafe},
+		{name: "layout", kind: fsafe.FailureLayout, wantState: domain.StateFailed, wantCode: domain.ProblemLocalContentLayoutInvalid},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			clock := &fakeClock{now: now}
+			repo := &fakeRepository{}
+			cloud, files := defaults()
+			files.verifyUnknownType = func(string, string) (fsafe.UnknownContent, error) {
+				return fsafe.UnknownContent{}, &fsafe.Failure{
+					Kind:      test.kind,
+					Operation: fsafe.OperationInspectCandidate,
+					Err:       &os.PathError{Op: "lstat", Path: "/redacted", Err: syscall.EIO},
+				}
+			}
+			scheduler := testScheduler(t, clock, repo, cloud, files)
+			download := baseDownload(domain.StateVerifyingLocal, now)
+			download.DestinationName = download.Name
+
+			got := step(t, scheduler, repo, download)
+			if got.State != test.wantState || got.LastErrorCode != string(test.wantCode) {
+				t.Fatalf("local failure = %#v", got)
+			}
+			if test.kind == fsafe.FailureTransient {
+				if got.AttemptCount != 1 || got.NextRunAt == nil || !got.NextRunAt.Equal(now.Add(30*time.Second)) {
+					t.Fatalf("transient retry = %#v", got)
+				}
+			} else if got.NextRunAt != nil {
+				t.Fatalf("terminal local failure scheduled retry: %#v", got)
+			}
+		})
+	}
+}
+
+func TestLocalFilesystemRetryUsesWorkflowDeadline(t *testing.T) {
+	now := time.Date(2026, 9, 1, 3, 4, 5, 0, time.UTC)
+	repo := &fakeRepository{}
+	cloud, files := defaults()
+	scheduler := testScheduler(t, &fakeClock{now: now}, repo, cloud, files)
+	scheduler.config.VerifyTimeout = time.Minute
+	download := baseDownload(domain.StateVerifyingLocal, now.Add(-time.Minute))
+	download.DestinationName = download.Name
+	download.LastErrorCode = string(domain.ProblemLocalFilesystemUnavailable)
+	download.LastError = domain.ProblemText(domain.ProblemLocalFilesystemUnavailable)
+
+	got := step(t, scheduler, repo, download)
+	if got.State != domain.StateFailed || got.LastErrorCode != string(domain.ProblemLocalFilesystemUnavailableTimeout) || got.NextRunAt != nil {
+		t.Fatalf("local filesystem deadline = %#v", got)
 	}
 }
 

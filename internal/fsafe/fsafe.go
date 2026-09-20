@@ -83,6 +83,126 @@ var ErrUnsafePath = errors.New("fsafe: unsafe path")
 // ErrInvalidVisibility reports a visibility filter other than all, dirs, or files.
 var ErrInvalidVisibility = errors.New("fsafe: invalid visibility")
 
+// FailureKind 对本地文件系统故障进行可操作分类。
+type FailureKind string
+
+const (
+	FailureMissing    FailureKind = "missing"
+	FailureTransient  FailureKind = "transient"
+	FailurePermission FailureKind = "permission"
+	FailureUnsafe     FailureKind = "unsafe"
+	FailureLayout     FailureKind = "layout"
+)
+
+// Operation 标识文件系统操作，不保留路径。
+type Operation string
+
+const (
+	OperationPrepareWorkspace          Operation = "prepare_workspace"
+	OperationValidateWorkspaceIdentity Operation = "validate_workspace_identity"
+	OperationInspectCandidate          Operation = "inspect_candidate"
+	OperationResolveCandidate          Operation = "resolve_candidate"
+	OperationMeasureContent            Operation = "measure_content"
+	OperationVerifyManifest            Operation = "verify_manifest"
+	OperationApplyFilePlan             Operation = "apply_file_plan"
+)
+
+// Failure 保留原始原因，以支持 errors.Is 和 errors.As，同时携带安全分类。
+type Failure struct {
+	Kind      FailureKind
+	Operation Operation
+	Err       error
+}
+
+func (e *Failure) Error() string {
+	if e == nil {
+		return "fsafe: filesystem failure"
+	}
+	if e.Err == nil {
+		return fmt.Sprintf("fsafe: %s failed", e.Operation)
+	}
+	return fmt.Sprintf("fsafe: %s failed: %v", e.Operation, e.Err)
+}
+
+func (e *Failure) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+// Diagnostic 是可安全写入工作流日志的有界无路径诊断信息。
+type Diagnostic struct {
+	Kind      FailureKind
+	Operation Operation
+	Errno     syscall.Errno
+}
+
+// Diagnose 对本地文件系统错误分类，不暴露错误文本。
+func Diagnose(err error) Diagnostic {
+	if err == nil {
+		return Diagnostic{}
+	}
+	diagnostic := Diagnostic{Kind: FailureTransient}
+	var typed *Failure
+	if errors.As(err, &typed) {
+		diagnostic.Kind = typed.Kind
+		diagnostic.Operation = typed.Operation
+		var errno syscall.Errno
+		if errors.As(err, &errno) {
+			diagnostic.Errno = errno
+		}
+		return diagnostic
+	}
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		diagnostic.Errno = errno
+		switch errno {
+		case syscall.ENOENT:
+			diagnostic.Kind = FailureMissing
+		case syscall.EACCES, syscall.EPERM, syscall.EROFS:
+			diagnostic.Kind = FailurePermission
+		case syscall.EIO, syscall.ESTALE, syscall.EBUSY, syscall.ETIMEDOUT:
+			diagnostic.Kind = FailureTransient
+		}
+	} else if errors.Is(err, fs.ErrNotExist) {
+		diagnostic.Kind = FailureMissing
+	} else if errors.Is(err, fs.ErrPermission) {
+		diagnostic.Kind = FailurePermission
+	}
+	return diagnostic
+}
+
+func failure(kind FailureKind, operation Operation, err error) error {
+	if err == nil {
+		err = errors.New("filesystem validation failed")
+	}
+	return &Failure{Kind: kind, Operation: operation, Err: err}
+}
+
+func classifyFailure(operation Operation, fallback FailureKind, err error) error {
+	if err == nil {
+		return nil
+	}
+	var existing *Failure
+	if errors.As(err, &existing) {
+		return err
+	}
+	kind := Diagnose(err).Kind
+	if kind == FailureTransient {
+		kind = fallback
+	}
+	return failure(kind, operation, err)
+}
+
+func classifyCandidateRootFailure(err error) error {
+	classified := classifyFailure(OperationResolveCandidate, FailureTransient, err)
+	if Diagnose(classified).Kind == FailureMissing {
+		return failure(FailureTransient, OperationResolveCandidate, err)
+	}
+	return classified
+}
+
 // ListDirectory returns safe absolute child paths beneath absolutePath.
 //
 // The requested path must be a clean absolute path whose resolved target is
@@ -371,41 +491,41 @@ func WorkspacePath(savePath, hash string) (string, error) {
 // hash beneath savePath. The returned path preserves the logical save path.
 func (v *Verifier) PrepareWorkspace(savePath, hash string) (string, error) {
 	if err := validateExternalSaveRoot(savePath); err != nil {
-		return "", err
+		return "", failure(FailureUnsafe, OperationPrepareWorkspace, err)
 	}
 	logicalWorkspacePath, err := WorkspacePath(savePath, hash)
 	if err != nil {
-		return "", err
+		return "", failure(FailureUnsafe, OperationPrepareWorkspace, err)
 	}
 
 	saveRoot, _, err := v.openWorkspaceSaveRoot(savePath)
 	if err != nil {
-		return "", err
+		return "", classifyFailure(OperationPrepareWorkspace, FailureTransient, err)
 	}
 	defer saveRoot.Close()
 
 	cdRoot, err := ensureWorkspaceDir(saveRoot, ".cd211", workspaceParentMode)
 	if err != nil {
-		return "", fmt.Errorf("fsafe: prepare workspace parent: %w", err)
+		return "", classifyFailure(OperationPrepareWorkspace, FailureTransient, fmt.Errorf("fsafe: prepare workspace parent: %w", err))
 	}
 	defer cdRoot.Close()
 	cdInfo, err := saveRoot.Lstat(".cd211")
 	if err != nil {
-		return "", fmt.Errorf("fsafe: revalidate workspace parent: %w", err)
+		return "", classifyFailure(OperationValidateWorkspaceIdentity, FailureTransient, fmt.Errorf("fsafe: revalidate workspace parent: %w", err))
 	}
 	if err := sameRootDirectory(saveRoot, ".cd211", cdInfo, cdRoot); err != nil {
 		return "", err
 	}
 	workspaceRoot, err := ensureWorkspaceDir(cdRoot, hash, workspaceMode)
 	if err != nil {
-		return "", fmt.Errorf("fsafe: prepare workspace: %w", err)
+		return "", classifyFailure(OperationPrepareWorkspace, FailureTransient, fmt.Errorf("fsafe: prepare workspace: %w", err))
 	}
 	if err := sameRootDirectory(saveRoot, ".cd211", cdInfo, cdRoot); err != nil {
 		_ = workspaceRoot.Close()
 		return "", err
 	}
 	if err := workspaceRoot.Close(); err != nil {
-		return "", fmt.Errorf("fsafe: close workspace: %w", err)
+		return "", classifyFailure(OperationPrepareWorkspace, FailureTransient, fmt.Errorf("fsafe: close workspace: %w", err))
 	}
 	return logicalWorkspacePath, nil
 }
@@ -592,10 +712,10 @@ func ensureWorkspaceDir(parent *os.Root, name string, mode os.FileMode) (*os.Roo
 		}
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("fsafe: %q must not be a symbolic link", name)
+		return nil, failure(FailureUnsafe, OperationValidateWorkspaceIdentity, fmt.Errorf("fsafe: %q must not be a symbolic link", name))
 	}
 	if !info.IsDir() {
-		return nil, fmt.Errorf("fsafe: %q is not a directory", name)
+		return nil, failure(FailureUnsafe, OperationValidateWorkspaceIdentity, fmt.Errorf("fsafe: %q is not a directory", name))
 	}
 
 	child, err := parent.OpenRoot(name)
@@ -620,57 +740,64 @@ func ensureWorkspaceDir(parent *os.Root, name string, mode os.FileMode) (*os.Roo
 func sameRootDirectory(parent *os.Root, name string, expected os.FileInfo, child *os.Root) error {
 	anchored, err := child.Stat(".")
 	if err != nil {
-		return fmt.Errorf("fsafe: inspect anchored %q: %w", name, err)
+		return classifyFailure(OperationValidateWorkspaceIdentity, FailureTransient, fmt.Errorf("fsafe: inspect anchored %q: %w", name, err))
 	}
 	if !os.SameFile(expected, anchored) {
-		return fmt.Errorf("fsafe: %q changed during validation", name)
+		return failure(FailureTransient, OperationValidateWorkspaceIdentity, fmt.Errorf("fsafe: %q changed during validation", name))
 	}
 	current, err := parent.Lstat(name)
 	if err != nil {
-		return fmt.Errorf("fsafe: revalidate %q: %w", name, err)
+		return classifyFailure(OperationValidateWorkspaceIdentity, FailureTransient, fmt.Errorf("fsafe: revalidate %q: %w", name, err))
 	}
-	if current.Mode()&os.ModeSymlink != 0 || !os.SameFile(expected, current) {
-		return fmt.Errorf("fsafe: %q changed during validation", name)
+	if current.Mode()&os.ModeSymlink != 0 {
+		return failure(FailureUnsafe, OperationValidateWorkspaceIdentity, fmt.Errorf("fsafe: %q became a symbolic link during validation", name))
+	}
+	if !os.SameFile(expected, current) {
+		return failure(FailureUnsafe, OperationValidateWorkspaceIdentity, fmt.Errorf("fsafe: %q changed during validation", name))
 	}
 	return nil
 }
 
 func rejectWorkspaceTree(root *os.Root) error {
-	return fs.WalkDir(root.FS(), ".", func(path string, entry fs.DirEntry, err error) error {
+	err := fs.WalkDir(root.FS(), ".", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
-			return fmt.Errorf("fsafe: inspect workspace tree: %w", err)
+			return err
 		}
 		if path == "." {
 			return nil
 		}
 		if entry.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("fsafe: workspace tree contains symbolic link at %q", path)
+			return failure(FailureUnsafe, OperationValidateWorkspaceIdentity, fmt.Errorf("workspace tree contains symbolic link at %q", path))
 		}
 		info, err := entry.Info()
 		if err != nil {
-			return fmt.Errorf("fsafe: inspect workspace tree entry %q: %w", path, err)
+			return err
 		}
 		if !info.IsDir() && !info.Mode().IsRegular() {
-			return fmt.Errorf("fsafe: workspace tree contains special file at %q", path)
+			return failure(FailureUnsafe, OperationValidateWorkspaceIdentity, fmt.Errorf("workspace tree contains special file at %q", path))
 		}
 		return nil
 	})
+	if err == nil {
+		return nil
+	}
+	var typed *Failure
+	if errors.As(err, &typed) {
+		return err
+	}
+	return classifyFailure(OperationValidateWorkspaceIdentity, FailureTransient, fmt.Errorf("fsafe: inspect workspace tree: %w", err))
 }
 
 // Verify checks that the expected torrent content is a safe child of savePath
 // and returns its cleaned logical absolute path with the bytes on disk.
 func (v *Verifier) Verify(savePath string, expected ExpectedContent) (VerifiedContent, error) {
-	if err := validateName(expected.CandidateName); err != nil {
-		return VerifiedContent{}, err
-	}
-
-	saveRoot, err := v.resolveSaveRoot(savePath)
-	if err != nil {
-		return VerifiedContent{}, err
-	}
 	if !expected.MultiFile && len(expected.Files) > 0 {
 		if len(expected.Files) != 1 {
-			return VerifiedContent{}, fmt.Errorf("fsafe: single-file manifest does not match candidate")
+			return VerifiedContent{}, failure(FailureLayout, OperationVerifyManifest, errors.New("single-file manifest does not match candidate"))
+		}
+		saveRoot, err := v.resolveSaveRoot(savePath)
+		if err != nil {
+			return VerifiedContent{}, classifyCandidateRootFailure(err)
 		}
 		size, verifyErr := verifyManifest(saveRoot, expected.Files)
 		if verifyErr != nil {
@@ -680,42 +807,24 @@ func (v *Verifier) Verify(savePath string, expected ExpectedContent) (VerifiedCo
 		return VerifiedContent{Path: candidate, Size: size}, nil
 	}
 
-	candidatePath := filepath.Join(filepath.Clean(savePath), expected.CandidateName)
-	info, err := os.Lstat(candidatePath)
+	candidatePath, candidate, info, err := v.inspectCandidate(savePath, expected.CandidateName)
 	if err != nil {
-		return VerifiedContent{}, fmt.Errorf("fsafe: inspect candidate: %w", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return VerifiedContent{}, fmt.Errorf("fsafe: candidate must not be a symbolic link")
-	}
-
-	candidate, err := filepath.EvalSymlinks(candidatePath)
-	if err != nil {
-		return VerifiedContent{}, fmt.Errorf("fsafe: resolve candidate: %w", err)
-	}
-	candidate = filepath.Clean(candidate)
-	if !strictlyWithin(saveRoot, candidate) || !strictlyWithin(v.localRoot, candidate) {
-		return VerifiedContent{}, fmt.Errorf("fsafe: candidate escapes configured roots")
-	}
-
-	info, err = os.Stat(candidate)
-	if err != nil {
-		return VerifiedContent{}, fmt.Errorf("fsafe: inspect resolved candidate: %w", err)
+		return VerifiedContent{}, err
 	}
 	if !expected.MultiFile {
 		if !info.Mode().IsRegular() {
-			return VerifiedContent{}, fmt.Errorf("fsafe: single-file candidate is not a regular file")
+			return VerifiedContent{}, failure(FailureLayout, OperationInspectCandidate, errors.New("single-file candidate is not a regular file"))
 		}
 		if len(expected.Files) > 0 {
 			if len(expected.Files) != 1 || !validManifestPath(expected.Files[0].RelativePath) ||
 				expected.Files[0].Size < 0 || info.Size() != expected.Files[0].Size {
-				return VerifiedContent{}, fmt.Errorf("fsafe: single-file manifest does not match candidate")
+				return VerifiedContent{}, failure(FailureLayout, OperationVerifyManifest, errors.New("single-file manifest does not match candidate"))
 			}
 		}
 		return VerifiedContent{Path: candidatePath, Size: info.Size()}, nil
 	}
 	if !info.IsDir() {
-		return VerifiedContent{}, fmt.Errorf("fsafe: multi-file candidate is not a directory")
+		return VerifiedContent{}, failure(FailureLayout, OperationInspectCandidate, errors.New("multi-file candidate is not a directory"))
 	}
 	if len(expected.Files) == 0 {
 		size, err := treeSize(candidate)
@@ -728,7 +837,55 @@ func (v *Verifier) Verify(savePath string, expected ExpectedContent) (VerifiedCo
 	if err != nil {
 		return VerifiedContent{}, err
 	}
-	return VerifiedContent{Path: filepath.Join(filepath.Clean(savePath), expected.CandidateName), Size: size}, nil
+	return VerifiedContent{Path: candidatePath, Size: size}, nil
+}
+
+// InspectCandidate 检查 savePath/name 是否存在安全的普通文件或目录，
+// 不应用种子内容结构约束。
+func (v *Verifier) InspectCandidate(savePath, name string) (bool, error) {
+	_, _, info, err := v.inspectCandidate(savePath, name)
+	if err != nil {
+		diagnostic := Diagnose(err)
+		if diagnostic.Kind == FailureMissing && diagnostic.Operation == OperationInspectCandidate {
+			return false, nil
+		}
+		return false, err
+	}
+	if !info.IsDir() && !info.Mode().IsRegular() {
+		return false, failure(FailureUnsafe, OperationInspectCandidate, errors.New("candidate is not a regular file or directory"))
+	}
+	return true, nil
+}
+
+func (v *Verifier) inspectCandidate(savePath, name string) (string, string, os.FileInfo, error) {
+	if err := validateName(name); err != nil {
+		return "", "", nil, failure(FailureUnsafe, OperationInspectCandidate, err)
+	}
+	saveRoot, err := v.resolveSaveRoot(savePath)
+	if err != nil {
+		return "", "", nil, classifyCandidateRootFailure(err)
+	}
+	candidatePath := filepath.Join(filepath.Clean(savePath), name)
+	info, err := os.Lstat(candidatePath)
+	if err != nil {
+		return "", "", nil, classifyFailure(OperationInspectCandidate, FailureTransient, fmt.Errorf("fsafe: inspect candidate: %w", err))
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", "", nil, failure(FailureUnsafe, OperationInspectCandidate, errors.New("candidate must not be a symbolic link"))
+	}
+	candidate, err := filepath.EvalSymlinks(candidatePath)
+	if err != nil {
+		return "", "", nil, classifyFailure(OperationInspectCandidate, FailureTransient, fmt.Errorf("fsafe: resolve candidate: %w", err))
+	}
+	candidate = filepath.Clean(candidate)
+	if !strictlyWithin(saveRoot, candidate) || !strictlyWithin(v.localRoot, candidate) {
+		return "", "", nil, failure(FailureUnsafe, OperationResolveCandidate, errors.New("candidate escapes configured roots"))
+	}
+	info, err = os.Stat(candidate)
+	if err != nil {
+		return "", "", nil, classifyFailure(OperationInspectCandidate, FailureTransient, fmt.Errorf("fsafe: inspect resolved candidate: %w", err))
+	}
+	return candidatePath, candidate, info, nil
 }
 
 // UnknownContent is the verified shape of magnet content whose file-vs-folder
@@ -746,36 +903,9 @@ type UnknownContent struct {
 // FIFO/socket/device/special files are rejected, and the same safe-name
 // validation, root confinement, and size measurement as Verify apply.
 func (v *Verifier) VerifyUnknownType(savePath, name string) (UnknownContent, error) {
-	if err := validateName(name); err != nil {
-		return UnknownContent{}, err
-	}
-
-	saveRoot, err := v.resolveSaveRoot(savePath)
+	candidatePath, candidate, info, err := v.inspectCandidate(savePath, name)
 	if err != nil {
 		return UnknownContent{}, err
-	}
-
-	candidatePath := filepath.Join(filepath.Clean(savePath), name)
-	info, err := os.Lstat(candidatePath)
-	if err != nil {
-		return UnknownContent{}, fmt.Errorf("fsafe: inspect candidate: %w", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return UnknownContent{}, fmt.Errorf("fsafe: candidate must not be a symbolic link")
-	}
-
-	candidate, err := filepath.EvalSymlinks(candidatePath)
-	if err != nil {
-		return UnknownContent{}, fmt.Errorf("fsafe: resolve candidate: %w", err)
-	}
-	candidate = filepath.Clean(candidate)
-	if !strictlyWithin(saveRoot, candidate) || !strictlyWithin(v.localRoot, candidate) {
-		return UnknownContent{}, fmt.Errorf("fsafe: candidate escapes configured roots")
-	}
-
-	info, err = os.Stat(candidate)
-	if err != nil {
-		return UnknownContent{}, fmt.Errorf("fsafe: inspect resolved candidate: %w", err)
 	}
 	if info.IsDir() {
 		size, err := treeSize(candidate)
@@ -785,22 +915,23 @@ func (v *Verifier) VerifyUnknownType(savePath, name string) (UnknownContent, err
 		return UnknownContent{Path: candidatePath, Size: size, MultiFile: true}, nil
 	}
 	if !info.Mode().IsRegular() {
-		return UnknownContent{}, fmt.Errorf("fsafe: candidate is not a regular file or directory")
+		return UnknownContent{}, failure(FailureUnsafe, OperationInspectCandidate, errors.New("candidate is not a regular file or directory"))
 	}
 	return UnknownContent{Path: candidatePath, Size: info.Size(), MultiFile: false}, nil
 }
 
-// treeSize sums the regular files under root. Symlinks are skipped rather than
-// followed, matching Verify's refusal to trust links inside the staging tree.
+// treeSize 汇总根目录下的普通文件大小，并拒绝链接和特殊文件。
 func treeSize(root string) (int64, error) {
 	var total int64
 	err := filepath.WalkDir(root, func(_ string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if !entry.Type().IsRegular() {
-
+		if entry.IsDir() {
 			return nil
+		}
+		if entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
+			return failure(FailureUnsafe, OperationMeasureContent, errors.New("content contains a symbolic link or special file"))
 		}
 		info, err := entry.Info()
 		if err != nil {
@@ -810,7 +941,11 @@ func treeSize(root string) (int64, error) {
 		return nil
 	})
 	if err != nil {
-		return 0, fmt.Errorf("fsafe: measure content: %w", err)
+		var typed *Failure
+		if errors.As(err, &typed) {
+			return 0, err
+		}
+		return 0, classifyFailure(OperationMeasureContent, FailureTransient, fmt.Errorf("fsafe: measure content: %w", err))
 	}
 	return total, nil
 }
@@ -827,10 +962,10 @@ func verifyManifest(root string, files []ExpectedFile) (int64, error) {
 	for _, expected := range files {
 		relative := expected.RelativePath
 		if !validManifestPath(relative) || expected.Size < 0 {
-			return 0, fmt.Errorf("fsafe: manifest path or size is invalid")
+			return 0, failure(FailureUnsafe, OperationVerifyManifest, errors.New("manifest path or size is invalid"))
 		}
 		if _, ok := seen[relative]; ok {
-			return 0, fmt.Errorf("fsafe: manifest contains duplicate path")
+			return 0, failure(FailureLayout, OperationVerifyManifest, errors.New("manifest contains duplicate path"))
 		}
 		seen[relative] = struct{}{}
 		current := root
@@ -839,22 +974,22 @@ func verifyManifest(root string, files []ExpectedFile) (int64, error) {
 			current = filepath.Join(current, part)
 			info, err := os.Lstat(current)
 			if err != nil {
-				return 0, fmt.Errorf("fsafe: inspect manifest path: %w", err)
+				return 0, classifyFailure(OperationVerifyManifest, FailureTransient, fmt.Errorf("fsafe: inspect manifest path: %w", err))
 			}
 			if info.Mode()&os.ModeSymlink != 0 {
-				return 0, fmt.Errorf("fsafe: manifest path contains symbolic link")
+				return 0, failure(FailureUnsafe, OperationVerifyManifest, errors.New("manifest path contains symbolic link"))
 			}
 			if index < len(parts)-1 && !info.IsDir() {
-				return 0, fmt.Errorf("fsafe: manifest parent is not a directory")
+				return 0, failure(FailureLayout, OperationVerifyManifest, errors.New("manifest parent is not a directory"))
 			}
 			if index == len(parts)-1 {
 				if !info.Mode().IsRegular() || info.Size() != expected.Size {
-					return 0, fmt.Errorf("fsafe: manifest file is not an exact regular file")
+					return 0, failure(FailureLayout, OperationVerifyManifest, errors.New("manifest file is not an exact regular file"))
 				}
 			}
 		}
 		if total > math.MaxInt64-expected.Size {
-			return 0, fmt.Errorf("fsafe: manifest size overflows")
+			return 0, failure(FailureLayout, OperationVerifyManifest, errors.New("manifest size overflows"))
 		}
 		total += expected.Size
 	}

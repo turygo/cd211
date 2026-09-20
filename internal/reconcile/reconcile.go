@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"math"
 	"os"
@@ -53,6 +52,7 @@ type CloudDrive interface {
 type Filesystem interface {
 	Verify(string, fsafe.ExpectedContent) (fsafe.VerifiedContent, error)
 	VerifyUnknownType(string, string) (fsafe.UnknownContent, error)
+	InspectCandidate(string, string) (bool, error)
 	Delete(string, string) error
 	PrepareWorkspace(string, string) (string, error)
 	DeleteWorkspace(string, string) error
@@ -386,11 +386,16 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 		}
 		if d.LastUpstreamStatus != destinationClear {
 			if err := s.prepareWorkspace(d); err != nil {
-				s.fail(d, domain.ProblemLocalVerificationFailed)
+				s.handleLocalFilesystemFailure(d, err, "preflight_local", "workspace")
 				return "preflight_local", nil
 			}
-			if code := s.preflightDestination(d); code != "" {
-				s.fail(d, code)
+			exists, err := s.preflightDestination(d)
+			if err != nil {
+				s.handleLocalFilesystemFailure(d, err, "preflight_local", "candidate")
+				return "preflight_local", nil
+			}
+			if exists {
+				s.fail(d, domain.ProblemDestinationCollision)
 				return "preflight_local", nil
 			}
 			d.LastUpstreamStatus, d.LastError, d.LastErrorCode, d.AttemptCount = destinationClear, "", "", 0
@@ -399,7 +404,7 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 		}
 		root := workspaceRoot(*d)
 		if err := s.prepareWorkspace(d); err != nil {
-			s.fail(d, domain.ProblemLocalVerificationFailed)
+			s.handleLocalFilesystemFailure(d, err, "ensure_copy", "workspace")
 			return "ensure_copy", nil
 		}
 		task, err := s.cloud.EnsureCopy(ctx, clouddrive.CopySpec{SourcePath: d.CopySourcePath, DestinationPath: root})
@@ -442,11 +447,11 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 			if isManifestRepositoryError(verifyErr) {
 				return "verify_local", verifyErr
 			}
-			if errors.Is(verifyErr, fs.ErrNotExist) {
+			if missingLocalContent(verifyErr) {
 				s.poll(d, now)
 				return "verify_local", nil
 			}
-			s.fail(d, domain.ProblemLocalVerificationFailed)
+			s.handleLocalFilesystemFailure(d, verifyErr, "verify_local", "candidate")
 			return "verify_local", nil
 		}
 		if err := validateCopyTask(task, d.CopySourcePath, root); err != nil {
@@ -469,7 +474,11 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 		return "inspect_copy", nil
 	case domain.StateVerifyingLocal:
 		if s.timedOut(d, now, s.config.VerifyTimeout) {
-			s.fail(d, domain.ProblemLocalVerificationTimeout)
+			if domain.ProblemCode(d.LastErrorCode) == domain.ProblemLocalFilesystemUnavailable {
+				s.fail(d, domain.ProblemLocalFilesystemUnavailableTimeout)
+			} else {
+				s.fail(d, domain.ProblemLocalVerificationTimeout)
+			}
 			return "verify_local", nil
 		}
 		verifyErr := s.verifyAndRecord(ctx, d)
@@ -484,11 +493,11 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 		if isManifestRepositoryError(verifyErr) {
 			return "verify_local", verifyErr
 		}
-		if errors.Is(verifyErr, fs.ErrNotExist) {
+		if missingLocalContent(verifyErr) {
 			s.poll(d, now)
 			return "verify_local", nil
 		}
-		s.fail(d, domain.ProblemLocalVerificationFailed)
+		s.handleLocalFilesystemFailure(d, verifyErr, "verify_local", "candidate")
 		return "verify_local", nil
 	case domain.StateCancelRequested:
 		return s.cancel(ctx, d, now)
@@ -836,30 +845,17 @@ func copiesTorrentAsFile(d domain.Download) bool {
 		(!*d.IsMultiFile || d.CopySourcePath != d.CloudResultPath)
 }
 
-func expected(d domain.Download) fsafe.ExpectedContent {
-	return fsafe.ExpectedContent{CandidateName: d.DestinationName, MultiFile: !copiesTorrentAsFile(d)}
+// preflightDestination 在提交复制前安全检查预留目标，
+// 不应用种子内容结构约束。
+func (s *Scheduler) preflightDestination(d *domain.Download) (bool, error) {
+	return s.files.InspectCandidate(workspaceRoot(*d), d.DestinationName)
 }
-
-// preflightDestination verifies the reserved destination is clear before copy
-// submission. Uploaded torrents require the strict expected candidate to be
-// absent; magnets carry no metadata, so any safe existing regular file or
-// directory at the destination is a collision regardless of type.
-func (s *Scheduler) preflightDestination(d *domain.Download) domain.ProblemCode {
-	root := workspaceRoot(*d)
-	if d.SourceKind == domain.SourceTorrent && d.IsMultiFile != nil {
-		if _, err := s.files.Verify(root, expected(*d)); err == nil {
-			return domain.ProblemDestinationCollision
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			return domain.ProblemLocalVerificationFailed
-		}
-		return ""
-	}
-	if _, err := s.files.VerifyUnknownType(root, d.DestinationName); err == nil {
-		return domain.ProblemDestinationCollision
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return domain.ProblemLocalVerificationFailed
-	}
-	return ""
+func missingLocalContent(err error) bool {
+	diagnostic := fsafe.Diagnose(err)
+	return diagnostic.Kind == fsafe.FailureMissing &&
+		(diagnostic.Operation == "" ||
+			diagnostic.Operation == fsafe.OperationInspectCandidate ||
+			diagnostic.Operation == fsafe.OperationVerifyManifest)
 }
 
 // deadlineProblem chooses the terminal copy-phase deadline code from the last
@@ -873,6 +869,8 @@ func (s *Scheduler) deadlineProblem(d *domain.Download) domain.ProblemCode {
 		return domain.ProblemCloudAuthenticationTimeout
 	case domain.ProblemCloudUnreachable:
 		return domain.ProblemCloudUnreachableTimeout
+	case domain.ProblemLocalFilesystemUnavailable:
+		return domain.ProblemLocalFilesystemUnavailableTimeout
 	default:
 		return domain.ProblemCopyTimeout
 	}
@@ -905,6 +903,23 @@ func (s *Scheduler) retry(d *domain.Download, code domain.ProblemCode) {
 	d.LastError = domain.ProblemText(code)
 	d.LastErrorCode = string(code)
 	d.NextRunAt = new(s.clock.Now().Add(backoff(d.AttemptCount)))
+}
+func (s *Scheduler) handleLocalFilesystemFailure(d *domain.Download, err error, operation, pathRole string) {
+	diagnostic := fsafe.Diagnose(err)
+	if diagnostic.Kind == fsafe.FailureMissing && pathRole == "workspace" {
+		diagnostic.Kind = fsafe.FailureTransient
+	}
+	switch diagnostic.Kind {
+	case fsafe.FailurePermission:
+		s.fail(d, domain.ProblemLocalPermissionDenied)
+	case fsafe.FailureUnsafe:
+		s.fail(d, domain.ProblemLocalPathUnsafe)
+	case fsafe.FailureLayout:
+		s.fail(d, domain.ProblemLocalContentLayoutInvalid)
+	default:
+		s.retry(d, domain.ProblemLocalFilesystemUnavailable)
+	}
+	s.logLocalFilesystemFailure(d, operation, pathRole, diagnostic)
 }
 
 // cleanupProblem records a durable cleanup problem without changing state, so
@@ -1123,6 +1138,27 @@ func (s *Scheduler) logLocalDeleteFailure(d *domain.Download, operation string, 
 		attributes = append(attributes, "errno", uint64(errno), "errno_text", errno.Error())
 	}
 	s.logger.Warn("local content deletion failed", attributes...)
+}
+func (s *Scheduler) logLocalFilesystemFailure(d *domain.Download, operation, pathRole string, diagnostic fsafe.Diagnostic) {
+	fsOperation := string(diagnostic.Operation)
+	if fsOperation == "" {
+		fsOperation = "unknown"
+	}
+	attributes := []any{
+		"hash", d.Hash[:min(8, len(d.Hash))],
+		"state", d.State,
+		"operation", operation,
+		"attempt", d.AttemptCount,
+		"problem", d.LastErrorCode,
+		"failure_kind", diagnostic.Kind,
+		"fs_operation", fsOperation,
+		"path_role", pathRole,
+		"row_version", d.RowVersion,
+	}
+	if diagnostic.Errno != 0 {
+		attributes = append(attributes, "errno", uint64(diagnostic.Errno), "errno_text", diagnostic.Errno.Error())
+	}
+	s.logger.Warn("local filesystem failure observed", attributes...)
 }
 
 func (s *Scheduler) log(d domain.Download, operation string, started time.Time, result string) {

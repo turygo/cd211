@@ -60,6 +60,17 @@ const (
 	// ProblemDestinationCollision reports that content already exists at the
 	// local destination name.
 	ProblemDestinationCollision ProblemCode = "destination_collision"
+	// ProblemLocalFilesystemUnavailable 表示暂时性的本地文件系统故障；
+	// 工作流会自动重试。
+	ProblemLocalFilesystemUnavailable ProblemCode = "local_filesystem_unavailable"
+	// ProblemLocalFilesystemUnavailableTimeout 是该故障超过截止时间后的终止形式。
+	ProblemLocalFilesystemUnavailableTimeout ProblemCode = "local_filesystem_unavailable_timeout"
+	// ProblemLocalPermissionDenied 表示 CD211 无权访问共享路径。
+	ProblemLocalPermissionDenied ProblemCode = "local_permission_denied"
+	// ProblemLocalPathUnsafe 表示路径包含符号链接、特殊文件或不安全的替换。
+	ProblemLocalPathUnsafe ProblemCode = "local_path_unsafe"
+	// ProblemLocalContentLayoutInvalid 表示复制内容与种子清单不一致。
+	ProblemLocalContentLayoutInvalid ProblemCode = "local_content_layout_invalid"
 	// ProblemLocalVerificationFailed reports unsafe or missing local content
 	// after the immediate verification checks.
 	ProblemLocalVerificationFailed ProblemCode = "local_verification_failed"
@@ -101,6 +112,11 @@ func (code ProblemCode) Valid() bool {
 		ProblemCopyTimeout,
 		ProblemDestinationConflict,
 		ProblemDestinationCollision,
+		ProblemLocalFilesystemUnavailable,
+		ProblemLocalFilesystemUnavailableTimeout,
+		ProblemLocalPermissionDenied,
+		ProblemLocalPathUnsafe,
+		ProblemLocalContentLayoutInvalid,
 		ProblemLocalVerificationFailed,
 		ProblemLocalVerificationTimeout,
 		ProblemLocalDeleteFailed,
@@ -154,6 +170,16 @@ func ProblemText(code ProblemCode) string {
 		return "Another download reserved the same destination. Resolve the conflict, then Retry."
 	case ProblemDestinationCollision:
 		return "Content already exists at the destination. Remove it, then Retry."
+	case ProblemLocalFilesystemUnavailable:
+		return "The shared local filesystem is temporarily unavailable. CD211 will retry automatically."
+	case ProblemLocalFilesystemUnavailableTimeout:
+		return "The shared local filesystem stayed unavailable until the workflow deadline. Check the shared mount, then Retry."
+	case ProblemLocalPermissionDenied:
+		return "CD211 does not have permission to access the shared local path. Check the shared user and group permissions, then Retry."
+	case ProblemLocalPathUnsafe:
+		return "The shared local path contains a symbolic link, special file, or unsafe path change. Remove the unsafe entry, then Retry."
+	case ProblemLocalContentLayoutInvalid:
+		return "The copied local content does not match the expected file type, size, or file list. Remove the incomplete content, then Retry."
 	case ProblemLocalVerificationFailed:
 		return "Local content verification failed. Check the shared staging folder, then Retry."
 	case ProblemLocalVerificationTimeout:

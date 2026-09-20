@@ -65,7 +65,12 @@ func TestWebPreview(t *testing.T) {
 		download.ContentPath = filepath.Join(download.WorkspacePath, download.Name)
 	})
 	fixture.seedDownload("4", domain.StateFailed, func(download *domain.Download) {
-		download.LastError = "The upstream task failed."
+		download.WorkspacePath = filepath.Join(download.SavePath, ".cd211", download.Hash)
+		download.DestinationName = download.Name
+		download.LastUpstreamStatus = domain.UpstreamOfflineFinished
+		download.CopyProgress = 0
+		download.LastErrorCode = string(domain.ProblemLocalPermissionDenied)
+		download.LastError = domain.ProblemText(domain.ProblemLocalPermissionDenied)
 	})
 
 	preview := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

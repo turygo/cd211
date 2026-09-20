@@ -152,6 +152,10 @@ func RetryTarget(download Download) State {
 		return StateSubmittingCopy
 	case download.State == StateFailed &&
 		(download.LastErrorCode == string(ProblemLocalVerificationFailed) ||
+			download.LastErrorCode == string(ProblemLocalFilesystemUnavailableTimeout) ||
+			download.LastErrorCode == string(ProblemLocalPermissionDenied) ||
+			download.LastErrorCode == string(ProblemLocalPathUnsafe) ||
+			download.LastErrorCode == string(ProblemLocalContentLayoutInvalid) ||
 			download.LastErrorCode == string(ProblemLocalDeleteFailed)):
 		return StateSubmittingCopy
 	case download.ContentPath != "" || status == UpstreamCopyCompleted:

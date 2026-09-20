@@ -1262,6 +1262,10 @@ tbody tr:hover .cell-actions { background: var(--row-sticky-hover); }
 }
 
 .notice p { margin: 4px 0 0; }
+.notice code {
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
 
 .notice-error {
   background: var(--danger-soft);

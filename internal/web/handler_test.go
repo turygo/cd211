@@ -659,7 +659,7 @@ func TestSecurityHeadersAndStaticAssets(t *testing.T) {
 
 	body := login.Body.String()
 	themeInit := strings.Index(body, `<script src="/static/theme-init.js?v=2"></script>`)
-	stylesheet := strings.Index(body, `<link rel="stylesheet" href="/static/app.css?v=23">`)
+	stylesheet := strings.Index(body, `<link rel="stylesheet" href="/static/app.css?v=24">`)
 	if themeInit < 0 || stylesheet < 0 || themeInit > stylesheet {
 		t.Errorf("theme initializer must load before stylesheet: theme=%d stylesheet=%d", themeInit, stylesheet)
 	}
@@ -1128,6 +1128,57 @@ func TestProblemLocalizationChinese(t *testing.T) {
 	body := response.Body.String()
 	requireContains(t, body, "自动重试中", "115 离线下载已完成，但 CloudDrive2 尚未接受复制任务", "刷新 115 挂载", "CD211 会自动重试。下次重试时间：")
 	requireAbsent(t, body, "find_file", "add_copy", "permanent", "invalid_response", "cloud_copy_not_ready")
+}
+func TestLocalFilesystemProblemShowsExactContainerPathAndLegacyContext(t *testing.T) {
+	fixture := newWebFixture(t)
+	current := fixture.seedDownload("5", domain.StateFailed, func(download *domain.Download) {
+		download.WorkspacePath = filepath.Join(download.SavePath, ".cd211", download.Hash)
+		download.DestinationName = download.Name
+		download.LastUpstreamStatus = domain.UpstreamOfflineFinished
+		download.CopyProgress = 0
+		download.LastErrorCode = string(domain.ProblemLocalPermissionDenied)
+		download.LastError = domain.ProblemText(domain.ProblemLocalPermissionDenied)
+	})
+
+	detail := fixture.request(http.MethodGet, "/downloads/"+current.Hash, nil, true)
+	requireStatus(t, detail, http.StatusOK)
+	body := detail.Body.String()
+	requireContains(
+		t,
+		body,
+		"CD211 does not have permission to access the shared local path.",
+		"Check the shared user and group permissions, then Retry.",
+		"Container-visible shared path",
+		current.WorkspacePath,
+	)
+	requireAbsent(t, body, filepath.Join(current.WorkspacePath, current.DestinationName))
+
+	chineseRequest := httptest.NewRequest(http.MethodGet, "/downloads/"+current.Hash, nil)
+	chineseRequest.AddCookie(&http.Cookie{Name: "CD211_SESSION", Value: fixture.sid})
+	chineseRequest.AddCookie(&http.Cookie{Name: langCookie, Value: string(LangZH)})
+	chinese := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(chinese, chineseRequest)
+	requireStatus(t, chinese, http.StatusOK)
+	requireContains(t, chinese.Body.String(), "CD211 无权访问共享本地路径。", "请检查共享用户和用户组权限，然后重试。", "容器内共享路径", current.WorkspacePath)
+
+	legacy := fixture.seedDownload("6", domain.StateFailed, func(download *domain.Download) {
+		download.WorkspacePath = filepath.Join(download.SavePath, ".cd211", download.Hash)
+		download.DestinationName = download.Name
+		download.LastUpstreamStatus = domain.UpstreamOfflineFinished
+		download.CopyProgress = 0
+		download.LastErrorCode = string(domain.ProblemLocalVerificationFailed)
+		download.LastError = domain.ProblemText(domain.ProblemLocalVerificationFailed)
+	})
+	legacyDetail := fixture.request(http.MethodGet, "/downloads/"+legacy.Hash, nil, true)
+	requireStatus(t, legacyDetail, http.StatusOK)
+	requireContains(
+		t,
+		legacyDetail.Body.String(),
+		"The copy did not start because the local workspace check failed.",
+		"does not retain the underlying filesystem cause",
+		"Container-visible shared path",
+		legacy.WorkspacePath,
+	)
 }
 
 func TestLegacyProblemRendersStoredText(t *testing.T) {

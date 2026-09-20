@@ -23,8 +23,23 @@ type FilePlan struct {
 // crash between staging and publication. Every path component is checked
 // without following symlinks.
 func (v *Verifier) ApplyFilePlan(root, hash string, plans []FilePlan) error {
+	err := v.applyFilePlan(root, hash, plans)
+	if err == nil {
+		return nil
+	}
+	var typed *Failure
+	if errors.As(err, &typed) {
+		return err
+	}
+	if errors.Is(err, ErrFilePlanConflict) {
+		return failure(FailureLayout, OperationApplyFilePlan, err)
+	}
+	return classifyFailure(OperationApplyFilePlan, FailureTransient, err)
+}
+
+func (v *Verifier) applyFilePlan(root, hash string, plans []FilePlan) error {
 	if hash == "" || !filepath.IsAbs(root) {
-		return fmt.Errorf("fsafe: invalid file plan root")
+		return failure(FailureUnsafe, OperationApplyFilePlan, errors.New("invalid file plan root"))
 	}
 	evaluated, err := filepath.EvalSymlinks(root)
 	if err != nil {
@@ -32,7 +47,7 @@ func (v *Verifier) ApplyFilePlan(root, hash string, plans []FilePlan) error {
 	}
 	evaluated = filepath.Clean(evaluated)
 	if !strictlyWithin(v.localRoot, evaluated) {
-		return fmt.Errorf("fsafe: file plan escapes local root")
+		return failure(FailureUnsafe, OperationApplyFilePlan, errors.New("file plan escapes local root"))
 	}
 	moving := make(map[string]FilePlan)
 	temps := make(map[string]string)
@@ -40,7 +55,7 @@ func (v *Verifier) ApplyFilePlan(root, hash string, plans []FilePlan) error {
 	completed := make(map[string]bool)
 	for _, plan := range plans {
 		if !validManifestPath(plan.OriginalPath) || !validManifestPath(plan.EffectivePath) || plan.Size < 0 || (plan.Priority != 0 && plan.Priority != 1 && plan.Priority != 6 && plan.Priority != 7) {
-			return fmt.Errorf("fsafe: invalid file plan")
+			return failure(FailureUnsafe, OperationApplyFilePlan, errors.New("invalid file plan"))
 		}
 		if err := safePlanComponents(evaluated, plan.OriginalPath); err != nil {
 			return err
@@ -197,7 +212,7 @@ func safePlanComponents(root, relative string) error {
 func safeAbsoluteComponents(root, target string) error {
 	relative, err := filepath.Rel(root, target)
 	if err != nil || outsideRoot(relative) {
-		return fmt.Errorf("fsafe: plan path escapes root")
+		return failure(FailureUnsafe, OperationApplyFilePlan, errors.New("plan path escapes root"))
 	}
 	current := root
 	if relative == "." {
@@ -207,10 +222,10 @@ func safeAbsoluteComponents(root, target string) error {
 		current = filepath.Join(current, part)
 		info, statErr := os.Lstat(current)
 		if statErr == nil && info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("fsafe: plan path contains symlink")
+			return failure(FailureUnsafe, OperationApplyFilePlan, errors.New("plan path contains symlink"))
 		}
 		if statErr != nil && !os.IsNotExist(statErr) {
-			return statErr
+			return classifyFailure(OperationApplyFilePlan, FailureTransient, statErr)
 		}
 	}
 	return nil
