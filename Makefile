@@ -1,4 +1,4 @@
-.PHONY: generate lint test build web-preview image image-multiarch
+.PHONY: generate lint test harness harness-live build web-preview image image-multiarch
 
 VERSION ?= dev
 WEB_PREVIEW_ADDRESS ?= 127.0.0.1:18080
@@ -12,6 +12,13 @@ lint:
 
 test:
 	GOTOOLCHAIN=go1.26.5 go test ./...
+
+harness:
+	GOTOOLCHAIN=go1.26.5 go test ./internal/clouddrive ./internal/reconcile -run 'Test(RemoveCopy|RecoveryHarness|CommitFailureDiagnostics)' -count=1 -v
+
+harness-live:
+	@test -n "$${CD211_LIVE_ADDRESS}" || (printf 'CD211_LIVE_ADDRESS is required\n'; exit 1)
+	GOTOOLCHAIN=go1.26.5 go test ./internal/clouddrive -run '^TestLiveCopyLifecycle$$' -count=1 -v -timeout 3m
 
 build:
 	mkdir -p bin

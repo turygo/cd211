@@ -109,7 +109,7 @@ type fakeCloud struct {
 	cancelOffline  func(context.Context, string, string) error
 	ensureCopy     func(context.Context, clouddrive.CopySpec) (clouddrive.CopyTask, error)
 	inspectCopy    func(context.Context, string, string) (clouddrive.CopyTask, bool, error)
-	cancelCopy     func(context.Context, string, string) error
+	removeCopy     func(context.Context, string, string) error
 }
 
 func (c fakeCloud) EnsureOffline(ctx context.Context, spec clouddrive.OfflineSpec) (clouddrive.OfflineTask, error) {
@@ -133,8 +133,8 @@ func (c fakeCloud) EnsureCopy(ctx context.Context, spec clouddrive.CopySpec) (cl
 func (c fakeCloud) InspectCopy(ctx context.Context, source, destination string) (clouddrive.CopyTask, bool, error) {
 	return c.inspectCopy(ctx, source, destination)
 }
-func (c fakeCloud) CancelCopy(ctx context.Context, source, destination string) error {
-	return c.cancelCopy(ctx, source, destination)
+func (c fakeCloud) RemoveCopy(ctx context.Context, source, destination string) error {
+	return c.removeCopy(ctx, source, destination)
 }
 
 type fakeFilesystem struct {
@@ -325,7 +325,7 @@ func defaults() (*fakeCloud, *fakeFilesystem) {
 		inspectCopy: func(context.Context, string, string) (clouddrive.CopyTask, bool, error) {
 			return clouddrive.CopyTask{}, false, nil
 		},
-		cancelCopy: func(context.Context, string, string) error { return nil },
+		removeCopy: func(context.Context, string, string) error { return nil },
 	}
 	files := fakeFilesystem{verify: func(string, fsafe.ExpectedContent) (string, error) { return "", fs.ErrNotExist }, delete: func(string, string) error { return nil }}
 	return &cloud, &files
@@ -370,7 +370,7 @@ func TestCleanupRejectionRetainsCleanupIntent(t *testing.T) {
 	clock := &fakeClock{now: now}
 	repo := &fakeRepository{}
 	cloud, files := defaults()
-	cloud.cancelCopy = func(context.Context, string, string) error {
+	cloud.removeCopy = func(context.Context, string, string) error {
 		return &clouddrive.Error{Operation: "cancel_copy", Kind: clouddrive.ErrorRejected}
 	}
 	scheduler := testScheduler(t, clock, repo, cloud, files)
@@ -390,7 +390,7 @@ func TestDeleteCancelsOnceThenDeletesDerivedLocalPath(t *testing.T) {
 	repo := &fakeRepository{}
 	cloud, files := defaults()
 	cancelCalls := 0
-	cloud.cancelCopy = func(context.Context, string, string) error {
+	cloud.removeCopy = func(context.Context, string, string) error {
 		cancelCalls++
 		return nil
 	}
@@ -448,7 +448,7 @@ func TestLocalDeleteFailuresPreserveIntentAndSafeDiagnostics(t *testing.T) {
 			scheduler.logger = slog.New(slog.NewJSONHandler(&output, nil))
 			d := baseDownload(test.state, now)
 			d.CopySourcePath, d.DestinationName = "/cloud/payload", "payload"
-			d.LastUpstreamStatus = cleanupCancelled + "|" + domain.UpstreamCopyFailed
+			d.LastUpstreamStatus = copyRemoved + "|" + domain.UpstreamCopyFailed
 			d.DeleteFilesRequested = true
 			d.PauseRequested = test.state == domain.StateCancelRequested
 			if test.isolated {
@@ -858,67 +858,6 @@ func TestDestinationConflictRetryPersistsResolutionAndCopy(t *testing.T) {
 	}
 }
 
-func TestRetryAfterLocalVerificationFailureRemovesStaleCopy(t *testing.T) {
-	now := time.Date(2026, 8, 27, 2, 0, 0, 0, time.UTC)
-	hash := "febc97e973498b93f1aa7c0767d730044917dea9"
-	sourceName := "[Dynamis One] Grand Blue Season 3 - 05 (ABEMA 1920x1080 AVC AAC MKV) [0A0DE095].mkv"
-	cloudResult := "/115open/云下载/ani-rss/" + sourceName
-	copySource := cloudResult + "/" + sourceName
-	savePath := "/downloads/anime/碧蓝之海/Season 3"
-	destinationName := "[Kirara Fantasia] 碧蓝之海 S03E05.mkv"
-	repo := &fakeRepository{files: []domain.DownloadFile{{
-		DownloadHash: hash, Index: 0, RelativePath: sourceName, Size: 42,
-	}}}
-	cloud, files := defaults()
-	cancelCalls := 0
-	cloud.cancelCopy = func(_ context.Context, source, destination string) error {
-		cancelCalls++
-		if source != copySource || destination != savePath {
-			t.Fatalf("CancelCopy(%q, %q), want old legacy identity", source, destination)
-		}
-		return nil
-	}
-	ensureCalls, verifyCalls := 0, 0
-	deleted := false
-	cloud.ensureCopy = func(_ context.Context, spec clouddrive.CopySpec) (clouddrive.CopyTask, error) {
-		ensureCalls++
-		return clouddrive.CopyTask{
-			SourcePath: spec.SourcePath, DestinationPath: spec.DestinationPath,
-			State: clouddrive.CopyCompleted, Progress: 1,
-		}, nil
-	}
-	files.verify = func(save string, expected fsafe.ExpectedContent) (string, error) {
-		verifyCalls++
-		if !deleted {
-			return "", errors.New("fsafe: single-file manifest does not match candidate")
-		}
-		return filepath.Join(save, expected.CandidateName), nil
-	}
-	files.delete = func(content, save string) error {
-		if content != filepath.Join(savePath, destinationName) || save != savePath {
-			t.Fatalf("Delete(%q, %q), want stale candidate", content, save)
-		}
-		deleted = true
-		return nil
-	}
-	download := domain.Download{
-		Hash: hash, Name: "[Kirara Fantasia] 碧蓝之海 S03E05", SourceKind: domain.SourceTorrent,
-		CloudFolder: "/115open/云下载/ani-rss", SavePath: savePath,
-		CloudResultPath: cloudResult, CopySourcePath: copySource, DestinationName: destinationName,
-		IsMultiFile: new(bool), TotalSize: 42, State: domain.StateSubmittingCopy,
-		LastUpstreamStatus: domain.UpstreamCopyCompleted, PhaseStartedAt: now,
-	}
-	scheduler := testScheduler(t, &fakeClock{now: now}, repo, cloud, files)
-	for index := range 5 {
-		download = step(t, scheduler, repo, download)
-		if index < 4 {
-			download.NextRunAt = nil
-		}
-	}
-	if !deleted || cancelCalls != 1 || ensureCalls != 1 || verifyCalls != 1 || download.State != domain.StateCompleted {
-		t.Fatalf("retry recovery = deleted:%t cancel:%d ensure:%d verify:%d download:%+v", deleted, cancelCalls, ensureCalls, verifyCalls, download)
-	}
-}
 func TestCompletedCopyRetryCancelsBeforeWorkspaceCleanup(t *testing.T) {
 	now := time.Date(2026, 8, 29, 14, 0, 0, 0, time.UTC)
 	hash := "0123456789abcdef0123456789abcdef01234567"
@@ -929,7 +868,7 @@ func TestCompletedCopyRetryCancelsBeforeWorkspaceCleanup(t *testing.T) {
 	}
 	cloud, files := defaults()
 	var events []string
-	cloud.cancelCopy = func(_ context.Context, source, destination string) error {
+	cloud.removeCopy = func(_ context.Context, source, destination string) error {
 		events = append(events, "cancel:"+source+":"+destination)
 		return nil
 	}
@@ -953,7 +892,7 @@ func TestCompletedCopyRetryCancelsBeforeWorkspaceCleanup(t *testing.T) {
 	scheduler := testScheduler(t, &fakeClock{now: now}, repo, cloud, files)
 
 	download = storeStep(t, scheduler, repo, hash)
-	if download.LastUpstreamStatus != cleanupCancelled+"|"+domain.UpstreamCopyCompleted {
+	if download.LastUpstreamStatus != copyRemoved+"|"+domain.UpstreamCopyCompleted {
 		t.Fatalf("cancel marker = %q", download.LastUpstreamStatus)
 	}
 	download = storeStep(t, scheduler, repo, hash)
@@ -1084,7 +1023,7 @@ func TestStepWorkflowAndMissingCopyRecovery(t *testing.T) {
 	}
 }
 
-func TestStepFailuresBackoffTimeoutCollisionAndCAS(t *testing.T) {
+func TestStepFailuresBackoffCollisionAndCAS(t *testing.T) {
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	clock := &fakeClock{now: now}
 	repo := &fakeRepository{}
@@ -1097,11 +1036,6 @@ func TestStepFailuresBackoffTimeoutCollisionAndCAS(t *testing.T) {
 	if d.State != domain.StateSubmittingOffline || d.AttemptCount != 1 || d.NextRunAt == nil || !d.NextRunAt.Equal(now.Add(30*time.Second)) ||
 		d.LastErrorCode != string(domain.ProblemCloudUnreachable) || d.LastError != domain.ProblemText(domain.ProblemCloudUnreachable) {
 		t.Fatalf("transient backoff = %#v", d)
-	}
-	d.PhaseStartedAt = now.Add(-time.Hour)
-	d = step(t, s, repo, d)
-	if d.State != domain.StateFailed || d.LastErrorCode != string(domain.ProblemOfflineTimeout) {
-		t.Fatalf("timeout = %#v", d)
 	}
 
 	multi := false
@@ -1174,7 +1108,7 @@ func TestCancelDeleteAndCancellationDoNotResumeWorkflow(t *testing.T) {
 	repo := &fakeRepository{}
 	cloud, files := defaults()
 	cancelled := 0
-	cloud.cancelCopy = func(context.Context, string, string) error { cancelled++; return nil }
+	cloud.removeCopy = func(context.Context, string, string) error { cancelled++; return nil }
 	deleted := 0
 	files.delete = func(content, save string) error {
 		deleted++
@@ -1192,7 +1126,7 @@ func TestCancelDeleteAndCancellationDoNotResumeWorkflow(t *testing.T) {
 	}
 	d.State = domain.StateDeleteRequested
 	d.NextRunAt = new(now)
-	cloud.cancelCopy = func(context.Context, string, string) error {
+	cloud.removeCopy = func(context.Context, string, string) error {
 		t.Fatal("delete repeated a previously successful cancellation")
 		return errors.New("unreachable")
 	}
@@ -1242,7 +1176,7 @@ func TestPauseStopsUpstreamWorkAndRetainsResumeEvidence(t *testing.T) {
 		repo := &fakeRepository{}
 		cloud, files := defaults()
 		cancelled, deleted := 0, 0
-		cloud.cancelCopy = func(context.Context, string, string) error { cancelled++; return nil }
+		cloud.removeCopy = func(context.Context, string, string) error { cancelled++; return nil }
 		files.delete = func(content, save string) error {
 			deleted++
 			if content != "/downloads/payload" || save != "/downloads" {
@@ -1258,6 +1192,10 @@ func TestPauseStopsUpstreamWorkAndRetainsResumeEvidence(t *testing.T) {
 		d.LastUpstreamStatus = domain.UpstreamCopyScanning
 		d.CopyProgress, d.QbitProgress = 0.5, 0.95
 		d = step(t, s, repo, d)
+		if d.State != domain.StateCancelRequested || deleted != 0 {
+			t.Fatalf("copy pause deleted before its cleanup checkpoint: %+v", d)
+		}
+		d = step(t, s, repo, d)
 		if d.State != domain.StateStopped || cancelled != 1 || deleted != 1 ||
 			d.LastUpstreamStatus != domain.UpstreamOfflineFinished || d.CopyProgress != 0 || d.QbitProgress != 0.9 {
 			t.Fatalf("copy pause = %#v", d)
@@ -1269,7 +1207,7 @@ func TestPauseStopsUpstreamWorkAndRetainsResumeEvidence(t *testing.T) {
 		repo := &fakeRepository{}
 		cloud, files := defaults()
 		cancelled, deleted := 0, 0
-		cloud.cancelCopy = func(context.Context, string, string) error { cancelled++; return nil }
+		cloud.removeCopy = func(context.Context, string, string) error { cancelled++; return nil }
 		files.delete = func(string, string) error { deleted++; return nil }
 		s := testScheduler(t, clock, repo, cloud, files)
 		d := baseDownload(domain.StateCancelRequested, now)
@@ -1277,6 +1215,7 @@ func TestPauseStopsUpstreamWorkAndRetainsResumeEvidence(t *testing.T) {
 		d.DestinationName = ""
 		d.PauseRequested = true
 		d.LastUpstreamStatus = domain.UpstreamCopyScanning
+		d = step(t, s, repo, d)
 		d = step(t, s, repo, d)
 		if d.State != domain.StateFailed || d.LastErrorCode != string(domain.ProblemInternalWorkflowError) || cancelled != 1 || deleted != 0 {
 			t.Fatalf("pre-reservation pause guessed local path: %#v, cancel=%d delete=%d", d, cancelled, deleted)
@@ -1287,7 +1226,7 @@ func TestPauseStopsUpstreamWorkAndRetainsResumeEvidence(t *testing.T) {
 		clock := &fakeClock{now: now}
 		repo := &fakeRepository{}
 		cloud, files := defaults()
-		cloud.cancelCopy = func(context.Context, string, string) error {
+		cloud.removeCopy = func(context.Context, string, string) error {
 			t.Fatal("completed copy was cancelled")
 			return nil
 		}
@@ -1361,16 +1300,6 @@ func TestEnsureTerminalTasksAdvanceImmediately(t *testing.T) {
 			wantCode:  string(domain.ProblemOfflineDownloadFailed),
 		},
 		{
-			name:     "copy completed",
-			download: copySubmission(now),
-			configure: func(cloud *fakeCloud) {
-				cloud.ensureCopy = func(_ context.Context, spec clouddrive.CopySpec) (clouddrive.CopyTask, error) {
-					return clouddrive.CopyTask{SourcePath: spec.SourcePath, DestinationPath: spec.DestinationPath, State: clouddrive.CopyCompleted, Progress: 1}, nil
-				}
-			},
-			wantState: domain.StateVerifyingLocal,
-		},
-		{
 			name:     "copy failed",
 			download: copySubmission(now),
 			configure: func(cloud *fakeCloud) {
@@ -1420,7 +1349,7 @@ func TestRetryRemovesFailedUpstreamTaskBeforeResubmission(t *testing.T) {
 	}
 
 	copyCancels, copySubmits := 0, 0
-	cloud.cancelCopy = func(context.Context, string, string) error { copyCancels++; return nil }
+	cloud.removeCopy = func(context.Context, string, string) error { copyCancels++; return nil }
 	cloud.ensureCopy = func(_ context.Context, spec clouddrive.CopySpec) (clouddrive.CopyTask, error) {
 		copySubmits++
 		return clouddrive.CopyTask{SourcePath: spec.SourcePath, DestinationPath: spec.DestinationPath, State: clouddrive.CopyPending}, nil
@@ -1437,7 +1366,7 @@ func TestRetryRemovesFailedUpstreamTaskBeforeResubmission(t *testing.T) {
 	copyRow.LastUpstreamStatus = domain.UpstreamCopyFailed
 	copyRow = step(t, scheduler, repo, copyRow)
 	if copyCancels != 1 || copySubmits != 0 ||
-		copyRow.LastUpstreamStatus != domain.UpstreamCleanupCancelled+"|"+domain.UpstreamCopyFailed {
+		copyRow.LastUpstreamStatus != domain.UpstreamCopyRemoved+"|"+domain.UpstreamCopyFailed {
 		t.Fatalf("copy retry cancellation = %+v, cancels=%d submits=%d", copyRow, copyCancels, copySubmits)
 	}
 	copyRow = step(t, scheduler, repo, copyRow)

@@ -610,9 +610,9 @@ var stringsEN = Strings{
 	LegacyLocalPreflightAction:  "This record was created by an older CD211 version and does not retain the underlying filesystem cause. Check the container-visible shared path, then Retry.",
 	Problems: map[domain.ProblemCode]ProblemStrings{
 		domain.ProblemCloudUnreachable:                  {Summary: "CloudDrive2 is unreachable."},
-		domain.ProblemCloudUnreachableTimeout:           {Summary: "CloudDrive2 stayed unreachable until the copy deadline. Refresh the CloudDrive2 mount and check its connection, then Retry."},
+		domain.ProblemCloudUnreachableTimeout:           {Summary: "CloudDrive2 stayed unreachable until the phase deadline. Check its connection, then Retry."},
 		domain.ProblemCloudAuthenticationRequired:       {Summary: "CloudDrive2 requires authentication."},
-		domain.ProblemCloudAuthenticationTimeout:        {Summary: "CloudDrive2 kept rejecting the credentials until the copy deadline. Check the CloudDrive2 login credentials, then Retry."},
+		domain.ProblemCloudAuthenticationTimeout:        {Summary: "CloudDrive2 kept rejecting the credentials until the phase deadline. Check the CloudDrive2 login credentials, then Retry."},
 		domain.ProblemCloudCopyNotReady:                 {Summary: "The 115 offline download finished, but CloudDrive2 has not accepted the copy yet. If this persists, refresh the 115 mount and verify the cloud category and NAS staging paths."},
 		domain.ProblemCloudContentLayoutInvalid:         {Summary: "The 115 offline result does not match the torrent file layout."},
 		domain.ProblemCloudCopyNotReadyTimeout:          {Summary: "CloudDrive2 did not accept the copy before the deadline. Refresh the 115 mount and verify the cloud category and NAS staging paths, then Retry."},
@@ -1031,9 +1031,9 @@ var stringsZH = Strings{
 	LegacyLocalPreflightAction:  "此记录由旧版 CD211 创建，未保留底层文件系统错误原因。请检查容器内共享路径，然后重试。",
 	Problems: map[domain.ProblemCode]ProblemStrings{
 		domain.ProblemCloudUnreachable:                  {Summary: "无法连接 CloudDrive2。"},
-		domain.ProblemCloudUnreachableTimeout:           {Summary: "复制任务已超时，此前始终无法连接 CloudDrive2。请刷新 CloudDrive2 挂载并检查网络连接，然后重试。"},
+		domain.ProblemCloudUnreachableTimeout:           {Summary: "当前阶段已超时，此前始终无法连接 CloudDrive2。请检查网络连接，然后重试。"},
 		domain.ProblemCloudAuthenticationRequired:       {Summary: "CloudDrive2 拒绝了登录请求。"},
-		domain.ProblemCloudAuthenticationTimeout:        {Summary: "复制任务已超时，CloudDrive2 始终拒绝登录请求。请检查 CloudDrive2 的用户名和密码，然后重试。"},
+		domain.ProblemCloudAuthenticationTimeout:        {Summary: "当前阶段已超时，CloudDrive2 始终拒绝登录请求。请检查 CloudDrive2 的用户名和密码，然后重试。"},
 		domain.ProblemCloudCopyNotReady:                 {Summary: "115 离线下载已完成，但 CloudDrive2 尚未接受复制任务。若该状态持续，请刷新 115 挂载，并确认 115 分类目录和共享暂存目录配置正确。"},
 		domain.ProblemCloudContentLayoutInvalid:         {Summary: "115 离线下载结果与种子文件结构不一致。"},
 		domain.ProblemCloudCopyNotReadyTimeout:          {Summary: "等待 CloudDrive2 接受复制任务已超时。请刷新 115 挂载，并确认 115 分类目录和共享暂存目录配置正确。"},

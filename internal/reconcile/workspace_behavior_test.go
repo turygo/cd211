@@ -41,7 +41,7 @@ func TestIsolatedWorkspacesKeepSameNamedCopiesIndependent(t *testing.T) {
 		}
 	}
 
-	cloud := &fakeCloud{}
+	cloud, _ := defaults()
 	cloud.ensureCopy = func(_ context.Context, spec clouddrive.CopySpec) (clouddrive.CopyTask, error) {
 		data, err := os.ReadFile(spec.SourcePath)
 		if err != nil {
@@ -51,6 +51,9 @@ func TestIsolatedWorkspacesKeepSameNamedCopiesIndependent(t *testing.T) {
 			return clouddrive.CopyTask{}, err
 		}
 		return clouddrive.CopyTask{SourcePath: spec.SourcePath, DestinationPath: spec.DestinationPath, State: clouddrive.CopyCompleted, Progress: 1}, nil
+	}
+	cloud.inspectCopy = func(_ context.Context, source, destination string) (clouddrive.CopyTask, bool, error) {
+		return clouddrive.CopyTask{SourcePath: source, DestinationPath: destination, State: clouddrive.CopyCompleted, Progress: 1}, true, nil
 	}
 	repo := &fakeRepository{overrides: []domain.FileOverride{{FileIndex: 0, RelativePath: "renamed.mkv", Priority: 1}}}
 	clock := &fakeClock{now: time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)}
@@ -82,8 +85,12 @@ func TestIsolatedWorkspacesKeepSameNamedCopiesIndependent(t *testing.T) {
 		repo.files = []domain.DownloadFile{{DownloadHash: fixture.hash, Index: 0, RelativePath: "same.mkv", Size: int64(len(fixture.data))}}
 		download := makeDownload(fixture.hash)
 		download.TotalSize = int64(len(fixture.data))
-		download = step(t, scheduler, repo, download)
-		download = step(t, scheduler, repo, download)
+		for range 8 {
+			if download.State == domain.StateCompleted {
+				break
+			}
+			download = step(t, scheduler, repo, download)
+		}
 		if download.State != domain.StateCompleted {
 			t.Fatalf("hash %s state = %s, want COMPLETED", fixture.hash, download.State)
 		}
@@ -104,7 +111,15 @@ func TestIsolatedWorkspacesKeepSameNamedCopiesIndependent(t *testing.T) {
 	deleted.State = domain.StateDeleteRequested
 	deleted.DeleteFilesRequested = true
 	deleted.NextRunAt = &clock.now
-	step(t, scheduler, repo, deleted)
+	for range 8 {
+		if deleted.State == domain.StateDeleted {
+			break
+		}
+		deleted = step(t, scheduler, repo, deleted)
+	}
+	if deleted.State != domain.StateDeleted {
+		t.Fatalf("deletion did not complete: %+v", deleted)
+	}
 	if _, err := os.Stat(completed[0].WorkspacePath); !os.IsNotExist(err) {
 		t.Fatalf("deleted workspace still exists: %v", err)
 	}
@@ -124,7 +139,7 @@ func TestWorkspaceCleanupAndLegacyFailedCutoverOrdering(t *testing.T) {
 	now := time.Date(2026, 8, 29, 13, 0, 0, 0, time.UTC)
 	cloud, files := defaults()
 	var events []string
-	cloud.cancelCopy = func(_ context.Context, _, destination string) error {
+	cloud.removeCopy = func(_ context.Context, _, destination string) error {
 		events = append(events, "cancel:"+destination)
 		return nil
 	}
@@ -149,6 +164,7 @@ func TestWorkspaceCleanupAndLegacyFailedCutoverOrdering(t *testing.T) {
 		t.Fatal(err)
 	}
 	isolated := domain.Download{Hash: hash, SavePath: "/downloads", WorkspacePath: workspace, CopySourcePath: "/cloud/source", DestinationName: "same.mkv", State: domain.StateCancelRequested, PhaseStartedAt: now, PauseRequested: true}
+	isolated = step(t, scheduler, repo, isolated)
 	isolated = step(t, scheduler, repo, isolated)
 	if isolated.State != domain.StateStopped || len(events) != 2 || events[0] != "cancel:"+workspace || events[1] != "workspace:"+filepath.Join("/downloads", hash) {
 		t.Fatalf("isolated cleanup events/state = %v / %+v", events, isolated)

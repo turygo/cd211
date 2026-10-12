@@ -139,11 +139,11 @@ func ProblemText(code ProblemCode) string {
 	case ProblemCloudUnreachable:
 		return "CloudDrive2 is unreachable."
 	case ProblemCloudUnreachableTimeout:
-		return "CloudDrive2 stayed unreachable until the copy deadline. Refresh the CloudDrive2 mount and check its connection, then Retry."
+		return "CloudDrive2 stayed unreachable until the phase deadline. Check its connection, then Retry."
 	case ProblemCloudAuthenticationRequired:
 		return "CloudDrive2 requires authentication."
 	case ProblemCloudAuthenticationTimeout:
-		return "CloudDrive2 kept rejecting the credentials until the copy deadline. Check the CloudDrive2 login credentials, then Retry."
+		return "CloudDrive2 kept rejecting the credentials until the phase deadline. Check the CloudDrive2 login credentials, then Retry."
 	case ProblemCloudCopyNotReady:
 		return "The 115 offline download finished, but CloudDrive2 has not accepted the copy yet. If this persists, refresh the 115 mount and verify the cloud category and NAS staging paths."
 	case ProblemCloudContentLayoutInvalid:

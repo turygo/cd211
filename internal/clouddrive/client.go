@@ -648,6 +648,79 @@ func (c *Client) CancelCopy(ctx context.Context, sourcePath, destinationPath str
 	return nil
 }
 
+// RemoveCopy 定向取消复制并确认记录消失；不删除源文件或目标内容。
+func (c *Client) RemoveCopy(ctx context.Context, sourcePath, destinationPath string) error {
+	source, sourceOK := cleanAbsolutePath(sourcePath)
+	destination, destinationOK := cleanAbsolutePath(destinationPath)
+	if !sourceOK || !destinationOK {
+		return newError("remove_copy", ErrorInvalidInput, nil)
+	}
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	found, err := c.copyTaskExists(ctx, source, destination)
+	if err != nil || !found {
+		return err
+	}
+	cancelErr := c.CancelCopy(ctx, source, destination)
+	if cancelErr != nil {
+		var cloudErr *Error
+		if !errors.As(cancelErr, &cloudErr) || cloudErr.Kind != ErrorTemporary {
+			return cancelErr
+		}
+	}
+	found, err = c.copyTaskExists(ctx, source, destination)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+	if cancelErr != nil {
+		return cancelErr
+	}
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return newError("remove_copy", ErrorTemporary, ctx.Err())
+		case <-ticker.C:
+			found, err = c.copyTaskExists(ctx, source, destination)
+			if err != nil || !found {
+				return err
+			}
+		}
+	}
+}
+
+// 清理检查只验证身份与存在性，不把取消过程中的进度或状态当成完成证据。
+func (c *Client) copyTaskExists(ctx context.Context, source, destination string) (bool, error) {
+	callCtx, cancel, err := c.authorizedContext(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer cancel()
+	result, err := c.rpc.GetCopyTasks(callCtx, &emptypb.Empty{})
+	if err != nil {
+		return false, c.rpcError("remove_copy", err)
+	}
+	if result == nil {
+		return false, newError("remove_copy", ErrorInvalidResponse, nil)
+	}
+	found := false
+	for _, task := range result.CopyTasks {
+		if task == nil {
+			return false, newError("remove_copy", ErrorInvalidResponse, nil)
+		}
+		taskSource, sourceOK := cleanAbsolutePath(task.SourcePath)
+		taskDestination, destinationOK := cleanAbsolutePath(task.DestPath)
+		if sourceOK && destinationOK && taskSource == source && taskDestination == destination {
+			found = true
+		}
+	}
+	return found, nil
+}
+
 func (c *Client) authorizedContext(parent context.Context) (context.Context, context.CancelFunc, error) {
 	token, err := c.tokenFor(parent)
 	if err != nil {

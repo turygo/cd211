@@ -1286,7 +1286,7 @@ func validateClaimWorkspace(current, next domain.Download) error {
 		current.SavePath != next.SavePath || next.ContentPath != "" ||
 		next.LastUpstreamStatus != domain.UpstreamOfflineFinished ||
 		(current.LastUpstreamStatus != domain.UpstreamOfflineFinished &&
-			!strings.HasPrefix(current.LastUpstreamStatus, domain.UpstreamCleanupCancelled+"|copy:")) {
+			!strings.HasPrefix(current.LastUpstreamStatus, domain.UpstreamCopyRemoved+"|copy:")) {
 		return ErrInvalidTransition
 	}
 	expected, err := fsafe.WorkspacePath(next.SavePath, next.Hash)

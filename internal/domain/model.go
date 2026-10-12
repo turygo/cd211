@@ -16,6 +16,7 @@ const (
 	UpstreamCopyFailed         = "copy:FAILED"
 	UpstreamRetainedContent    = "revive:retained_content"
 	UpstreamCleanupCancelled   = "cleanup:cancelled"
+	UpstreamCopyRemoved        = "cleanup:copy_removed"
 )
 
 // Category identifies a configured destination category.

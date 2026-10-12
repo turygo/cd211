@@ -398,6 +398,8 @@ The reconciler submits a copy from the persisted cloud source path to the row's 
 
 Crash recovery first looks for an existing copy task with the exact `(source path, workspace path)` identity. An existing task is adopted instead of duplicated, and a crash after submission never triggers destructive preflight.
 
+Even when `EnsureCopy` immediately observes `Completed`, it commits `WAITING_COPY` with an immediate next run. The existing `WAITING_COPY -> VERIFYING_LOCAL` transition then handles completion. The first completion observation records `copy_completed_at`; no direct submission-to-verification edge is needed.
+
 The destination name is reserved within an isolated workspace once the finished offline task supplies the safe name; different hashes may use the same name because their workspaces are distinct. Legacy rows retain the historical cross-row destination reservation. Pre-copy collision detection clears only the current row's workspace candidate: uploaded torrents keep strict expected verification, while a magnet treats any safe existing regular file or directory at the destination as a collision regardless of type.
 
 Copy submission is operation-aware: temporary transport, authentication, not-found, and rejected observations keep the download non-terminal and schedule the persisted exponential backoff, while invalid input and invalid responses fail immediately with an actionable structured problem. An explicit upstream `CopyTask` state `FAILED` is terminal immediately.
@@ -446,6 +448,8 @@ Local verification: 10 minutes
 These values are configured in the setup wizard and the Settings page (`timeouts.offline`, `timeouts.copy`, `timeouts.verify`; Section 8.1). An explicit 115 failure or an explicit `CopyTask` `FAILED` enters `FAILED` immediately; copy submission readiness and rejection are bounded retries within the copy deadline. A timeout enters `FAILED` with a terminal problem code derived from the last durable retry observation, so a sustained not-ready, unreachable, or authentication condition does not degrade to a generic timeout.
 
 Manual Retry resumes from the earliest safe phase encoded by persisted upstream evidence; it does not blindly submit the whole workflow again. Cleanup failures preserve `CANCEL_REQUESTED` or `DELETE_REQUESTED` and Retry resumes that same cleanup intent.
+
+Offline submission and waiting use the same last-observation deadline classification as copying. Successful observations clear transient problems, so a recovered connection does not mask a later genuine `offline_timeout`. A local verification timeout retries through `SUBMITTING_COPY`: the finished remote copy record and incomplete local output must be cleared before a replacement copy.
 
 ## 10. qBittorrent State Projection
 
@@ -1079,7 +1083,11 @@ The CloudDrive2 adapter must expose the underlying cancellation operations neede
 
 If cancellation cannot be confirmed because CloudDrive2 is unavailable, the durable cancellation request remains pending and the task never returns to normal workflow advancement.
 
-Successful cancellation is recorded durably so a later removal does not repeat it. `deleteFiles=true` treats a cleared preflight or any submitted copy-task state as ownership evidence and idempotently removes only the current row's workspace, including partial copy output; the shared `.cd211` parent is retained.
+Copy cleanup calls `RemoveCopy` for the exact `(source, destination)` identity, including completed copies. On the supported CloudDrive2 deployment, `CancelCopyTask` removes this record asynchronously; the adapter confirms absence through `GetCopyTasks` within a bounded deadline before reporting success. Cancellation response loss is resolved by rechecking absence. Cleanup does not depend on interpreting transitional progress/status values and never uses a global task-removal operation.
+
+Confirmed copy-record removal is persisted as `cleanup:copy_removed`, optionally followed by the previous status. The older `cleanup:cancelled` marker is not proof that a copy record was removed and must be rechecked before destructive copy cleanup. Retry, pause cleanup, and deletion commit the removal checkpoint before deleting local output; a crash resumes the same cleanup phase. This prevents delete-and-readd from adopting a stale completed record at the same workspace.
+
+`deleteFiles=true` treats a cleared preflight or any submitted copy-task state as ownership evidence and idempotently removes only the current row's workspace, including partial copy output; the shared `.cd211` parent is retained. Removing a remote copy task record never deletes the 115 source content.
 
 ## 15. Failure Semantics
 
@@ -1312,6 +1320,23 @@ Use a fake clock, temporary SQLite database, fake filesystem root, and fake Clou
 A fake gRPC server generated from the vendored CloudDrive2 proto implements the exact methods used by CD211. It exercises request fields, authorization metadata, deadlines, status mapping, task matching, and unknown-result crash windows without requiring a live 115 account.
 
 Because the proto source is third-party, a release candidate must also pass a controlled contract check against the supported production CloudDrive2 version. The check covers token acquisition, offline-task add/list/remove, copy submission/list/cancel/remove, and the file lookup operations used for recovery.
+
+`make harness` runs the copy-cleanup contract and durable recovery scenarios. The recovery harness uses a real SQLite Store and real `fsafe` directories, with a stateful remote substitute that writes bytes and retains copy records. It covers immediate completion, stale and incomplete content, delete-and-readd isolation, interruption after remote copy or local cleanup, deadline attribution, and safe commit diagnostics.
+
+`make harness-live` is opt-in and requires `CD211_LIVE_ADDRESS`, `CD211_LIVE_USERNAME`, `CD211_LIVE_PASSWORD`, `CD211_LIVE_ROOT`, and `CD211_LIVE_CLOUD_ROOT`. It currently targets a plain-HTTP trusted-LAN CloudDrive2 endpoint. Run it where `CD211_LIVE_ROOT` is both a writable local directory and the same CloudDrive2 virtual path:
+
+```sh
+export CD211_LIVE_ADDRESS=192.168.2.182:19798
+export CD211_LIVE_USERNAME=operator
+read -r -s CD211_LIVE_PASSWORD
+export CD211_LIVE_PASSWORD
+export CD211_LIVE_ROOT=/downloads
+export CD211_LIVE_CLOUD_ROOT=/115open/cloud-downloads
+make harness-live
+unset CD211_LIVE_PASSWORD
+```
+
+The live harness creates uniquely named local and cloud fixtures, uploads small known payloads, verifies cloud-to-local bytes, clears only one completed copy while preserving a sentinel task, repeats removal, and copies again to the same destination. Confirmed cleanup removes only its own fixture data and records. If remote cleanup cannot be confirmed, it reports and retains the fixture directory rather than deleting content that may still be written. The ordinary test suite skips this test unless the live address is explicitly set.
 
 Before release, run these real-container checks:
 

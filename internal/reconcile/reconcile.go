@@ -24,10 +24,12 @@ import (
 	"github.com/turygo/cd211/internal/store"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 const destinationClear = "local:destination_clear"
 const cleanupCancelled = domain.UpstreamCleanupCancelled
+const copyRemoved = domain.UpstreamCopyRemoved
 const leaseCommitMargin = 15 * time.Second
 
 // Repository is the durable lease and CAS boundary used by Scheduler.
@@ -46,7 +48,7 @@ type CloudDrive interface {
 	CancelOffline(context.Context, string, string) error
 	EnsureCopy(context.Context, clouddrive.CopySpec) (clouddrive.CopyTask, error)
 	InspectCopy(context.Context, string, string) (clouddrive.CopyTask, bool, error)
-	CancelCopy(context.Context, string, string) error
+	RemoveCopy(context.Context, string, string) error
 }
 
 type Filesystem interface {
@@ -199,12 +201,14 @@ func (s *Scheduler) Step(ctx context.Context) (claimed bool, err error) {
 					return true, nil
 				}
 				s.log(download, op, started, "commit_error")
+				s.logCommitFailure(*claim, download, op, failErr)
 				return true, failErr
 			}
 			s.log(download, op, started, "committed")
 			return true, nil
 		default:
 			s.log(download, op, started, "commit_error")
+			s.logCommitFailure(*claim, download, op, err)
 			return true, err
 		}
 	}
@@ -218,7 +222,7 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 	// durable steps. Remote copy is not touched until both have committed.
 	if d.State == domain.StateSubmittingCopy {
 		if s.timedOut(d, now, s.config.CopyTimeout) {
-			s.fail(d, s.deadlineProblem(d))
+			s.fail(d, s.deadlineProblem(d, domain.ProblemCopyTimeout))
 			return "resolve_copy_source", nil
 		}
 		if d.CloudResultPath == "" {
@@ -261,7 +265,7 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 		return "transition", nil
 	case domain.StateSubmittingOffline:
 		if s.timedOut(d, now, s.config.OfflineTimeout) {
-			s.fail(d, domain.ProblemOfflineTimeout)
+			s.fail(d, s.deadlineProblem(d, domain.ProblemOfflineTimeout))
 			return "ensure_offline", nil
 		}
 		if d.LastUpstreamStatus == domain.UpstreamOfflineError {
@@ -298,7 +302,7 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 		return "ensure_offline", nil
 	case domain.StateWaitingOffline:
 		if s.timedOut(d, now, s.config.OfflineTimeout) {
-			s.fail(d, domain.ProblemOfflineTimeout)
+			s.fail(d, s.deadlineProblem(d, domain.ProblemOfflineTimeout))
 			return "inspect_offline", nil
 		}
 		task, found, err := s.cloud.InspectOffline(ctx, d.CloudFolder, d.Hash)
@@ -332,35 +336,26 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 		return "inspect_offline", nil
 	case domain.StateSubmittingCopy:
 		if s.timedOut(d, now, s.config.CopyTimeout) {
-			s.fail(d, s.deadlineProblem(d))
+			s.fail(d, s.deadlineProblem(d, domain.ProblemCopyTimeout))
 			return "ensure_copy", nil
 		}
-		if d.LastUpstreamStatus == domain.UpstreamCopyCompleted {
+		priorCopy := strings.TrimPrefix(d.LastUpstreamStatus, cleanupCancelled+"|")
+		if (priorCopy == domain.UpstreamCopyCompleted || priorCopy == domain.UpstreamCopyFailed) && !copyRemovalCompleted(d.LastUpstreamStatus) {
 			if d.DestinationName == "" {
 				s.fail(d, domain.ProblemInternalWorkflowError)
-				return "retry_cancel_copy", nil
+				return "retry_remove_copy", nil
 			}
-			root := workspaceRoot(*d)
-			if err := s.cloud.CancelCopy(ctx, d.CopySourcePath, root); err != nil {
-				return "retry_cancel_copy", s.cloudFailure(d, err, "cancel_copy")
-			}
-			d.CopyProgress, d.QbitProgress = 0, 0.9
-			markCleanupCancelled(d)
-			d.LastError, d.LastErrorCode, d.AttemptCount = "", "", 0
-			return "retry_cancel_copy", nil
-		}
-		if d.LastUpstreamStatus == domain.UpstreamCopyFailed {
-			if err := s.cloud.CancelCopy(ctx, d.CopySourcePath, workspaceRoot(*d)); err != nil {
-				return "retry_cancel_copy", s.cloudFailure(d, err, "cancel_copy")
+			if err := s.cloud.RemoveCopy(ctx, d.CopySourcePath, workspaceRoot(*d)); err != nil {
+				return "retry_remove_copy", s.cloudFailure(d, err, "remove_copy")
 			}
 			d.CopyProgress, d.QbitProgress = 0, 0.9
-			markCleanupCancelled(d)
+			markCopyRemoved(d)
 			d.LastError, d.LastErrorCode, d.AttemptCount = "", "", 0
 			d.NextRunAt = new(now)
-			return "retry_cancel_copy", nil
+			return "retry_remove_copy", nil
 		}
-		if d.LastUpstreamStatus == cleanupCancelled+"|"+domain.UpstreamCopyFailed ||
-			d.LastUpstreamStatus == cleanupCancelled+"|"+domain.UpstreamCopyCompleted {
+		if d.LastUpstreamStatus == copyRemoved+"|"+domain.UpstreamCopyFailed ||
+			d.LastUpstreamStatus == copyRemoved+"|"+domain.UpstreamCopyCompleted {
 			if d.DestinationName == "" {
 				s.fail(d, domain.ProblemInternalWorkflowError)
 				return "retry_delete_copy", nil
@@ -380,6 +375,7 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 				d.WorkspacePath = workspace
 			}
 			d.CopyProgress, d.QbitProgress = 0, 0.9
+			d.ContentPath, d.CopyCompletedAt = "", nil
 			d.LastUpstreamStatus, d.LastError, d.LastErrorCode, d.AttemptCount = domain.UpstreamOfflineFinished, "", "", 0
 			d.NextRunAt = new(now)
 			return "retry_delete_copy", nil
@@ -422,14 +418,14 @@ func (s *Scheduler) decide(ctx context.Context, d *domain.Download) (string, err
 			s.advance(d, domain.StateWaitingCopy, now, now.Add(s.config.PollInterval))
 		case clouddrive.CopyCompleted:
 			recordCopyCompleted(d, now)
-			s.advance(d, domain.StateVerifyingLocal, now, now)
+			s.advance(d, domain.StateWaitingCopy, now, now)
 		case clouddrive.CopyFailed:
 			s.fail(d, domain.ProblemCopyTaskFailed)
 		}
 		return "ensure_copy", nil
 	case domain.StateWaitingCopy:
 		if s.timedOut(d, now, s.config.CopyTimeout) {
-			s.fail(d, s.deadlineProblem(d))
+			s.fail(d, s.deadlineProblem(d, domain.ProblemCopyTimeout))
 			return "inspect_copy", nil
 		}
 		root := workspaceRoot(*d)
@@ -516,14 +512,18 @@ func (s *Scheduler) cancel(ctx context.Context, d *domain.Download, now time.Tim
 	op := "cancel_offline"
 	if d.CopySourcePath != "" {
 		root := workspaceRoot(*d)
-		op, err = "cancel_copy", s.cloud.CancelCopy(ctx, d.CopySourcePath, root)
+		op, err = "remove_copy", s.cloud.RemoveCopy(ctx, d.CopySourcePath, root)
 	} else {
 		err = s.cloud.CancelOffline(ctx, d.CloudFolder, d.Hash)
 	}
-	if err != nil && !notFound(err) {
+	if err != nil && (d.CopySourcePath != "" || !notFound(err)) {
 		return op, s.cleanupFailure(d, err)
 	}
-	markCleanupCancelled(d)
+	if d.CopySourcePath != "" {
+		markCopyRemoved(d)
+	} else {
+		markCleanupCancelled(d)
+	}
 	d.State, d.LastError, d.LastErrorCode, d.AttemptCount, d.NextRunAt = domain.StateCancelled, "", "", 0, nil
 	return op, nil
 }
@@ -542,8 +542,13 @@ func (s *Scheduler) pause(ctx context.Context, d *domain.Download, now time.Time
 		d.State, d.LastError, d.LastErrorCode, d.AttemptCount, d.NextRunAt = domain.StateStopped, "", "", 0, nil
 		return "pause_offline", nil
 	}
-	if err := s.cloud.CancelCopy(ctx, d.CopySourcePath, workspaceRoot(*d)); err != nil && !notFound(err) {
-		return "pause_copy", s.cleanupFailure(d, err)
+	if !copyRemovalCompleted(d.LastUpstreamStatus) {
+		if err := s.cloud.RemoveCopy(ctx, d.CopySourcePath, workspaceRoot(*d)); err != nil {
+			return "pause_remove_copy", s.cleanupFailure(d, err)
+		}
+		markCopyRemoved(d)
+		d.LastError, d.LastErrorCode, d.AttemptCount, d.NextRunAt = "", "", 0, new(now)
+		return "pause_remove_copy", nil
 	}
 	if d.WorkspacePath != "" {
 		if err := s.files.DeleteWorkspace(d.SavePath, d.Hash); err != nil {
@@ -570,18 +575,24 @@ func (s *Scheduler) pause(ctx context.Context, d *domain.Download, now time.Time
 }
 
 func (s *Scheduler) delete(ctx context.Context, d *domain.Download, now time.Time) (string, error) {
-	if d.CompletedAt == nil && d.ContentPath == "" && !cleanupCompleted(d.LastUpstreamStatus) {
+	copyNeedsRemoval := d.CopySourcePath != "" && !copyRemovalCompleted(d.LastUpstreamStatus)
+	offlineNeedsCancellation := d.CopySourcePath == "" && d.CompletedAt == nil && d.ContentPath == "" && !cleanupCompleted(d.LastUpstreamStatus)
+	if copyNeedsRemoval || offlineNeedsCancellation {
 		var err error
 		op := "cancel_offline"
 		if d.CopySourcePath != "" {
-			op, err = "cancel_copy", s.cloud.CancelCopy(ctx, d.CopySourcePath, workspaceRoot(*d))
+			op, err = "remove_copy", s.cloud.RemoveCopy(ctx, d.CopySourcePath, workspaceRoot(*d))
 		} else {
 			err = s.cloud.CancelOffline(ctx, d.CloudFolder, d.Hash)
 		}
-		if err != nil && !notFound(err) {
+		if err != nil && (d.CopySourcePath != "" || !notFound(err)) {
 			return op, s.cleanupFailure(d, err)
 		}
-		markCleanupCancelled(d)
+		if d.CopySourcePath != "" {
+			markCopyRemoved(d)
+		} else {
+			markCleanupCancelled(d)
+		}
 		d.LastError, d.LastErrorCode, d.AttemptCount = "", "", 0
 		d.NextRunAt = new(now)
 		return op, nil
@@ -631,6 +642,22 @@ func markCleanupCancelled(d *domain.Download) {
 		return
 	}
 	d.LastUpstreamStatus = cleanupCancelled + "|" + d.LastUpstreamStatus
+}
+
+func copyRemovalCompleted(status string) bool {
+	return status == copyRemoved || strings.HasPrefix(status, copyRemoved+"|")
+}
+
+func markCopyRemoved(d *domain.Download) {
+	if copyRemovalCompleted(d.LastUpstreamStatus) {
+		return
+	}
+	status := strings.TrimPrefix(d.LastUpstreamStatus, cleanupCancelled+"|")
+	if status == "" || status == cleanupCancelled {
+		d.LastUpstreamStatus = copyRemoved
+		return
+	}
+	d.LastUpstreamStatus = copyRemoved + "|" + status
 }
 
 var errCloudContentLayout = errors.New("cloud content layout invalid")
@@ -739,7 +766,7 @@ func validateManifest(d domain.Download, files []domain.DownloadFile) error {
 }
 
 func hasCopyEvidence(status string) bool {
-	status = strings.TrimPrefix(status, cleanupCancelled+"|")
+	status = strings.TrimPrefix(strings.TrimPrefix(status, cleanupCancelled+"|"), copyRemoved+"|")
 	switch status {
 	case destinationClear,
 		domain.UpstreamCopyPending,
@@ -858,22 +885,21 @@ func missingLocalContent(err error) bool {
 			diagnostic.Operation == fsafe.OperationVerifyManifest)
 }
 
-// deadlineProblem chooses the terminal copy-phase deadline code from the last
-// durable retry problem, so a sustained not-ready or unreachable condition
-// does not degrade to a generic timeout.
-func (s *Scheduler) deadlineProblem(d *domain.Download) domain.ProblemCode {
+// deadlineProblem 保留最后一次持久化故障分类，没有故障观察时使用阶段超时。
+func (s *Scheduler) deadlineProblem(d *domain.Download, fallback domain.ProblemCode) domain.ProblemCode {
 	switch domain.ProblemCode(d.LastErrorCode) {
 	case domain.ProblemCloudCopyNotReady:
-		return domain.ProblemCloudCopyNotReadyTimeout
+		if fallback == domain.ProblemCopyTimeout {
+			return domain.ProblemCloudCopyNotReadyTimeout
+		}
 	case domain.ProblemCloudAuthenticationRequired:
 		return domain.ProblemCloudAuthenticationTimeout
 	case domain.ProblemCloudUnreachable:
 		return domain.ProblemCloudUnreachableTimeout
 	case domain.ProblemLocalFilesystemUnavailable:
 		return domain.ProblemLocalFilesystemUnavailableTimeout
-	default:
-		return domain.ProblemCopyTimeout
 	}
+	return fallback
 }
 
 func (s *Scheduler) timedOut(d *domain.Download, now time.Time, limit time.Duration) bool {
@@ -1183,6 +1209,46 @@ func (s *Scheduler) log(d domain.Download, operation string, started time.Time, 
 	s.logger.Info("reconciled download", attributes...)
 }
 
+func (s *Scheduler) logCommitFailure(claim store.Claim, next domain.Download, operation string, err error) {
+	hash := next.Hash
+	if len(hash) > 8 {
+		hash = hash[:8]
+	}
+	s.logger.Warn("reconciler commit failed", "hash", hash, "state_from", claim.State,
+		"state_to", next.State, "operation", operation, "claim_version", claim.Version,
+		"error_kind", repositoryErrorKind(err))
+}
+
+// 只输出已分类的错误，不记录可能包含路径、SQL 参数或凭据的错误全文。
+func repositoryErrorKind(err error) string {
+	switch {
+	case errors.Is(err, store.ErrInvalidTransition):
+		return "invalid_transition"
+	case errors.Is(err, store.ErrClaimLost):
+		return "claim_lost"
+	case errors.Is(err, store.ErrDestinationConflict):
+		return "destination_conflict"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline_exceeded"
+	case errors.Is(err, context.Canceled):
+		return "cancelled"
+	}
+	var coded interface{ Code() int }
+	if errors.As(err, &coded) {
+		switch coded.Code() & 0xff {
+		case sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED:
+			return "sqlite_busy"
+		case sqlite3.SQLITE_IOERR, sqlite3.SQLITE_FULL, sqlite3.SQLITE_CANTOPEN, sqlite3.SQLITE_READONLY:
+			return "database_io"
+		case sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB:
+			return "database_corrupt"
+		case sqlite3.SQLITE_CONSTRAINT:
+			return "database_constraint"
+		}
+	}
+	return "repository_error"
+}
+
 // Run starts the configured number of workers and returns after cancellation.
 func (s *Scheduler) Run(ctx context.Context) error {
 	var workers sync.WaitGroup
@@ -1201,7 +1267,7 @@ func (s *Scheduler) worker(ctx context.Context) {
 			return
 		}
 		if err != nil {
-			s.logger.Warn("reconciler repository error", "operation", "step", "result", "error")
+			s.logger.Warn("reconciler repository error", "operation", "step", "result", "error", "error_kind", repositoryErrorKind(err))
 			s.wait(ctx, s.config.PollInterval)
 			continue
 		}
@@ -1214,7 +1280,7 @@ func (s *Scheduler) worker(ctx context.Context) {
 			return
 		}
 		if dueErr != nil {
-			s.logger.Warn("reconciler repository error", "operation", "next_due", "result", "error")
+			s.logger.Warn("reconciler repository error", "operation", "next_due", "result", "error", "error_kind", repositoryErrorKind(dueErr))
 			s.wait(ctx, s.config.PollInterval)
 			continue
 		}

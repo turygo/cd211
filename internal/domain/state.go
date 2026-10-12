@@ -144,7 +144,7 @@ func CanRetry(download Download) bool {
 
 // RetryTarget selects the first durable phase to retry for a failed workflow.
 func RetryTarget(download Download) State {
-	status := strings.TrimPrefix(download.LastUpstreamStatus, UpstreamCleanupCancelled+"|")
+	status := strings.TrimPrefix(strings.TrimPrefix(download.LastUpstreamStatus, UpstreamCleanupCancelled+"|"), UpstreamCopyRemoved+"|")
 	switch {
 	case download.State == StateCancelRequested || download.State == StateDeleteRequested:
 		return download.State
@@ -152,6 +152,7 @@ func RetryTarget(download Download) State {
 		return StateSubmittingCopy
 	case download.State == StateFailed &&
 		(download.LastErrorCode == string(ProblemLocalVerificationFailed) ||
+			download.LastErrorCode == string(ProblemLocalVerificationTimeout) ||
 			download.LastErrorCode == string(ProblemLocalFilesystemUnavailableTimeout) ||
 			download.LastErrorCode == string(ProblemLocalPermissionDenied) ||
 			download.LastErrorCode == string(ProblemLocalPathUnsafe) ||
